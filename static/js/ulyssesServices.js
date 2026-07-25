@@ -19,6 +19,7 @@ let chroma = null;
 let hermes = null;
 let runtimeJobs = [];
 let jobLogs = {};
+let readiness = null;
 let loadError = '';
 let serviceQuery = '';
 let serviceScope = 'all';
@@ -68,9 +69,9 @@ function formatObservedAt(value) {
 }
 
 function statusTone(status) {
-  if (status === 'running' || status === 'ready') return 'ok';
-  if (status === 'degraded' || status === 'starting') return 'warn';
-  if (status === 'failed' || status === 'down') return 'bad';
+  if (status === 'running' || status === 'ready' || status === 'passed' || status === 'succeeded') return 'ok';
+  if (status === 'degraded' || status === 'starting' || status === 'pending' || status === 'planned') return 'warn';
+  if (status === 'failed' || status === 'down' || status === 'blocked') return 'bad';
   return 'muted';
 }
 
@@ -98,6 +99,7 @@ function ensureModal() {
       </div>
       <div class="uly-services-tabs" role="tablist" aria-label="Services views">
         <button type="button" data-tab="overview" role="tab">Overview</button>
+        <button type="button" data-tab="readiness" role="tab">Readiness</button>
         <button type="button" data-tab="services" role="tab">Services</button>
         <button type="button" data-tab="javascript" role="tab">JavaScript</button>
         <button type="button" data-tab="hermes" role="tab">Hermes</button>
@@ -344,6 +346,54 @@ function renderJavaScript() {
     </section>`;
 }
 
+function renderReadiness() {
+  if (!readiness) {
+    return '<div class="uly-empty-state">Switchover readiness is unavailable.</div>';
+  }
+  const counts = readiness.counts || {};
+  const items = Array.isArray(readiness.items) ? readiness.items : [];
+  const phases = [
+    ['source', 'Source'],
+    ['python', 'Python and GPU runtime'],
+    ['services', 'Services and ports'],
+    ['data', 'Data and Chroma'],
+    ['human_gate', 'Human cutover gates'],
+  ];
+  return `
+    <div class="uly-services-observed">Observed ${esc(formatObservedAt(readiness.observed_at))}</div>
+    <div class="uly-summary-grid">
+      ${summaryCard('Passed', counts.passed || 0, 'Verified logic gates', 'ok')}
+      ${summaryCard('Pending', counts.pending || 0, 'Requires observation or human approval', 'warn')}
+      ${summaryCard('Blocked', counts.blocked || 0, 'Must be resolved before cutover', counts.blocked ? 'warn' : 'ok')}
+      ${summaryCard('Transition', readiness.transition_ready ? 'Ready' : 'Held', readiness.production_untouched ? 'Production remains untouched' : 'Review production state', readiness.transition_ready ? 'ok' : 'muted')}
+    </div>
+    <section class="uly-services-panel">
+      <div class="uly-panel-heading">
+        <div>
+          <h3>Candidate launch policy</h3>
+          <p>Logic validation continues without binding a second Ulysses instance to production ports.</p>
+        </div>
+        ${statusBadge(readiness.candidate_launch_recommended ? 'ready' : 'pending')}
+      </div>
+      <p class="uly-boundary-note">Nick owns the maintenance-window stop, candidate start, smoke test, rollback decision, and production transition. This checklist never performs those steps automatically.</p>
+    </section>
+    ${phases.map(([phase, label]) => {
+      const phaseItems = items.filter((item) => item.phase === phase);
+      if (!phaseItems.length) return '';
+      return `
+        <section class="uly-services-panel">
+          <div class="uly-panel-heading"><div><h3>${esc(label)}</h3><p>${phaseItems.length} readiness gate${phaseItems.length === 1 ? '' : 's'}</p></div></div>
+          ${phaseItems.map((item) => `
+            <div class="uly-finding severity-${item.status === 'blocked' ? 'error' : item.status === 'pending' ? 'warning' : 'info'}">
+              <strong>${esc(item.title)} ${statusBadge(item.status)}</strong>
+              <code>${esc(item.code)}</code>
+              <p>${esc(item.evidence)}</p>
+              <small>${esc(item.operator_action)}</small>
+            </div>`).join('')}
+        </section>`;
+    }).join('')}`;
+}
+
 function collectionRow(collection) {
   return `
     <tr>
@@ -544,9 +594,11 @@ function render() {
     ? renderJavaScript()
     : activeTab === 'hermes'
       ? renderHermes()
+      : activeTab === 'readiness'
+        ? renderReadiness()
       : activeTab === 'chroma'
-        ? renderChroma()
-        : renderOverview();
+          ? renderChroma()
+          : renderOverview();
   root.querySelector('[data-open-chroma]')?.addEventListener('click', () => {
     activeTab = 'chroma';
     render();
@@ -673,11 +725,12 @@ async function load() {
   loading = true;
   loadError = '';
   render();
-  const [topologyResult, chromaResult, hermesResult, jobsResult] = await Promise.allSettled([
+  const [topologyResult, chromaResult, hermesResult, jobsResult, readinessResult] = await Promise.allSettled([
     request('/api/ulysses/topology'),
     request('/api/ulysses/chroma/persistence'),
     request('/api/ulysses/hermes/adoption'),
     request('/api/ulysses/jobs?limit=50'),
+    request('/api/ulysses/readiness'),
   ]);
   topology = topologyResult.status === 'fulfilled' ? topologyResult.value : null;
   chroma = chromaResult.status === 'fulfilled' ? chromaResult.value : null;
@@ -685,7 +738,8 @@ async function load() {
   runtimeJobs = jobsResult.status === 'fulfilled' && Array.isArray(jobsResult.value?.jobs)
     ? jobsResult.value.jobs
     : [];
-  const errors = [topologyResult, chromaResult, hermesResult, jobsResult]
+  readiness = readinessResult.status === 'fulfilled' ? readinessResult.value : null;
+  const errors = [topologyResult, chromaResult, hermesResult, jobsResult, readinessResult]
     .filter((result) => result.status === 'rejected')
     .map((result) => result.reason?.message || String(result.reason));
   loadError = errors.join(' · ');

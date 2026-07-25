@@ -78,6 +78,11 @@ def _client(monkeypatch, gate, *, chroma_report=None, hermes_report=None):
                 "mode": "read_only",
             },
             hermes_control_factory=_FakeHermesControl,
+            readiness_collector=lambda _topology, _chroma, _hermes: {
+                "schema_version": "ulysses.switchover-readiness.v1",
+                "mode": "read_only",
+                "transition_ready": False,
+            },
         )
     )
     return TestClient(app, raise_server_exceptions=False)
@@ -186,3 +191,15 @@ def test_runtime_job_execution_requires_admin(monkeypatch):
         },
     )
     assert response.status_code == 403
+
+
+def test_admin_receives_read_only_switchover_readiness(monkeypatch):
+    response = _client(monkeypatch, lambda _request: None).get(
+        "/api/ulysses/readiness"
+    )
+
+    assert response.status_code == 200
+    assert response.json()["schema_version"] == (
+        "ulysses.switchover-readiness.v1"
+    )
+    assert response.json()["transition_ready"] is False

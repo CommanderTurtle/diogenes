@@ -20,6 +20,7 @@ from src.ulysses_jobs import (
     RuntimeJobConflict,
     RuntimeJobError,
 )
+from src.ulysses_readiness import collect_switchover_readiness
 from src.ulysses_topology import build_topology_report
 
 
@@ -52,6 +53,9 @@ def setup_ulysses_routes(
     chroma_collector: Callable[[], dict] = collect_chroma_persistence,
     hermes_collector: Callable[[], dict] = collect_hermes_adoption,
     hermes_control_factory: Callable[[], HermesControl] = HermesControl,
+    readiness_collector: Callable[
+        [dict, dict, dict], dict
+    ] = collect_switchover_readiness,
 ) -> APIRouter:
     router = APIRouter(prefix="/api/ulysses", tags=["ulysses"])
 
@@ -117,6 +121,23 @@ def setup_ulysses_routes(
             limit=limit,
         )
         return {"schema_version": "ulysses.runtime-jobs.v1", "jobs": jobs}
+
+    @router.get("/readiness")
+    async def get_switchover_readiness(request: Request) -> dict:
+        require_admin(request)
+
+        def collect() -> dict:
+            snapshot = collector()
+            registry = default_runtime_registry()
+            sandwich = observe_sandwich_installation()
+            topology = build_topology_report(registry, snapshot, sandwich)
+            chroma = chroma_collector()
+            hermes = hermes_control_factory().decorate_report(
+                hermes_collector()
+            )
+            return readiness_collector(topology, chroma, hermes)
+
+        return await run_in_threadpool(collect)
 
     @router.get("/jobs/{job_id}")
     async def get_runtime_job(request: Request, job_id: str) -> dict:

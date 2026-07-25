@@ -71,6 +71,7 @@ def test_services_window_preserves_agent_and_mcp_boundaries() -> None:
     assert "/api/ulysses/topology" in services
     assert "/api/ulysses/chroma/persistence" in services
     assert "/api/ulysses/hermes/adoption" in services
+    assert "/api/ulysses/readiness" in services
     assert "Ulysses never relocates Hermes into its own virtual environment" in services
     assert "environment values and credential arguments are always redacted" in services
 
@@ -86,6 +87,8 @@ def test_services_window_uses_planned_confirmed_runtime_jobs() -> None:
     assert "/api/ulysses/hermes/jobs/plan" in services
     assert "/api/ulysses/jobs/${encodeURIComponent(job.id)}/execute" in services
     assert "/api/ulysses/jobs/${encodeURIComponent(jobId)}/log" in services
+    assert "Nick owns the maintenance-window stop" in services
+    assert "Python and GPU runtime" in services
     assert "method: 'POST'" in services
     assert "method: 'PUT'" not in services
     assert "method: 'DELETE'" not in services
