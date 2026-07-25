@@ -12,6 +12,41 @@ from src.ulysses_discovery import HostDiscoverySnapshot
 routes = pytest.importorskip("routes.ulysses_routes")
 
 
+class _FakeJobs:
+    def list(self, *, limit=50):
+        return [{"id": "a" * 32, "limit": limit}]
+
+    def get(self, job_id):
+        return {"id": job_id, "status": "planned"}
+
+    def read_log(self, job_id, *, max_chars=16000):
+        return {"job_id": job_id, "text": "ok", "max_chars": max_chars}
+
+    def execute(self, job_id, **_kwargs):
+        return {"id": job_id, "status": "launching"}
+
+
+class _FakeHermesControl:
+    def __init__(self):
+        self.jobs = _FakeJobs()
+
+    def decorate_report(self, report):
+        return report
+
+    def apply_adoption(self, _report, **_kwargs):
+        return {"adopted": True, "current": True}
+
+    def create_lifecycle_plan(self, _report, *, action):
+        return (
+            {
+                "id": "b" * 32,
+                "action": action,
+                "status": "planned",
+            },
+            "confirmation-token",
+        )
+
+
 def _client(monkeypatch, gate, *, chroma_report=None, hermes_report=None):
     monkeypatch.setattr(routes, "require_admin", gate)
     monkeypatch.setattr(
@@ -42,6 +77,7 @@ def _client(monkeypatch, gate, *, chroma_report=None, hermes_report=None):
                 "schema_version": "ulysses.hermes-adoption.v1",
                 "mode": "read_only",
             },
+            hermes_control_factory=_FakeHermesControl,
         )
     )
     return TestClient(app, raise_server_exceptions=False)
@@ -124,3 +160,29 @@ def test_admin_receives_read_only_hermes_adoption(monkeypatch):
 
     assert response.status_code == 200
     assert response.json() == report
+
+
+def test_admin_can_create_a_confirmed_hermes_job_plan(monkeypatch):
+    response = _client(monkeypatch, lambda _request: None).post(
+        "/api/ulysses/hermes/jobs/plan",
+        json={"action": "restart"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["job"]["status"] == "planned"
+    assert payload["confirmation_token"] == "confirmation-token"
+
+
+def test_runtime_job_execution_requires_admin(monkeypatch):
+    def gate(_request: Request):
+        raise HTTPException(403, "Admin only")
+
+    response = _client(monkeypatch, gate).post(
+        f"/api/ulysses/jobs/{'a' * 32}/execute",
+        json={
+            "confirmation_token": "token",
+            "confirmation_phrase": "RESTART HERMES",
+        },
+    )
+    assert response.status_code == 403

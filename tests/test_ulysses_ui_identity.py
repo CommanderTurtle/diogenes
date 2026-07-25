@@ -75,13 +75,18 @@ def test_services_window_preserves_agent_and_mcp_boundaries() -> None:
     assert "environment values and credential arguments are always redacted" in services
 
 
-def test_services_window_is_read_only_until_adoption_exists() -> None:
+def test_services_window_uses_planned_confirmed_runtime_jobs() -> None:
     services = _read("static/js/ulyssesServices.js")
 
-    assert "This first UI stage intentionally exposes no lifecycle actions." in services
     assert "read-only" in services
     assert "Apply unavailable — maintenance window required" in services
-    assert "Adoption unavailable — durable job runner required" in services
-    assert "method: 'POST'" not in services
+    assert "Adopt native Hermes in place" in services
+    assert "Create plan" in services
+    assert "Confirm lifecycle plan" in services
+    assert "/api/ulysses/hermes/jobs/plan" in services
+    assert "/api/ulysses/jobs/${encodeURIComponent(job.id)}/execute" in services
+    assert "/api/ulysses/jobs/${encodeURIComponent(jobId)}/log" in services
+    assert "method: 'POST'" in services
     assert "method: 'PUT'" not in services
     assert "method: 'DELETE'" not in services
+    assert "arbitrary shell command" not in services

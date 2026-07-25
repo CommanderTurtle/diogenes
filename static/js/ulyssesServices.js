@@ -1,8 +1,7 @@
 // Ulysses Services — read-only host control-plane window.
 //
-// This first UI stage intentionally exposes no lifecycle actions. Runtime
-// adoption, maintenance plans, and durable jobs must exist before start/stop/
-// update controls can be rendered safely.
+// Lifecycle actions are identity-bound, planned first, separately confirmed,
+// and executed by the durable argv-only Ulysses job runner.
 
 import uiModule from './ui.js';
 import * as Modals from './modalManager.js';
@@ -18,6 +17,8 @@ let activeTab = 'overview';
 let topology = null;
 let chroma = null;
 let hermes = null;
+let runtimeJobs = [];
+let jobLogs = {};
 let loadError = '';
 let serviceQuery = '';
 let serviceScope = 'all';
@@ -88,7 +89,7 @@ function ensureModal() {
   modal.innerHTML = `
     <div class="modal-content uly-services-window" role="dialog" aria-label="Services">
       <div class="modal-header uly-services-header">
-        <h4>${SERVICE_ICON}<span>Services</span><span class="uly-services-readonly">read-only</span></h4>
+        <h4>${SERVICE_ICON}<span>Services</span><span class="uly-services-readonly">human-gated</span></h4>
         <button class="uly-services-refresh" type="button" title="Refresh host observations" aria-label="Refresh services">
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M20 11a8 8 0 1 0 2 5"/><path d="M20 4v7h-7"/></svg>
           <span>Refresh</span>
@@ -365,6 +366,7 @@ function renderHermes() {
   const findings = Array.isArray(hermes.findings) ? hermes.findings : [];
   const preview = hermes.adoption_preview || {};
   const actions = Array.isArray(hermes.lifecycle_actions) ? hermes.lifecycle_actions : [];
+  const hermesJobs = runtimeJobs.filter((job) => job.runtime_id === 'hermes.gateway');
   return `
     <section class="uly-services-panel">
       <div class="uly-panel-heading">
@@ -420,7 +422,28 @@ function renderHermes() {
         <div><strong>Gates</strong><ol>${(preview.gates || []).map((item) => `<li>${esc(item)}</li>`).join('')}</ol></div>
         <div><strong>Lifecycle</strong><ol>${actions.map((action) => `<li><strong>${esc(action.label)}</strong> — ${esc(action.reason)}</li>`).join('')}</ol></div>
       </div>
-      <button type="button" disabled title="Adoption apply requires durable jobs and explicit confirmation">Adoption unavailable — durable job runner required</button>
+      ${preview.adoption_current
+        ? '<button type="button" disabled>Adopted in place — native identity is current</button>'
+        : `<button type="button" data-hermes-adopt${preview.apply_available ? '' : ' disabled'}>Adopt native Hermes in place</button>`}
+    </section>
+    <section class="uly-services-panel">
+      <div class="uly-panel-heading">
+        <div><h3>Lifecycle jobs</h3><p>Each action creates a durable plan, then requires a second explicit confirmation.</p></div>
+        <span class="uly-services-badge status-${preview.adoption_current ? 'ok' : 'muted'}">${preview.adoption_current ? 'adopted' : 'not adopted'}</span>
+      </div>
+      <div class="uly-capability-list">
+        ${actions.map((action) => `<button type="button" data-hermes-action="${esc(action.id)}"${action.enabled ? '' : ' disabled'} title="${esc(action.reason)}">${esc(action.label)}</button>`).join('')}
+      </div>
+      <div class="uly-snapshot-list">
+        ${hermesJobs.map((job) => `
+          <div>
+            <strong>${esc(job.summary)} ${statusBadge(job.status)}</strong>
+            <code>${esc(job.id)}</code>
+            <span>${esc(job.step_results?.length || 0)}/${esc(job.steps?.length || 0)} steps · ${esc(formatObservedAt(job.created_at))}</span>
+            <button type="button" data-view-job-log="${esc(job.id)}">${jobLogs[job.id] == null ? 'View log' : 'Refresh log'}</button>
+            ${jobLogs[job.id] == null ? '' : `<pre>${esc(jobLogs[job.id] || '(no output yet)')}</pre>`}
+          </div>`).join('') || '<div class="uly-empty-state compact">No Hermes lifecycle jobs have been planned.</div>'}
+      </div>
     </section>`;
 }
 
@@ -528,6 +551,121 @@ function render() {
     activeTab = 'chroma';
     render();
   });
+  root.querySelector('[data-hermes-adopt]')?.addEventListener('click', () => {
+    adoptHermes();
+  });
+  root.querySelectorAll('[data-hermes-action]').forEach((button) => {
+    button.addEventListener('click', () => planHermesAction(button.dataset.hermesAction));
+  });
+  root.querySelectorAll('[data-view-job-log]').forEach((button) => {
+    button.addEventListener('click', () => loadJobLog(button.dataset.viewJobLog));
+  });
+}
+
+async function request(path, options = {}) {
+  const response = await fetch(`${apiBase}${path}`, {
+    credentials: 'same-origin',
+    headers: {
+      Accept: 'application/json',
+      ...(options.body ? { 'Content-Type': 'application/json' } : {}),
+    },
+    ...options,
+  });
+  if (!response.ok) {
+    let detail = `${path} returned HTTP ${response.status}`;
+    try {
+      const payload = await response.json();
+      detail = payload.detail || detail;
+    } catch (_) {}
+    throw new Error(detail);
+  }
+  return response.json();
+}
+
+async function adoptHermes() {
+  const install = hermes?.install || {};
+  const gateway = hermes?.gateway || {};
+  const confirmed = await uiModule.styledConfirm(
+    `Adopt the native Hermes installation at ${install.source_root || 'the observed source'} in place? Its virtual environment and MCP registry remain Hermes-owned and unchanged.`,
+    {
+      title: 'Adopt native Hermes',
+      confirmText: 'Adopt in place',
+      cancelText: 'Cancel',
+    },
+  );
+  if (!confirmed) return;
+  try {
+    await request('/api/ulysses/hermes/adoption/apply', {
+      method: 'POST',
+      body: JSON.stringify({
+        confirmation_phrase: 'ADOPT HERMES IN PLACE',
+        expected_source_root: install.source_root,
+        expected_gateway_unit: gateway.unit,
+      }),
+    });
+    await load();
+  } catch (error) {
+    loadError = error?.message || String(error);
+    render();
+  }
+}
+
+async function planHermesAction(actionId) {
+  const action = (hermes?.lifecycle_actions || []).find((item) => item.id === actionId);
+  if (!action?.enabled) return;
+  const wantsPlan = await uiModule.styledConfirm(
+    `${action.label}? Ulysses will first create a fixed, inspectable plan. Nothing runs until the plan is confirmed separately.`,
+    {
+      title: 'Plan Hermes lifecycle job',
+      confirmText: 'Create plan',
+      cancelText: 'Cancel',
+      danger: actionId !== 'start',
+    },
+  );
+  if (!wantsPlan) return;
+  try {
+    const planned = await request('/api/ulysses/hermes/jobs/plan', {
+      method: 'POST',
+      body: JSON.stringify({ action: actionId }),
+    });
+    const job = planned.job || {};
+    const labels = (job.steps || []).map((step, index) => `${index + 1}. ${step.label}`).join('\n');
+    const confirmed = await uiModule.styledConfirm(
+      `${job.summary}\n\n${labels}\n\nThis job is durable and will retain its step results after an Ulysses restart.`,
+      {
+        title: 'Confirm lifecycle plan',
+        confirmText: action.label,
+        cancelText: 'Keep plan only',
+        danger: actionId !== 'start',
+      },
+    );
+    if (!confirmed) {
+      await load();
+      return;
+    }
+    await request(`/api/ulysses/jobs/${encodeURIComponent(job.id)}/execute`, {
+      method: 'POST',
+      body: JSON.stringify({
+        confirmation_token: planned.confirmation_token,
+        confirmation_phrase: job.confirmation_phrase,
+      }),
+    });
+    await load();
+  } catch (error) {
+    loadError = error?.message || String(error);
+    render();
+  }
+}
+
+async function loadJobLog(jobId) {
+  try {
+    const payload = await request(`/api/ulysses/jobs/${encodeURIComponent(jobId)}/log?max_chars=16000`);
+    jobLogs = { ...jobLogs, [jobId]: payload.text || '' };
+    render();
+  } catch (error) {
+    loadError = error?.message || String(error);
+    render();
+  }
 }
 
 async function load() {
@@ -535,23 +673,19 @@ async function load() {
   loading = true;
   loadError = '';
   render();
-  const request = async (path) => {
-    const response = await fetch(`${apiBase}${path}`, {
-      credentials: 'same-origin',
-      headers: { Accept: 'application/json' },
-    });
-    if (!response.ok) throw new Error(`${path} returned HTTP ${response.status}`);
-    return response.json();
-  };
-  const [topologyResult, chromaResult, hermesResult] = await Promise.allSettled([
+  const [topologyResult, chromaResult, hermesResult, jobsResult] = await Promise.allSettled([
     request('/api/ulysses/topology'),
     request('/api/ulysses/chroma/persistence'),
     request('/api/ulysses/hermes/adoption'),
+    request('/api/ulysses/jobs?limit=50'),
   ]);
   topology = topologyResult.status === 'fulfilled' ? topologyResult.value : null;
   chroma = chromaResult.status === 'fulfilled' ? chromaResult.value : null;
   hermes = hermesResult.status === 'fulfilled' ? hermesResult.value : null;
-  const errors = [topologyResult, chromaResult, hermesResult]
+  runtimeJobs = jobsResult.status === 'fulfilled' && Array.isArray(jobsResult.value?.jobs)
+    ? jobsResult.value.jobs
+    : [];
+  const errors = [topologyResult, chromaResult, hermesResult, jobsResult]
     .filter((result) => result.status === 'rejected')
     .map((result) => result.reason?.message || String(result.reason));
   loadError = errors.join(' · ');
