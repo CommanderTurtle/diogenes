@@ -48,7 +48,7 @@
       "label": "Camofox browser",
       "category": "javascript",
       "capability_group": "browser",
-      "role": "Hermes browser backend",
+      "role": "Shared Odysseus and Hermes browser backend",
       "root": "${ULYSSES_MICROSERVICES_ROOT}/camofox/camofox-browser",
       "package_json": "package.json",
       "env_files": [],
