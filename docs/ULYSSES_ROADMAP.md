@@ -54,15 +54,18 @@ design skeleton:
   Odysseus agent MCP registry;
 - the Odysseus agent's built-in browser MCP is now an explicit provider
   selection. This host selects Camofox and a cached Playwright package cannot
-  override it.
+  override it;
+- the disposable candidate is live on port 7000 with imported state and a
+  durable FastEmbed cache. Its built-in Camofox MCP registered 47 tools, and
+  the separately managed Camofox browser passed its guarded start and health
+  checks. The inactive production checkout remains untouched for rollback.
 
 Remaining transition gates are deliberately hardware/stateful: build both
 Colibri source trees on the 5090, validate the completed model downloads, run
 one provider at a time while vLLM is down, benchmark and tune the profiles,
-repair and snapshot Chroma in a maintenance window, build a Python 3.13
-candidate matching the golden runtime profile, and perform the final visual
-and rollback drills. Production remains independent until Nick performs those
-human-gated transitions.
+repair and snapshot Chroma in a maintenance window, validate the separate
+ONNX Runtime GPU lane, and perform the model/rollback drills. The Ulysses web
+control plane is active; no GPU model engine has been launched.
 
 ## Product definition
 

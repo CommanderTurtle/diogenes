@@ -110,16 +110,31 @@ production versions (`vllm`, PyTorch, Transformers, ONNX Runtime GPU,
 FastEmbed, NumPy, and Triton) so optional engine installation can be reviewed
 against that baseline instead of casually upgrading the working stack.
 
-## Cutover gate
+## Web control-plane smoke gate
 
-Before binding port 7000 or launching a model:
+Before binding port 7000:
+
+- run application tests and `uv pip check`;
+- attach the imported external state and verify its databases;
+- import or deliberately warm the FastEmbed cache so startup does not perform
+  surprise network work;
+- confirm port 7000 is free;
+- keep `~/Odysseus/odysseus` and its `.venv` unchanged for rollback.
+
+The web/control-plane candidate may be tested without installing or launching
+any GPU model engine.
+
+## Model transition gate
+
+Before launching a Colibri model or declaring the production transition
+complete:
 
 - install the native dependencies shown in Cookbook, including
   `liburing-dev` for the Colibri Hy3 `IOURING=1` build;
 - validate the WSL/CUDA loader in a new process;
 - validate both Colibri model manifests and native binaries;
-- run application tests and `uv pip check`;
-- confirm ports 7000 and 8000 are free;
+- confirm the selected model port is free and no conflicting GPU engine is
+  active;
 - keep `~/Odysseus/odysseus` and its `.venv` unchanged for rollback.
 
 Routine development updates happen in `Ulysses`, rebased or merged against
