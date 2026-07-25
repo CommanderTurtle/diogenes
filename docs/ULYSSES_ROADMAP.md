@@ -281,8 +281,16 @@ completion, reasoning content, stop, restart, and rollback all pass.
 
 Persistence first:
 
-- migrate the current incorrect volume target from `/chroma/chroma` to `/data`
-  during maintenance;
+- [x] Diagnose the current incorrect volume target: the live image declares
+  `persist_path: /data`, while production mounts its named volume at
+  `/chroma/chroma`.
+- [x] Pin the candidate Compose image to the exact live digest and mount the
+  candidate volume at `/data`; no Compose command has been run.
+- [x] Add an admin-only, read-only persistence report with container, image,
+  mounts, health, collection counts/fingerprints, snapshots, findings, and a
+  preview-only migration plan.
+- [ ] Migrate production from `/chroma/chroma` to `/data` only during an
+  approved maintenance window;
 - restore the verified safety snapshot;
 - pin Chroma;
 - verify collection counts and representative queries;
@@ -500,10 +508,12 @@ corresponding rollback has been tested.
 1. [x] Add this roadmap and upstream provenance to the fresh repository.
 2. [x] Establish the isolated upstream test baseline.
 3. [x] Implement control-plane data contracts and a read-only registry.
-4. Add discovery-only adapters for Docker, systemd, processes/ports, Git,
-   NVIDIA, and Chroma.
+4. [x] Add discovery-only adapters for Docker, systemd, processes/ports, and
+   Chroma. Git and NVIDIA detail views remain scheduled for the Services UI.
 5. [x] Render the first read-only topology/status API.
 6. [x] Integrate Sandwich as the first optional runtime.
 7. Adopt and validate the existing microservices, persistence, configuration,
-   Camofox browser capability, and lifecycle views.
+   Camofox browser capability, and lifecycle views. Chroma production migration
+   remains human-gated; its candidate definition and read-only readiness report
+   are complete.
 8. Implement and verify Colibri as the final provider integration.

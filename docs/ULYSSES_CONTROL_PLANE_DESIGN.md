@@ -34,6 +34,12 @@ Every runtime definition therefore carries a scope: `host`,
 use a narrow Chroma storage/retrieval contract, but that does not connect the
 Odysseus and Hermes agent loops.
 
+The bridge is owned by the Hermes integration: it may archive explicitly
+approved context-mode compactions into dedicated Chroma collections and expose
+provenance-preserving retrieval to Hermes. It does not register the bridge in
+Odysseus's MCP registry, copy Odysseus-agent MCP settings, or grant either agent
+implicit access to the other's tools.
+
 ## The service contract
 
 Every service definition records:
@@ -170,3 +176,27 @@ bounded logs and, where registered, its tmux console.
 | signal-cli | native service | external |
 | Sandwich | native user runtime | observed, then managed |
 | Colibri | native CUDA model endpoint | not installed; final integration |
+
+## Chroma persistence gate
+
+The current production image starts `chroma run /config.yaml`, and its image
+configuration declares `persist_path: /data`. Production Compose instead mounts
+the `odysseus_chromadb-data` volume at `/chroma/chroma`; the mounted directory is
+nearly empty while the active SQLite database and vector segments are under the
+container's unmounted `/data`.
+
+Ulysses therefore:
+
+- reports the live persistence state as degraded without changing it;
+- pins the candidate image to the observed production digest;
+- mounts the candidate volume at `/data`;
+- inventories collection IDs, names, counts, embedding dimensions, models,
+  lanes, and fingerprints;
+- accepts only explicitly configured snapshot roots and treats discovered live
+  copies as reference snapshots, never restore candidates;
+- provides a preview-only migration plan whose apply action remains disabled.
+
+The migration requires a maintenance window, a fresh snapshot after the
+container stops, candidate restore and recreation validation, representative
+read-only retrievals, and retention of the original container definition,
+image, data, volume, and snapshots as rollback.
