@@ -47,6 +47,19 @@ class _FakeHermesControl:
         )
 
 
+class _FakeColibriControl:
+    def create_plan(self, _report, *, provider_id, action):
+        return (
+            {
+                "id": "c" * 32,
+                "runtime_id": provider_id,
+                "action": action,
+                "status": "planned",
+            },
+            "colibri-confirmation-token",
+        )
+
+
 def _client(
     monkeypatch,
     gate,
@@ -91,6 +104,7 @@ def _client(
                 "providers": [],
             },
             hermes_control_factory=_FakeHermesControl,
+            colibri_control_factory=_FakeColibriControl,
             readiness_collector=lambda _topology, _chroma, _hermes: {
                 "schema_version": "ulysses.switchover-readiness.v1",
                 "mode": "read_only",
@@ -207,6 +221,42 @@ def test_admin_receives_separate_colibri_provider_observations(monkeypatch):
 
     assert response.status_code == 200
     assert response.json() == report
+
+
+def test_admin_can_render_but_not_execute_a_colibri_command(monkeypatch):
+    monkeypatch.setattr(
+        routes,
+        "render_colibri_serve_command",
+        lambda runtime_id, settings: (
+            f"canonical:{runtime_id}:{settings['profile']}"
+        ),
+    )
+    response = _client(monkeypatch, lambda _request: None).post(
+        "/api/ulysses/colibri/command",
+        json={
+            "runtime_id": "colibri.glm",
+            "settings": {"profile": "rtx5090-high-ram"},
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["command"] == (
+        "canonical:colibri.glm:rtx5090-high-ram"
+    )
+    assert response.json()["editable"] is False
+
+
+def test_admin_can_create_a_confirmed_colibri_build_plan(monkeypatch):
+    response = _client(monkeypatch, lambda _request: None).post(
+        "/api/ulysses/colibri/jobs/plan",
+        json={"runtime_id": "colibri.hy3", "action": "build"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["job"]["runtime_id"] == "colibri.hy3"
+    assert payload["job"]["action"] == "build"
+    assert payload["confirmation_token"] == "colibri-confirmation-token"
 
 
 def test_admin_can_create_a_confirmed_hermes_job_plan(monkeypatch):

@@ -45,6 +45,7 @@ class ColibriProvider:
     model_root: Path | None
     port: int
     model_id: str
+    weight_repo: str
     minimum_commit: str | None
     minimum_commit_reason: str
     cli_path: Path
@@ -57,6 +58,8 @@ class ColibriProvider:
     serve_args: tuple[str, ...]
     supports_tools: bool | None
     model_type: str
+    default_profile: str
+    profiles: dict[str, dict[str, Any]]
     documentation: dict[str, str]
 
 
@@ -148,6 +151,7 @@ def load_colibri_catalog(
                 model_root=model_root,
                 port=port,
                 model_id=str(raw["model_id"]),
+                weight_repo=str(raw["weight_repo"]),
                 minimum_commit=(
                     str(raw["minimum_commit"]) if raw.get("minimum_commit") else None
                 ),
@@ -170,6 +174,12 @@ def load_colibri_catalog(
                 serve_args=tuple(str(item) for item in raw.get("serve_args") or []),
                 supports_tools=raw.get("supports_tools"),
                 model_type=str(raw.get("model_type") or "llm"),
+                default_profile=str(raw["default_profile"]),
+                profiles={
+                    str(key): dict(value)
+                    for key, value in (raw.get("profiles") or {}).items()
+                    if isinstance(value, dict)
+                },
                 documentation={
                     str(key): str(value)
                     for key, value in (raw.get("documentation") or {}).items()
@@ -336,6 +346,11 @@ def observe_colibri_provider(provider: ColibriProvider) -> dict[str, Any]:
         ).strip()
     except OSError:
         build_config = ""
+    manifest_path = provider.build_cwd / ".ulysses-build.json"
+    try:
+        build_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        build_manifest = None
     port_open = _port_open(provider.port)
     health = _http_json(f"http://127.0.0.1:{provider.port}/health") if port_open else None
     models = (
@@ -431,8 +446,13 @@ def observe_colibri_provider(provider: ColibriProvider) -> dict[str, Any]:
             "build_config": build_config or None,
             "cwd": str(provider.build_cwd),
             "argv": list(provider.build_argv),
+            "manifest_path": str(manifest_path),
+            "manifest": (
+                build_manifest if isinstance(build_manifest, dict) else None
+            ),
         },
         "model": model,
+        "weight_repo": provider.weight_repo,
         "endpoint": {
             "base_url": f"http://127.0.0.1:{provider.port}/v1",
             "health_url": f"http://127.0.0.1:{provider.port}/health",
@@ -467,10 +487,13 @@ def observe_colibri_provider(provider: ColibriProvider) -> dict[str, Any]:
                 *(["--model", str(provider.model_root)] if provider.model_root else []),
             ],
         },
+        "profiles": provider.profiles,
+        "default_profile": provider.default_profile,
         "documentation": provider.documentation,
         "findings": findings,
         "actions": {
-            "build_available": source_ready and not running,
+            "sync_available": not running and not git.get("dirty", False),
+            "build_available": source_ready and not git.get("dirty", False) and not running,
             "doctor_available": source_ready and built and model["present"] and not running,
             "start_available": (
                 source_ready

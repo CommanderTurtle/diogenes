@@ -504,6 +504,14 @@ export function _detectBackend(model) {
   const isRocm = sysBackend === 'rocm';
   const isAppleSilicon = ['metal', 'mps', 'apple'].includes(sysBackend);
   const _nm = `${model.repo_id || ''} ${model.path || ''} ${model.name || ''}`.toLowerCase();
+  if (_nm.includes('mateogrgic/glm-5.2-colibri-int4-with-int8-mtp')
+      || _nm.includes('mateogrgic--glm-5.2-colibri-int4-with-int8-mtp')) {
+    return { backend: 'colibri_glm', label: 'Colibri · GLM' };
+  }
+  if (_nm.includes('understandling/hy3-colibri-int4')
+      || _nm.includes('understandling--hy3-colibri-int4')) {
+    return { backend: 'colibri_hy3', label: 'Colibri · Hy3' };
+  }
   const isImageModel = !!(model.is_image_gen || model.is_diffusion || model._tag === 'image');
   // Image gen models → diffusers
   if (isImageModel) {
@@ -559,6 +567,11 @@ export function _detectBackend(model) {
 
 export function _shellQuote(value) {
   return "'" + String(value ?? '').replace(/'/g, "'\\''") + "'";
+}
+
+function _shellWord(value) {
+  const text = String(value ?? '');
+  return /^[A-Za-z0-9_@%+=:,./-]+$/.test(text) ? text : _shellQuote(text);
 }
 
 function _listField(value) {
@@ -682,7 +695,66 @@ export function _buildServeCmd(f, modelName, backend) {
   const _vllmBin = _venvBin ? `${_venvBin}vllm` : 'vllm';
   const _py3Bin = _venvBin ? `${_venvBin}python3` : 'python3';
   let cmd = '';
-  if (backend === 'vllm') {
+  if (backend === 'colibri_glm' || backend === 'colibri_hy3') {
+    const isGlm = backend === 'colibri_glm';
+    const isTuned5090 = String(f.colibri_profile || '') === 'rtx5090-high-ram';
+    const env = isTuned5090 && isGlm
+      ? {
+          COLI_CUDA: '1',
+          CUDA_DENSE: '1',
+          COLI_CUDA_ATTN: '1',
+        }
+      : isTuned5090
+      ? {
+          COLI_CUDA: '1',
+          CUDA_ATTN: '1',
+        }
+      : {};
+    env.DIRECT = f.colibri_direct ? '1' : '0';
+    env.PIPE = String(f.colibri_io_pipeline ?? (isGlm ? '1' : '2'));
+    env.PIPE_WORKERS = String(parseInt(f.colibri_pipe_workers, 10) || 8);
+    env.PILOT_REAL = f.colibri_pilot_real ? '1' : '0';
+    env.EXPERT_BUDGET = '0';
+    env.CACHE_ROUTE = f.colibri_cache_route ? '1' : '0';
+    const cudaPipe = String(f.colibri_cuda_pipeline ?? (isGlm ? '2' : '0'));
+    if (isGlm || cudaPipe !== '0') env.COLI_CUDA_PIPE = cudaPipe;
+    if (f.colibri_cache_route) {
+      env.ROUTE_J = String(parseInt(f.colibri_route_j, 10) || 2);
+      env.ROUTE_M = String(parseInt(f.colibri_route_m, 10) || 12);
+    }
+    if (f.colibri_cuda_mtp) env.COLI_CUDA_MTP = '1';
+    if (isGlm && f.colibri_tool_salvage) env.COLI_TOOL_SALVAGE = '1';
+    const envPrefix = Object.entries(env)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([key, value]) => `${key}=${_shellWord(value)}`)
+      .join(' ');
+    const cli = String(f.colibri_cli || '').trim();
+    const modelPath = String(f.colibri_model_path || modelName || '').trim();
+    cmd = `${envPrefix} ${_shellWord(cli)} serve --model ${_shellWord(modelPath)}`;
+    cmd += ` --ram ${f.colibri_ram || '0'}`;
+    if (f.colibri_auto_tier) cmd += ' --auto-tier';
+    cmd += ` --ctx ${f.colibri_ctx || '4096'}`;
+    cmd += ` --gpu ${f.gpus || '0'}`;
+    cmd += ` --vram ${f.colibri_vram || '0'}`;
+    cmd += ` --policy ${f.colibri_policy || 'balanced'}`;
+    const optionalNumeric = [
+      ['colibri_repin', '--repin'],
+      ['colibri_cap', '--cap'],
+      ['colibri_topp', '--topp'],
+      ['colibri_topk', '--topk'],
+      ['colibri_temp', '--temp'],
+    ];
+    for (const [field, flag] of optionalNumeric) {
+      const value = String(f[field] ?? '').trim();
+      if (value) cmd += ` ${flag} ${value}`;
+    }
+    if (!isGlm && f.colibri_verbose) cmd += ' --verbose';
+    cmd += ` --host 127.0.0.1 --port ${f.port || (isGlm ? '8642' : '8643')}`;
+    cmd += ` --model-id ${f.colibri_model_id || (isGlm ? 'glm-5.2-colibri' : 'hy3-colibri')}`;
+    cmd += ` --max-queue ${f.colibri_max_queue || '8'}`;
+    cmd += ` --queue-timeout ${f.colibri_queue_timeout || '300'}`;
+    cmd += ` --kv-slots ${f.colibri_kv_slots || '1'}`;
+  } else if (backend === 'vllm') {
     // GPU list comes from the Row-1 button strip (data-field="gpus") —
     // the bare "auto" input that used to back gpu_id is gone, and the
     // button strip is the only source for which devices to pin.
@@ -1122,8 +1194,19 @@ async function _fetchDependencies() {
         .join(',');
       if (_hint) _pkgParams.set('model_hint', _hint);
     }
-    const resp = await fetch('/api/cookbook/packages' + (_pkgParams.toString() ? '?' + _pkgParams.toString() : ''));
+    const _viewingRemote = !!(_dsel && _dsel.value && _dsel.value !== 'local');
+    const [resp, colibriResp, hermesResp] = await Promise.all([
+      fetch('/api/cookbook/packages' + (_pkgParams.toString() ? '?' + _pkgParams.toString() : '')),
+      _viewingRemote
+        ? Promise.resolve(null)
+        : fetch('/api/ulysses/colibri/providers', { credentials: 'same-origin' }).catch(() => null),
+      _viewingRemote
+        ? Promise.resolve(null)
+        : fetch('/api/ulysses/hermes/adoption', { credentials: 'same-origin' }).catch(() => null),
+    ]);
     const data = await resp.json();
+    const _colibriExtras = colibriResp?.ok ? await colibriResp.json() : null;
+    const _hermesExtra = hermesResp?.ok ? await hermesResp.json() : null;
     const pkgs = data.packages || [];
     if (!pkgs.length) { list.innerHTML = '<div class="hwfit-loading">No packages found</div>'; return; }
     const _winUnsupported = new Set(['hf_transfer', 'vllm', 'rembg', 'gfpgan']);
@@ -1162,6 +1245,9 @@ async function _fetchDependencies() {
       llama_cpp: '<svg width="13" height="13" viewBox="0 0 600 600" fill="none" aria-hidden="true"><path d="M600 392L504.249 558L504.137 557.929C487.252 584.069 458.193 600 426.864 600H120L240 392H600Z" fill="currentColor"/><path d="M240 392H0L199.602 46.0254C216.032 17.5463 246.411 0 279.29 0H466.154L240 392Z" fill="currentColor"/></svg>',
       ollama: '<img src="/static/icons/ollama-mark-crop.png" alt="" aria-hidden="true" width="13" height="13" style="display:block;width:13px;height:13px;object-fit:contain;" />',
       diffusers: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M5 19l2-2M17 7l2-2"/></svg>',
+      colibri_glm: '<svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 2h6v2h2v2h6v2h-5v2h5v2h-4v2h-3v2h-2v5h-2v-7H9v-2H2V8h7V6H6V4h2V2z"/></svg>',
+      colibri_hy3: '<svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 2h6v2h2v2h6v2h-5v2h5v2h-4v2h-3v2h-2v5h-2v-7H9v-2H2V8h7V6H6V4h2V2z"/></svg>',
+      hermes: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 16c3-1 5-4 5-8"/><path d="M20 16c-3-1-5-4-5-8"/><path d="M9 8h6"/><path d="M7 20h10"/><path d="M12 4v16"/></svg>',
       krea_diffusers: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 19V5"/><path d="M4 12h4"/><path d="M12 5l-7 7 7 7"/><path d="M14 19l3-14 3 14"/><path d="M15.3 13h3.4"/></svg>',
       sam_mask: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7c3-3 13-3 16 0"/><path d="M4 17c3 3 13 3 16 0"/><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3"/></svg>',
     };
@@ -1303,6 +1389,64 @@ async function _fetchDependencies() {
       `<div class="cookbook-dep-section"><span class="cookbook-dep-section-title">${title}</span><span class="cookbook-dep-section-note">${note}</span></div>`;
     const _section = (title, note, items) =>
       items.length ? _sectionHeader(title, note) + _rowsHtml(items) : '';
+    const _extraAction = (runtimeId, action, label, enabled = true, title = '') =>
+      `<button type="button" class="cookbook-dep-tag cookbook-dep-install" data-native-extra="${esc(runtimeId)}" data-native-extra-action="${esc(action)}"${enabled ? '' : ' disabled'} title="${esc(title)}">${esc(label)}</button>`;
+    const _extrasHtml = () => {
+      if (_viewingRemote) return '';
+      const rows = [];
+      if (_hermesExtra) {
+        const install = _hermesExtra.install || {};
+        const preview = _hermesExtra.adoption_preview || {};
+        const update = (_hermesExtra.lifecycle_actions || []).find(action => action.id === 'update');
+        const installed = !!install.executable;
+        rows.push(
+          `<div class="cookbook-dep-row" data-pkg-name="hermes" data-dep-kind="native">`
+          + `<div class="cookbook-dep-info"><div class="memory-item-title">${_depGlyphHtml('hermes')}Hermes</div>`
+          + `<div class="memory-item-meta" style="font-size:10px;opacity:.5;margin-top:2px;">Native agent installation · separate from the Ulysses Python environment</div>`
+          + `<div class="memory-item-meta" style="font-size:10px;opacity:.65;margin-top:3px;">${esc(install.version || 'version unknown')} · ${esc(install.source_root || 'source not detected')}</div></div>`
+          + _extraAction('hermes.gateway', 'update', 'Update', !!update?.enabled, update?.reason || 'Adopt Hermes in Services before lifecycle control.')
+          + `<span class="cookbook-dep-tag cookbook-dep-cat">Extra</span>`
+          + `<span class="cookbook-dep-tag ${installed ? 'cookbook-dep-installed' : 'cookbook-dep-na'}">${installed ? (preview.adoption_current ? 'Managed' : 'Installed') : 'Missing'}</span>`
+          + `</div>`
+        );
+      }
+      for (const provider of (_colibriExtras?.providers || [])) {
+        const isGlm = provider.id === 'colibri.glm';
+        const source = provider.source || {};
+        const build = provider.build || {};
+        const model = provider.model || {};
+        const actions = provider.actions || {};
+        const name = isGlm ? 'colibri_glm' : 'colibri_hy3';
+        const status = actions.start_available
+          ? 'Ready'
+          : build.cuda_built
+            ? 'Model pending'
+            : source.ready
+              ? 'Build needed'
+              : source.present
+                ? 'Source issue'
+                : 'Not cloned';
+        const detail = [
+          source.present ? `source ${String(source.commit || 'present').slice(0, 12)}` : 'source missing',
+          build.cuda_built ? 'CUDA build ready' : 'CUDA build required',
+          model.present ? `${model.shards || 0} model shards` : `${model.download_markers || 0} download markers`,
+        ].join(' · ');
+        rows.push(
+          `<div class="cookbook-dep-row" data-pkg-name="${name}" data-dep-kind="native">`
+          + `<div class="cookbook-dep-info"><div class="memory-item-title">${_depGlyphHtml(name)}${esc(provider.label)}</div>`
+          + `<div class="memory-item-meta" style="font-size:10px;opacity:.5;margin-top:2px;">Independent native C/CUDA source and OpenAI-compatible model runtime</div>`
+          + `<div class="memory-item-meta" style="font-size:10px;opacity:.65;margin-top:3px;">${esc(detail)}</div></div>`
+          + _extraAction(provider.id, 'sync', source.present ? 'Sync' : 'Clone', !!actions.sync_available, source.dirty ? 'Preserve or commit local source changes before syncing.' : 'Fetch the official source with a fast-forward-only update.')
+          + _extraAction(provider.id, 'build', 'Build CUDA', !!actions.build_available, 'Run the provider-specific native CUDA build and record a build manifest.')
+          + `<span class="cookbook-dep-tag cookbook-dep-cat">Extra</span>`
+          + `<span class="cookbook-dep-tag ${actions.start_available ? 'cookbook-dep-installed' : 'cookbook-dep-na'}">${esc(status)}</span>`
+          + `</div>`
+        );
+      }
+      return rows.length
+        ? _sectionHeader('Extras', 'Native system and source runtimes; never installed with pip or placed in the active venv.') + rows.join('')
+        : '';
+    };
     const _pkgOrder = {
       System: ['tmux', 'docker'],
       Tools: ['hf_transfer'],
@@ -1383,15 +1527,67 @@ async function _fetchDependencies() {
       return parts.join('');
     };
 
-    const _viewingRemote = !!(_dsel && _dsel.value && _dsel.value !== 'local');
     const _visibleDep = (p) => p.applicable !== false || p.installed || (p.kind === 'system' && p.name !== 'APFEL');
     const _appDeps = pkgs.filter(p => p.target === 'local' && _visibleDep(p));
     const _serverDeps = pkgs.filter(p => p.target !== 'local' && _visibleDep(p));
 
     list.innerHTML = [
+      _extrasHtml(),
       _viewingRemote ? '' : _appDepsHtml(_appDeps),
       _serverDepsHtml(_serverDeps),
     ].join('');
+
+    list.querySelectorAll('[data-native-extra]').forEach(button => {
+      button.addEventListener('click', async () => {
+        const runtimeId = button.dataset.nativeExtra || '';
+        const action = button.dataset.nativeExtraAction || '';
+        const isHermes = runtimeId === 'hermes.gateway';
+        const endpoint = isHermes
+          ? '/api/ulysses/hermes/jobs/plan'
+          : '/api/ulysses/colibri/jobs/plan';
+        const body = isHermes ? { action } : { runtime_id: runtimeId, action };
+        const wantsPlan = await window.styledConfirm(
+          `Create an inspectable ${action} plan for ${runtimeId}? Nothing runs until you confirm the fixed steps separately.`,
+          { title: 'Plan native dependency action', confirmText: 'Create plan', cancelText: 'Cancel', danger: action !== 'sync' },
+        );
+        if (!wantsPlan) return;
+        try {
+          button.disabled = true;
+          const plannedResponse = await fetch(endpoint, {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+          });
+          const planned = await plannedResponse.json();
+          if (!plannedResponse.ok) throw new Error(planned.detail || planned.error || `HTTP ${plannedResponse.status}`);
+          const job = planned.job || {};
+          const steps = (job.steps || []).map((step, index) => `${index + 1}. ${step.label}`).join('\n');
+          const confirmed = await window.styledConfirm(
+            `${job.summary}\n\n${steps}\n\nThe durable job log remains available in Services.`,
+            { title: 'Confirm native dependency plan', confirmText: action === 'build' ? 'Build' : 'Run', cancelText: 'Cancel', danger: action === 'build' },
+          );
+          if (!confirmed) return;
+          const executeResponse = await fetch(`/api/ulysses/jobs/${encodeURIComponent(job.id)}/execute`, {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              confirmation_token: planned.confirmation_token,
+              confirmation_phrase: job.confirmation_phrase,
+            }),
+          });
+          const executed = await executeResponse.json();
+          if (!executeResponse.ok) throw new Error(executed.detail || executed.error || `HTTP ${executeResponse.status}`);
+          uiModule.showToast(`${job.summary} started. View progress in Services.`, 6000);
+          await _fetchDependencies();
+        } catch (error) {
+          uiModule.showToast(`Native dependency action failed: ${error?.message || error}`, 9000);
+        } finally {
+          if (button.isConnected) button.disabled = false;
+        }
+      });
+    });
 
     // Shared install/update routine — used by the Install button and the
     // "Update" item in an installed package's ⋮ menu. `upgrade` adds pip -U;

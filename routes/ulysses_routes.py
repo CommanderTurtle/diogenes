@@ -12,6 +12,11 @@ from core.middleware import require_admin
 from src.sandwich_runtime import observe_sandwich_installation
 from src.ulysses_chroma import collect_chroma_persistence
 from src.ulysses_colibri import collect_colibri_providers
+from src.ulysses_colibri_command import (
+    ColibriCommandError,
+    render_colibri_serve_command,
+)
+from src.ulysses_colibri_control import ColibriControl
 from src.ulysses_catalog import default_runtime_registry
 from src.ulysses_discovery import HostDiscoverySnapshot, collect_host_discovery
 from src.ulysses_hermes import collect_hermes_adoption
@@ -40,6 +45,16 @@ class RuntimeJobExecuteRequest(BaseModel):
     confirmation_phrase: str
 
 
+class ColibriCommandRequest(BaseModel):
+    runtime_id: str
+    settings: dict[str, str | bool | int | float | None]
+
+
+class ColibriLifecyclePlanRequest(BaseModel):
+    runtime_id: str
+    action: str
+
+
 def _job_http_error(exc: RuntimeJobError) -> HTTPException:
     if isinstance(exc, RuntimeJobConflict):
         return HTTPException(409, str(exc))
@@ -55,6 +70,7 @@ def setup_ulysses_routes(
     hermes_collector: Callable[[], dict] = collect_hermes_adoption,
     colibri_collector: Callable[[], dict] = collect_colibri_providers,
     hermes_control_factory: Callable[[], HermesControl] = HermesControl,
+    colibri_control_factory: Callable[[], ColibriControl] = ColibriControl,
     readiness_collector: Callable[
         [dict, dict, dict], dict
     ] = collect_switchover_readiness,
@@ -84,6 +100,45 @@ def setup_ulysses_routes(
     async def get_colibri_providers(request: Request) -> dict:
         require_admin(request)
         return await run_in_threadpool(colibri_collector)
+
+    @router.post("/colibri/command")
+    async def render_colibri_command(
+        request: Request,
+        body: ColibriCommandRequest,
+    ) -> dict:
+        require_admin(request)
+        try:
+            command = await run_in_threadpool(
+                render_colibri_serve_command,
+                body.runtime_id,
+                body.settings,
+            )
+        except ColibriCommandError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        return {
+            "schema_version": "ulysses.colibri-command.v1",
+            "runtime_id": body.runtime_id,
+            "command": command,
+            "editable": False,
+        }
+
+    @router.post("/colibri/jobs/plan")
+    async def plan_colibri_lifecycle(
+        request: Request,
+        body: ColibriLifecyclePlanRequest,
+    ) -> dict:
+        require_admin(request)
+        report = await run_in_threadpool(colibri_collector)
+        try:
+            plan, token = await run_in_threadpool(
+                colibri_control_factory().create_plan,
+                report,
+                provider_id=body.runtime_id,
+                action=body.action,
+            )
+            return {"job": plan, "confirmation_token": token}
+        except RuntimeJobError as exc:
+            raise _job_http_error(exc) from exc
 
     @router.post("/hermes/adoption/apply")
     async def apply_hermes_adoption(

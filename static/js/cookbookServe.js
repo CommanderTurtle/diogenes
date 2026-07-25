@@ -46,8 +46,32 @@ const SERVE_STATE_KEY = 'cookbook-serve-state';
 const SERVE_FAVORITES_KEY = 'cookbook-serve-favorite-models';
 
 let _cachedAllModels = [];
+let _colibriProvidersCache = null;
+let _colibriProvidersCachedAt = 0;
 const _CACHED_MODELS_SCAN_KEY = 'cookbook_cached_models_scan_v3_ltx_video';
 const _CACHED_MODELS_SCAN_TTL = 6 * 3600 * 1000;
+
+function _colibriRuntimeIdForModel(model) {
+  const identity = `${model?.repo_id || ''} ${model?.name || ''} ${model?.path || ''}`.toLowerCase();
+  if (identity.includes('mateogrgic/glm-5.2-colibri-int4-with-int8-mtp')
+      || identity.includes('mateogrgic--glm-5.2-colibri-int4-with-int8-mtp')) return 'colibri.glm';
+  if (identity.includes('understandling/hy3-colibri-int4')
+      || identity.includes('understandling--hy3-colibri-int4')) return 'colibri.hy3';
+  return '';
+}
+
+async function _colibriProviderForModel(model, force = false) {
+  const runtimeId = _colibriRuntimeIdForModel(model);
+  if (!runtimeId) return null;
+  if (force || !_colibriProvidersCache || Date.now() - _colibriProvidersCachedAt > 15000) {
+    const res = await fetch('/api/ulysses/colibri/providers', { credentials: 'same-origin' });
+    if (!res.ok) throw new Error(`Colibri provider observation failed: HTTP ${res.status}`);
+    const data = await res.json();
+    _colibriProvidersCache = Array.isArray(data.providers) ? data.providers : [];
+    _colibriProvidersCachedAt = Date.now();
+  }
+  return _colibriProvidersCache.find(item => item.id === runtimeId) || null;
+}
 
 function _normalizeCookbookModelDir(dir) {
   const d = String(dir || '').replaceAll('✕', '').replaceAll('✖', '').trim();
@@ -745,14 +769,22 @@ function _remoteWindowsDiffusersUnsupported(target) {
   return !!(target?.host && target?.platform === 'windows');
 }
 
-function _backendChoicesForTarget(target) {
+function _backendChoicesForTarget(target, model = null, colibriProvider = null) {
   if (target?.platform === 'windows') {
     if (_remoteWindowsDiffusersUnsupported(target)) return [['llamacpp','llama.cpp']];
     return [['llamacpp','llama.cpp'],['diffusers','Diffusers']];
   }
-  return _isMetal()
+  const standard = _isMetal()
     ? [['mlx','MLX'],['mlx_image','MLX Image'],['llamacpp','llama.cpp'],['ollama','Ollama']]
     : [['vllm','vLLM'],['sglang','SGLang'],['llamacpp','llama.cpp'],['ollama','Ollama'],['mlx','MLX'],['mlx_image','MLX Image'],['diffusers','Diffusers']];
+  if (target?.host || target?.platform === 'windows' || !colibriProvider) return standard;
+  const runtimeId = _colibriRuntimeIdForModel(model);
+  const choice = runtimeId === 'colibri.glm'
+    ? ['colibri_glm', 'Colibri · GLM']
+    : runtimeId === 'colibri.hy3'
+    ? ['colibri_hy3', 'Colibri · Hy3']
+    : null;
+  return choice ? [choice, ...standard] : standard;
 }
 
 function _dependencyPkgForServeBackend(backend, modelName = '') {
@@ -762,6 +794,8 @@ function _dependencyPkgForServeBackend(backend, modelName = '') {
   if (backend === 'mlx_image' && nm.includes('ddcolor')) return 'mlx_ddcolor_swift';
   if (backend === 'diffusers' && nm.includes('krea')) return 'krea_diffusers';
   const packageByBackend = {
+    colibri_glm: 'colibri_glm',
+    colibri_hy3: 'colibri_hy3',
     vllm: 'vllm',
     sglang: 'sglang',
     llamacpp: 'llama_cpp',
@@ -814,6 +848,29 @@ function _cachedAdapterSelectHtml(kind, currentRepo = '') {
 }
 
 async function _fetchServeRuntimePackage(panel, backend) {
+  if (backend === 'colibri_glm' || backend === 'colibri_hy3') {
+    const provider = await _colibriProviderForModel(
+      { repo_id: panel.closest('.doclib-card, .memory-item')?.dataset?.repo || '' },
+      true,
+    );
+    const target = _selectedServeTarget(panel);
+    if (!provider) return { pkg: null, target };
+    const summary = [
+      provider.source?.ready ? 'official source ready' : 'source not ready',
+      provider.build?.cuda_built ? 'CUDA build ready' : 'CUDA build required',
+      provider.model?.present
+        ? `${provider.model.shards} model shards ready`
+        : `${provider.model?.download_markers || 0} download markers remain`,
+    ].join('; ');
+    return {
+      pkg: {
+        installed: !!provider.build?.cuda_built,
+        probe_error: false,
+        status_note: summary,
+      },
+      target,
+    };
+  }
   const repo = (panel.closest('.doclib-card, .memory-item')?.dataset?.repo) || '';
   const packageByBackend = {
     vllm: 'vllm',
@@ -841,7 +898,7 @@ async function _fetchServeRuntimePackage(panel, backend) {
 }
 
 function _runtimeNoteText(backend, pkg, target) {
-  const labels = { vllm: 'vLLM', sglang: 'SGLang', llamacpp: 'llama.cpp', mlx: 'MLX', mlx_image: 'MLX Image', diffusers: 'Diffusers' };
+  const labels = { vllm: 'vLLM', sglang: 'SGLang', llamacpp: 'llama.cpp', mlx: 'MLX', mlx_image: 'MLX Image', diffusers: 'Diffusers', colibri_glm: 'Colibri · GLM', colibri_hy3: 'Colibri · Hy3' };
   const label = labels[backend] || backend;
   if (!pkg) return `${label} readiness unavailable for ${target.label}.`;
   const note = pkg.status_note || pkg.update_note || '';
@@ -1354,6 +1411,14 @@ function _rerenderCachedModels() {
         }
         return;
       }
+      let _colibriProvider = null;
+      if (_colibriRuntimeIdForModel(m)) {
+        try {
+          _colibriProvider = await _colibriProviderForModel(m);
+        } catch (error) {
+          console.warn('[cookbook] Colibri provider observation unavailable', error);
+        }
+      }
 
       // Toggle — close if already open
       if (item.classList.contains('doclib-card-expanded')) {
@@ -1411,7 +1476,11 @@ function _rerenderCachedModels() {
       const _expertParallelDefault = _isMiniMaxMSeries || _isStepFunStep;
       const svm = (k, def) => (_modelSs && _hasOwn(_modelSs, k)) ? _modelSs[k] : def;
       const _serveTarget = _selectedServeTarget();
-      const _backendChoices = _backendChoicesForTarget(_serveTarget);
+      const _backendChoices = _backendChoicesForTarget(
+        _serveTarget,
+        m,
+        _colibriProvider,
+      );
       const _allowedBackends = new Set(_backendChoices.map(([v]) => v));
       const detectedBackend = _detectBackend(m).backend;
       const _imageBackend = detectedBackend === 'mlx_image' || detectedBackend === 'diffusers';
@@ -1439,6 +1508,16 @@ function _rerenderCachedModels() {
       const _kvSelected = sv('vllm_kv_cache_dtype', _kvAutoDefault);
       const vllmKvCacheOpts = ['auto','fp8'].map(d => `<option value="${d}"${_kvSelected===d?' selected':''}>${d}</option>`).join('');
       const _l = (name, tip) => `<span>${name}<span class="hwfit-hint" title="${tip}">?</span></span>`;
+      const _colibriProfiles = _colibriProvider?.profiles || {};
+      const _colibriProfileId = String(
+        sv('colibri_profile', _colibriProvider?.default_profile || '')
+      );
+      const _colibriProfile = _colibriProfiles[_colibriProfileId] || {};
+      const _colibriEnv = _colibriProfile.env || {};
+      const _colibriIsGlm = _colibriProvider?.id === 'colibri.glm';
+      const _colibriProfileOptions = Object.entries(_colibriProfiles).map(([id, profile]) =>
+        `<option value="${esc(id)}"${id === _colibriProfileId ? ' selected' : ''}>${esc(profile.label || id)}</option>`
+      ).join('');
       const _ggufChoices = _runnableGgufFiles(m);
       const _savedGguf = String(sv('gguf_file', '') || '');
       const _preferredGgufInclude = String(sv('_preferredGgufInclude', '') || '').replace(/\*/g, '').toLowerCase();
@@ -1481,6 +1560,12 @@ function _rerenderCachedModels() {
         + `</div>`;
 
       let panelHtml = `<div class="hwfit-serve-panel">`;
+      if (_colibriProvider) {
+        panelHtml += `<input type="hidden" class="hwfit-sf" data-field="colibri_provider_id" value="${esc(_colibriProvider.id)}" />`;
+        panelHtml += `<input type="hidden" class="hwfit-sf" data-field="colibri_cli" value="${esc((_colibriProvider.commands?.serve || [])[0] || '')}" />`;
+        panelHtml += `<input type="hidden" class="hwfit-sf" data-field="colibri_model_path" value="${esc(_colibriProvider.model?.path || '')}" />`;
+        panelHtml += `<input type="hidden" class="hwfit-sf" data-field="colibri_model_id" value="${esc(_colibriProvider.endpoint?.model_id || '')}" />`;
+      }
       const _replaceTaskId = String(sv('_replaceTaskId', '') || '');
       if (_replaceTaskId) {
         panelHtml += `<input type="hidden" class="hwfit-sf" data-field="_replaceTaskId" value="${esc(_replaceTaskId)}" />`;
@@ -1511,7 +1596,7 @@ function _rerenderCachedModels() {
       // stays as the source-of-truth so every existing change handler
       // (updateBackendVisibility, runtime readiness, command builder)
       // still fires via dispatchEvent('change') on selection.
-      panelHtml += `<label>${_l('Engine','Inference engine: MLX, vLLM, SGLang, llama.cpp, Ollama, or Diffusers')}<div class="hwfit-backend-picker" data-backend-picker style="position:relative;width:100%;"><select class="hwfit-sf hwfit-backend-source" data-field="backend" style="display:none;">${backendOpts}</select><button type="button" class="hwfit-backend-btn" data-backend-btn aria-haspopup="listbox" aria-expanded="false" style="display:flex;align-items:center;gap:6px;width:100%;height:32px;padding:0 8px;background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:4px;font:inherit;font-size:11px;cursor:pointer;text-align:left;position:relative;top:-4px;"><span class="hwfit-backend-btn-icon" data-backend-icon-slot aria-hidden="true" style="display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;color:var(--accent, var(--red));flex-shrink:0;"></span><span class="hwfit-backend-btn-label" data-backend-label style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"></span><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="opacity:0.6;flex-shrink:0;"><polyline points="6 9 12 15 18 9"/></svg></button><div class="hwfit-backend-menu" data-backend-menu role="listbox" hidden style="position:absolute;top:calc(100% + 4px);left:0;right:0;z-index:100;background:var(--panel, var(--bg));border:1px solid var(--border);border-radius:6px;box-shadow:0 6px 20px rgba(0,0,0,0.22);padding:4px;"></div></div></label>`;
+      panelHtml += `<label>${_l('Engine','Inference engine: Colibri, MLX, vLLM, SGLang, llama.cpp, Ollama, or Diffusers')}<div class="hwfit-backend-picker" data-backend-picker style="position:relative;width:100%;"><select class="hwfit-sf hwfit-backend-source" data-field="backend" style="display:none;">${backendOpts}</select><button type="button" class="hwfit-backend-btn" data-backend-btn aria-haspopup="listbox" aria-expanded="false" style="display:flex;align-items:center;gap:6px;width:100%;height:32px;padding:0 8px;background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:4px;font:inherit;font-size:11px;cursor:pointer;text-align:left;position:relative;top:-4px;"><span class="hwfit-backend-btn-icon" data-backend-icon-slot aria-hidden="true" style="display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;color:var(--accent, var(--red));flex-shrink:0;"></span><span class="hwfit-backend-btn-label" data-backend-label style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"></span><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="opacity:0.6;flex-shrink:0;"><polyline points="6 9 12 15 18 9"/></svg></button><div class="hwfit-backend-menu" data-backend-menu role="listbox" hidden style="position:absolute;top:calc(100% + 4px);left:0;right:0;z-index:100;background:var(--panel, var(--bg));border:1px solid var(--border);border-radius:6px;box-shadow:0 6px 20px rgba(0,0,0,0.22);padding:4px;"></div></div></label>`;
       panelHtml += `<input type="hidden" class="hwfit-sf" data-field="host" value="${esc(_es.remoteHost || '')}" />`;
       // Inference mode pill (llama.cpp only) — lives directly to the
       // RIGHT of Backend in Row 1 so the engine and the GPU/CPU choice
@@ -1537,8 +1622,13 @@ function _rerenderCachedModels() {
         const _llamaMode = _savedUnified && _llamaModeRaw !== 'cpu' ? 'unified' : _llamaModeRaw;
         panelHtml += `<label class="hwfit-backend-llamacpp">${_l('Inference','CPU = -ngl 0. GPU = -ngl 99. Unified = GPU offload plus GGML_CUDA_ENABLE_UNIFIED_MEMORY=1 for unified-memory CUDA systems.')}<div class="mode-toggle mode-toggle-three${_llamaMode === 'gpu' ? ' mode-mid' : (_llamaMode === 'unified' ? ' mode-third' : '')}" data-llama-mode-toggle style="display:flex;width:100%;height:32px;position:relative;top:2px;"><button type="button" class="mode-toggle-btn${_llamaMode === 'cpu' ? ' active' : ''}" data-llama-mode="cpu" aria-pressed="${_llamaMode === 'cpu'}" style="flex:1;"><span style="position:relative;top:-7px;">CPU</span></button><button type="button" class="mode-toggle-btn${_llamaMode === 'gpu' ? ' active' : ''}" data-llama-mode="gpu" aria-pressed="${_llamaMode === 'gpu'}" style="flex:1;"><span style="position:relative;top:-7px;">GPU</span></button><button type="button" class="mode-toggle-btn${_llamaMode === 'unified' ? ' active' : ''}" data-llama-mode="unified" aria-pressed="${_llamaMode === 'unified'}" style="flex:1;"><span style="position:relative;top:-7px;">Unified</span></button></div><input type="hidden" class="hwfit-sf" data-field="llama_mode" value="${esc(_llamaMode)}" /><input type="hidden" class="hwfit-sf" data-field="unified_mem" value="${_llamaMode === 'unified' ? '1' : ''}" /></label>`;
       }
-      panelHtml += `<label>${_l('venv / conda','Path to a Python venv, or a Conda env name/path when the selected server uses Conda.')}<input type="text" class="hwfit-sf hwfit-sf-wide" data-field="venv" value="${esc(sv('venv', _es.envPath || _srvVenv || ''))}" placeholder="~/venv or conda-env" /></label>`;
-      const defaultPort = defaultBackend === 'ollama' ? '11434' : _nextAvailablePort();
+      panelHtml += `<label class="hwfit-backend-vllm hwfit-backend-sglang hwfit-backend-llamacpp hwfit-backend-ollama hwfit-backend-mlx hwfit-backend-mlx_image hwfit-backend-diffusers">${_l('venv / conda','Path to a Python venv, or a Conda env name/path when the selected server uses Conda.')}<input type="text" class="hwfit-sf hwfit-sf-wide" data-field="venv" value="${esc(sv('venv', _es.envPath || _srvVenv || ''))}" placeholder="~/venv or conda-env" /></label>`;
+      if (_colibriProvider) {
+        panelHtml += `<label class="hwfit-backend-colibri_glm hwfit-backend-colibri_hy3">${_l('Profile','Official-source launch profile. Presets change only supported Colibri settings.')}<select class="hwfit-sf" data-field="colibri_profile">${_colibriProfileOptions}</select></label>`;
+      }
+      const defaultPort = _colibriProvider?.endpoint?.port
+        ? String(_colibriProvider.endpoint.port)
+        : defaultBackend === 'ollama' ? '11434' : _nextAvailablePort();
       panelHtml += `<label>${_l('Port','HTTP port for the API server')}<input type="text" class="hwfit-sf" data-field="port" value="${esc(sv('port', defaultPort))}" /></label>`;
       const _activeGpus = (defaultGpus || '').split(',').map(s => s.trim()).filter(Boolean);
       const detectedGpuCount = Number(_getGpuToggleTotal?.() || 0);
@@ -1594,6 +1684,19 @@ function _rerenderCachedModels() {
       // list) and the command builders now read from that single source.
       panelHtml += `<label class="hwfit-backend-vllm hwfit-backend-sglang">${_l('GPU Mem','Fraction of GPU memory (0.0–1.0). Lower if OOM')}<input type="text" class="hwfit-sf" data-field="gpu_mem" value="${esc(sv('gpu_mem', _isMiniMaxMSeries ? '0.95' : '0.90'))}" /></label>`;
       panelHtml += `</div>`;
+      if (_colibriProvider) {
+        const _profileRam = String(_colibriProfile.ram ?? '0');
+        const _profileVram = String(_colibriProfile.vram ?? '0');
+        const _profileCtx = String(_colibriProfile.ctx ?? '4096');
+        const _profilePolicy = String(_colibriProfile.policy || 'balanced');
+        panelHtml += `<div class="hwfit-serve-row hwfit-serve-row-core hwfit-backend-colibri_glm hwfit-backend-colibri_hy3">`;
+        panelHtml += `<label>${_l('RAM GB','Resident expert working-set budget. The 5090 profile reserves 56 GB from the 64 GB host.')}<input type="text" class="hwfit-sf" data-field="colibri_ram" value="${esc(sv('colibri_ram', _profileRam))}" /></label>`;
+        panelHtml += `<label>${_l('VRAM GB','0 delegates to Colibri auto-tier, which fills measured free VRAM while reserving dense weights and KV/runtime headroom.')}<input type="text" class="hwfit-sf" data-field="colibri_vram" value="${esc(sv('colibri_vram', _profileVram))}" /></label>`;
+        panelHtml += `<label>${_l('Context','Colibri context budget for each sequence.')}<input type="text" class="hwfit-sf" data-field="colibri_ctx" value="${esc(sv('colibri_ctx', _profileCtx))}" /></label>`;
+        panelHtml += `<label>${_l('Policy','Upstream resource policy. balanced is the stable default; experimental-fast is never selected automatically.')}<select class="hwfit-sf" data-field="colibri_policy">${['quality','balanced','experimental-fast'].map(value => `<option value="${value}"${String(sv('colibri_policy', _profilePolicy)) === value ? ' selected' : ''}>${value}</option>`).join('')}</select></label>`;
+        panelHtml += `<label class="hwfit-sf-cb"><input type="checkbox" class="hwfit-sf" data-field="colibri_auto_tier"${sv('colibri_auto_tier', !!_colibriProfile.auto_tier) ? ' checked' : ''} /> Auto tier${_h('Use Colibri resource planning to size RAM/VRAM tiers from live free memory.')}</label>`;
+        panelHtml += `</div>`;
+      }
       // ── Advanced (collapsed by default) ──
       // Everything below the fold is tuning users only touch occasionally:
       // vLLM kernel/env knobs, llama.cpp fit/cache/split controls, the
@@ -1603,6 +1706,38 @@ function _rerenderCachedModels() {
       // work for the dozens of nested inputs.
       panelHtml += `<details class="hwfit-serve-advanced"${_isMiniMaxM3 ? ' open' : ''}>`;
       panelHtml += `<summary class="hwfit-serve-advanced-summary">Advanced</summary>`;
+      if (_colibriProvider) {
+        const _ioDefault = String(_colibriEnv.PIPE ?? (_colibriIsGlm ? '1' : '2'));
+        const _cudaPipeDefault = String(_colibriEnv.COLI_CUDA_PIPE ?? (_colibriIsGlm ? '2' : '0'));
+        panelHtml += `<div class="hwfit-backend-colibri_glm hwfit-backend-colibri_hy3" style="font-size:10px;line-height:1.45;color:var(--fg-muted);margin:2px 0 8px;padding:7px 9px;border:1px solid var(--border);border-radius:6px;">${esc(_colibriProfile.description || '')}<br><span style="opacity:.8;">Source: ${esc(_colibriProvider.source?.commit || 'not observed')} · model: ${esc(_colibriProvider.model?.path || 'not configured')}</span></div>`;
+        panelHtml += `<div class="hwfit-serve-row hwfit-backend-colibri_glm hwfit-backend-colibri_hy3">`;
+        panelHtml += `<label>${_l('I/O Pipeline','0 off; 1 threaded async reads; 2 io_uring (Hy3 build includes IOURING=1).')}<select class="hwfit-sf" data-field="colibri_io_pipeline">${['0','1','2'].map(value => `<option value="${value}"${String(sv('colibri_io_pipeline', _ioDefault)) === value ? ' selected' : ''}>${value}</option>`).join('')}</select></label>`;
+        panelHtml += `<label>${_l('I/O Workers','Upstream supports 1–64. Eight is the documented stable default; tune only after benchmarking.')}<input type="text" class="hwfit-sf" data-field="colibri_pipe_workers" value="${esc(sv('colibri_pipe_workers', String(_colibriEnv.PIPE_WORKERS || '8')))}" /></label>`;
+        panelHtml += `<label>${_l('CUDA Pipeline','0 off; 1 resident multi-step; 2 pipe2. GLM issue #273 uses pipe2 on a single Blackwell GPU.')}<select class="hwfit-sf" data-field="colibri_cuda_pipeline">${['0','1','2'].map(value => `<option value="${value}"${String(sv('colibri_cuda_pipeline', _cudaPipeDefault)) === value ? ' selected' : ''}>${value}</option>`).join('')}</select></label>`;
+        panelHtml += `<label>${_l('Repin','Adapt the RAM/VRAM expert set every N tokens. Blank uses upstream default.')}<input type="text" class="hwfit-sf" data-field="colibri_repin" value="${esc(sv('colibri_repin', ''))}" placeholder="auto" /></label>`;
+        panelHtml += `<label>${_l('Max Queue','Maximum queued OpenAI-compatible requests.')}<input type="text" class="hwfit-sf" data-field="colibri_max_queue" value="${esc(sv('colibri_max_queue', '8'))}" /></label>`;
+        panelHtml += `<label>${_l('Queue Timeout','Seconds a request may remain queued.')}<input type="text" class="hwfit-sf" data-field="colibri_queue_timeout" value="${esc(sv('colibri_queue_timeout', '300'))}" /></label>`;
+        panelHtml += `<label>${_l('KV Slots','Independent sequence contexts; current upstream supports 1–16.')}<input type="text" class="hwfit-sf" data-field="colibri_kv_slots" value="${esc(sv('colibri_kv_slots', '1'))}" /></label>`;
+        panelHtml += `</div>`;
+        panelHtml += `<div class="hwfit-serve-row hwfit-backend-colibri_glm hwfit-backend-colibri_hy3">`;
+        panelHtml += `<label>${_l('Top P','Blank uses upstream policy.')}<input type="text" class="hwfit-sf" data-field="colibri_topp" value="${esc(sv('colibri_topp', ''))}" placeholder="policy" /></label>`;
+        panelHtml += `<label>${_l('Top K','Blank uses upstream policy.')}<input type="text" class="hwfit-sf" data-field="colibri_topk" value="${esc(sv('colibri_topk', ''))}" placeholder="policy" /></label>`;
+        panelHtml += `<label>${_l('Temperature','Blank uses upstream policy.')}<input type="text" class="hwfit-sf" data-field="colibri_temp" value="${esc(sv('colibri_temp', ''))}" placeholder="policy" /></label>`;
+        panelHtml += `<label>${_l('Cap','Token cap. Blank uses upstream default.')}<input type="text" class="hwfit-sf" data-field="colibri_cap" value="${esc(sv('colibri_cap', ''))}" placeholder="auto" /></label>`;
+        panelHtml += `</div>`;
+        panelHtml += `<div class="hwfit-serve-checks hwfit-backend-colibri_glm hwfit-backend-colibri_hy3">`;
+        panelHtml += `<label class="hwfit-sf-cb"><input type="checkbox" class="hwfit-sf" data-field="colibri_direct"${sv('colibri_direct', _colibriEnv.DIRECT === '1') ? ' checked' : ''} /> Direct I/O${_h('O_DIRECT bypasses page cache. Recommended by issue #273 and Hy3 for fast NVMe; benchmark if storage changes.')}</label>`;
+        panelHtml += `<label class="hwfit-sf-cb"><input type="checkbox" class="hwfit-sf" data-field="colibri_pilot_real"${sv('colibri_pilot_real', _colibriEnv.PILOT_REAL === '1') ? ' checked' : ''} /> Real Prefetch${_h('Value-preserving cross-layer prefetch. GLM 5090 profile enables it.')}</label>`;
+        panelHtml += `<label class="hwfit-sf-cb"><input type="checkbox" class="hwfit-sf" data-field="colibri_cache_route"${sv('colibri_cache_route', false) ? ' checked' : ''} /> Experimental Cache Route${_h('Changes MoE routing to prefer resident experts. Off by default to preserve full top-K behavior.')}</label>`;
+        panelHtml += `<label class="hwfit-sf-cb"><input type="checkbox" class="hwfit-sf" data-field="colibri_cuda_mtp"${sv('colibri_cuda_mtp', false) ? ' checked' : ''} /> Experimental CUDA MTP${_h('Off by default upstream under CUDA. Enable only after residency/acceptance benchmarking.')}</label>`;
+        if (_colibriIsGlm) panelHtml += `<label class="hwfit-sf-cb hwfit-backend-colibri_glm"><input type="checkbox" class="hwfit-sf" data-field="colibri_tool_salvage"${sv('colibri_tool_salvage', false) ? ' checked' : ''} /> Tool Salvage${_h('Opt-in recovery for malformed int4 tool calls.')}</label>`;
+        if (!_colibriIsGlm) panelHtml += `<label class="hwfit-sf-cb hwfit-backend-colibri_hy3"><input type="checkbox" class="hwfit-sf" data-field="colibri_verbose"${sv('colibri_verbose', false) ? ' checked' : ''} /> Verbose Engine${_h('Pass Hy3 engine stderr through to the Active console.')}</label>`;
+        panelHtml += `</div>`;
+        panelHtml += `<div class="hwfit-serve-row hwfit-backend-colibri_glm hwfit-backend-colibri_hy3">`;
+        panelHtml += `<label>${_l('Route J','Sacred true top ranks when experimental cache routing is on.')}<input type="text" class="hwfit-sf" data-field="colibri_route_j" value="${esc(sv('colibri_route_j', '2'))}" /></label>`;
+        panelHtml += `<label>${_l('Route M','Maximum resident-preference rank window when experimental cache routing is on.')}<input type="text" class="hwfit-sf" data-field="colibri_route_m" value="${esc(sv('colibri_route_m', '12'))}" /></label>`;
+        panelHtml += `</div>`;
+      }
       // Advanced vLLM/SGLang row (KV Cache, Attention, Swap, Env)
       panelHtml += `<div class="hwfit-serve-row hwfit-backend-vllm hwfit-backend-sglang">`;
       panelHtml += `<label class="hwfit-backend-vllm" style="grid-column:1 / -1;">${_l('Served Name','vLLM --served-model-name. Keeps the OpenAI model id stable when serving from a local snapshot path.')}<input type="text" class="hwfit-sf" data-field="served_model_name" value="${esc(svm('served_model_name', _defaultServedModelName))}" placeholder="${esc(repo)}" style="width:100%;" /></label>`;
@@ -1789,7 +1924,7 @@ function _rerenderCachedModels() {
       // the vLLM-only toggles sit next to Prefix Caching with no gap.
       // Extra args sits below the vLLM checks (Reasoning Parser + Spec)
       // so it reads as "after the advanced toggles, any other flags".
-      panelHtml += `<div class="hwfit-serve-extra">`;
+      panelHtml += `<div class="hwfit-serve-extra hwfit-backend-vllm hwfit-backend-sglang hwfit-backend-llamacpp hwfit-backend-ollama hwfit-backend-mlx hwfit-backend-mlx_image hwfit-backend-diffusers">`;
       panelHtml += `<label>Extra args<input type="text" class="hwfit-sf" data-field="extra" value="${esc(sv('extra', ''))}" placeholder="--flag value" /></label>`;
       panelHtml += `</div>`;
       // ── End Advanced fold ──
@@ -2145,6 +2280,8 @@ function _rerenderCachedModels() {
       // glyph for the engine family. Shown beside each option in the
       // custom picker so the dropdown lists "[V] vLLM", "[⚡] SGLang", etc.
       const _BACKEND_GLYPHS = {
+        colibri_glm: '<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 2h6v2h2v2h6v2h-5v2h5v2h-4v2h-3v2h-2v5h-2v-7H9v-2H2V8h7V6H6V4h2V2z"/></svg>',
+        colibri_hy3: '<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 2h6v2h2v2h6v2h-5v2h5v2h-4v2h-3v2h-2v5h-2v-7H9v-2H2V8h7V6H6V4h2V2z"/></svg>',
         vllm:   '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 4l7 16 7-16"/><path d="M14 4l4 9 3-9"/></svg>',
         sglang: '<span aria-hidden="true" style="display:block;width:14px;height:14px;background:currentColor;-webkit-mask:url(/static/icons/sglang-mark.png) center/contain no-repeat;mask:url(/static/icons/sglang-mark.png) center/contain no-repeat;"></span>',
         mlx: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 18V6l4 7 4-7v12"/><path d="M16 6v12"/><path d="M20 6v12"/></svg>',
@@ -2231,6 +2368,7 @@ function _rerenderCachedModels() {
 
       function updateBackendVisibility() {
         const b = panel.querySelector('[data-field="backend"]')?.value || 'vllm';
+        const isColibri = b === 'colibri_glm' || b === 'colibri_hy3';
         panel.dataset.backendActive = b;
         panel.querySelectorAll('[class*="hwfit-backend-"]').forEach(el => {
           // Skip the entire backend-picker subtree — the picker's own
@@ -2244,6 +2382,21 @@ function _rerenderCachedModels() {
           el.style.display = show ? '' : 'none';
         });
         _setBackendBtnState(b);
+        const cmdBox = panel.querySelector('.hwfit-serve-cmd');
+        if (cmdBox) {
+          cmdBox.readOnly = isColibri;
+          cmdBox.title = isColibri
+            ? 'Colibri commands are generated from the structured settings and validated exactly before launch.'
+            : '';
+        }
+        const launchButton = panel.querySelector('.hwfit-serve-launch');
+        if (launchButton) {
+          const ready = !isColibri || !!_colibriProvider?.actions?.start_available;
+          launchButton.disabled = !ready;
+          launchButton.title = ready
+            ? ''
+            : 'Complete the Colibri source, CUDA build, model download, and port preflight in Dependencies before launch.';
+        }
       }
       updateBackendVisibility();
 
@@ -2262,7 +2415,7 @@ function _rerenderCachedModels() {
         const backend = panel.querySelector('[data-field="backend"]')?.value || 'vllm';
         const noteText = note.querySelector('.hwfit-serve-runtime-text');
         const _writeNote = (s) => { if (noteText) noteText.textContent = s; else note.textContent = s; };
-        if (!['vllm', 'sglang', 'llamacpp', 'mlx', 'mlx_image', 'diffusers'].includes(backend)) {
+        if (!['vllm', 'sglang', 'llamacpp', 'mlx', 'mlx_image', 'diffusers', 'colibri_glm', 'colibri_hy3'].includes(backend)) {
           note.style.display = 'none';
           _writeNote('');
           return;
@@ -2334,6 +2487,43 @@ function _rerenderCachedModels() {
         runtimeServerSelect.addEventListener('change', refreshRuntimeOnServerChange);
         panel._cleanupRuntimeReadiness = () => runtimeServerSelect.removeEventListener('change', refreshRuntimeOnServerChange);
       }
+
+      function _applyColibriProfile(profileId) {
+        const profile = _colibriProfiles[String(profileId || '')];
+        if (!profile) return;
+        const env = profile.env || {};
+        const setValue = (field, value) => {
+          const el = panel.querySelector(`[data-field="${field}"]`);
+          if (el) el.value = String(value ?? '');
+        };
+        const setChecked = (field, value) => {
+          const el = panel.querySelector(`[data-field="${field}"]`);
+          if (el) el.checked = !!value;
+        };
+        setValue('colibri_ram', profile.ram ?? 0);
+        setValue('colibri_vram', profile.vram ?? 0);
+        setValue('colibri_ctx', profile.ctx ?? 4096);
+        setValue('colibri_policy', profile.policy || 'balanced');
+        setValue('gpus', profile.gpu ?? '0');
+        setValue('colibri_io_pipeline', env.PIPE ?? '0');
+        setValue('colibri_pipe_workers', env.PIPE_WORKERS ?? '8');
+        setValue('colibri_cuda_pipeline', env.COLI_CUDA_PIPE ?? '0');
+        setChecked('colibri_auto_tier', !!profile.auto_tier);
+        setChecked('colibri_direct', env.DIRECT === '1');
+        setChecked('colibri_pilot_real', env.PILOT_REAL === '1');
+        setChecked('colibri_cache_route', false);
+        setChecked('colibri_cuda_mtp', false);
+        setChecked('colibri_tool_salvage', false);
+        setChecked('colibri_verbose', false);
+        const activeGpus = String(profile.gpu ?? '0').split(',').map(value => value.trim()).filter(Boolean);
+        panel.querySelectorAll('.cookbook-gpu-btn').forEach(button => {
+          button.classList.toggle('active', activeGpus.includes(button.dataset.gpu));
+        });
+        updateCmd();
+      }
+      panel.querySelector('[data-field="colibri_profile"]')?.addEventListener('change', event => {
+        _applyColibriProfile(event.currentTarget.value);
+      });
 
       // Wire save slots
       function _loadSlotIntoPanel(slotIdx) {
@@ -3116,6 +3306,10 @@ function _rerenderCachedModels() {
           if (e.target.dataset.field === 'backend') {
             const extraEl = panel.querySelector('[data-field="extra"]');
             if (extraEl) extraEl.value = '';
+            const selectedBackend = String(e.target.value || '');
+            if (selectedBackend === 'colibri_glm' || selectedBackend === 'colibri_hy3') {
+              _cmdManuallyEdited = false;
+            }
             updateBackendVisibility();
             updateRuntimeReadinessNote();
           }
@@ -3232,14 +3426,19 @@ function _rerenderCachedModels() {
       let _cmdManuallyEdited = false;
       const _cmdTextarea = panel.querySelector('.hwfit-serve-cmd');
       const _savedManualCmd = String(svm('_manual_cmd', '') || '').trim();
-      if (_cmdTextarea && _savedManualCmd) {
+      const _initialBackend = panel.querySelector('[data-field="backend"]')?.value || '';
+      const _initialIsColibri = _initialBackend === 'colibri_glm' || _initialBackend === 'colibri_hy3';
+      if (_cmdTextarea && _savedManualCmd && !_initialIsColibri) {
         panel._cmd = _savedManualCmd;
         _cmdTextarea.value = _formatServeCmdPreview(_savedManualCmd);
         _cmdTextarea.style.height = 'auto';
         _cmdTextarea.style.height = _cmdTextarea.scrollHeight + 'px';
         _cmdManuallyEdited = true;
       }
-      if (_cmdTextarea) _cmdTextarea.addEventListener('input', () => { _cmdManuallyEdited = true; });
+      if (_cmdTextarea) _cmdTextarea.addEventListener('input', () => {
+        const backend = panel.querySelector('[data-field="backend"]')?.value || '';
+        if (backend !== 'colibri_glm' && backend !== 'colibri_hy3') _cmdManuallyEdited = true;
+      });
 
       // Cancel button — collapses the serve config panel (same effect as
       // tapping the row to toggle it shut). Mobile users wanted an explicit
@@ -3331,6 +3530,38 @@ function _rerenderCachedModels() {
           else serveState[el.dataset.field] = el.value;
         });
         serveState.backend = serveState.backend || (_detectBackend(m).backend) || 'vllm';
+        const _isColibriLaunch = serveState.backend === 'colibri_glm' || serveState.backend === 'colibri_hy3';
+        if (_isColibriLaunch) {
+          serveState._colibri_settings = {
+            profile: serveState.colibri_profile,
+            ram: serveState.colibri_ram,
+            vram: serveState.colibri_vram,
+            ctx: serveState.colibri_ctx,
+            gpu: serveState.gpus || '0',
+            port: serveState.port,
+            policy: serveState.colibri_policy,
+            auto_tier: !!serveState.colibri_auto_tier,
+            direct: !!serveState.colibri_direct,
+            io_pipeline: serveState.colibri_io_pipeline,
+            pipe_workers: serveState.colibri_pipe_workers,
+            pilot_real: !!serveState.colibri_pilot_real,
+            cuda_pipeline: serveState.colibri_cuda_pipeline,
+            cache_route: !!serveState.colibri_cache_route,
+            route_j: serveState.colibri_route_j,
+            route_m: serveState.colibri_route_m,
+            cuda_mtp: !!serveState.colibri_cuda_mtp,
+            tool_salvage: !!serveState.colibri_tool_salvage,
+            verbose: !!serveState.colibri_verbose,
+            repin: serveState.colibri_repin,
+            cap: serveState.colibri_cap,
+            topp: serveState.colibri_topp,
+            topk: serveState.colibri_topk,
+            temp: serveState.colibri_temp,
+            max_queue: serveState.colibri_max_queue,
+            queue_timeout: serveState.colibri_queue_timeout,
+            kv_slots: serveState.colibri_kv_slots,
+          };
+        }
         const launchTarget = _selectedServeTarget(panel);
         if (serveState.backend === 'llamacpp' && serveState.vision && !/(?:^|\s)(?:--mmproj|--clip_model_path)\b/.test(launchCmd)) {
           _restoreLaunchBtn();
@@ -3557,7 +3788,7 @@ function _rerenderCachedModels() {
         // on a host where no GPU is visible (driver missing, $CUDA_VISIBLE_DEVICES
         // unset, container without --gpus). Catch it BEFORE the user spends
         // minutes watching the task fail.
-        const _needsGpu = ['vllm', 'sglang'].includes(serveState.backend)
+        const _needsGpu = ['vllm', 'sglang', 'colibri_glm', 'colibri_hy3'].includes(serveState.backend)
           || (serveState.backend === 'diffusers');
         if (_needsGpu) {
           try {
@@ -3682,7 +3913,7 @@ function _rerenderCachedModels() {
         // confirm they really meant CPU.
         try {
           const _isLocalInContainer = !serveHost; // empty serveHost == cookbook container's local
-          const _wantsGpu = ['llamacpp', 'vllm', 'sglang', 'diffusers'].includes(serveState.backend);
+          const _wantsGpu = ['llamacpp', 'vllm', 'sglang', 'diffusers', 'colibri_glm', 'colibri_hy3'].includes(serveState.backend);
           const _detectedBackend = String(_hwfitCache?.system?.backend || '').toLowerCase();
           const _gpuBackends = ['cuda', 'rocm', 'vulkan', 'metal', 'mps', 'apple'];
           if (_isLocalInContainer && _wantsGpu && _detectedBackend && !_gpuBackends.includes(_detectedBackend)) {

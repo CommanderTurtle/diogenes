@@ -62,6 +62,11 @@ from routes.cookbook_helpers import (
     _normalize_llama_cpp_python_cache_types,
     ModelDownloadRequest, ServeRequest,
 )
+from src.ulysses_colibri import collect_colibri_providers
+from src.ulysses_colibri_command import (
+    ColibriCommandError,
+    validate_colibri_serve_command,
+)
 
 _HF_TOKEN_STATUS_SNIPPET = (
     'if [ -n "$HF_TOKEN" ]; then '
@@ -1774,7 +1779,12 @@ def setup_cookbook_routes() -> APIRouter:
 
         base_url = f"http://{host}:{port}/v1"
 
-        short_name = req.repo_id.split("/")[-1] if "/" in req.repo_id else req.repo_id
+        pinned_model_id = req.served_model_id or req.repo_id
+        short_name = (
+            pinned_model_id.split("/")[-1]
+            if "/" in pinned_model_id
+            else pinned_model_id
+        )
         display_name = short_name or "Local model"
         is_mlx_deepseek_v4 = (
             "mlx_lm.server" in (req.cmd or "")
@@ -1790,13 +1800,22 @@ def setup_cookbook_routes() -> APIRouter:
         # If the serve command opts models into OpenAI tool-calling, record it so
         # agent_loop trusts emitted tool_calls instead of the name heuristic.
         is_ollama_endpoint = "ollama" in (req.cmd or "").lower()
-        supports_tools = True if "--enable-auto-tool-choice" in req.cmd else None
+        supports_tools = (
+            True
+            if req.runtime_id == "colibri.glm"
+            or "--enable-auto-tool-choice" in req.cmd
+            else None
+        )
         # Pin the model the user launched for every Cookbook-created LLM
         # endpoint, not just Ollama. Some OpenAI-compatible servers report a
         # deployment alias from /v1/models, and a stale server can answer on the
         # same port while the new launch failed. Keeping the requested model id
         # pinned makes the picker reflect the actual launch intent.
-        pinned_models = [mlx_shim_model_id] if mlx_shim_model_id else ([req.repo_id] if req.repo_id else [])
+        pinned_models = (
+            [mlx_shim_model_id]
+            if mlx_shim_model_id
+            else ([pinned_model_id] if pinned_model_id else [])
+        )
 
         db = SessionLocal()
         try:
@@ -1941,7 +1960,52 @@ def setup_cookbook_routes() -> APIRouter:
         # Cookbook emits two fixed Docker exec forms for its Ollama sidecars.
         # Keep Docker out of the general allowlist: only these parsed shapes may
         # proceed to the target-aware Docker availability/opt-in preflight.
-        if _is_generated_ollama_docker_exec_cmd(req.cmd):
+        if req.runtime_id:
+            if req.remote_host:
+                raise HTTPException(
+                    400,
+                    "Native Colibri runtimes are host-scoped and cannot be launched through a remote Cookbook target.",
+                )
+            if not req.runtime_settings:
+                raise HTTPException(400, "Colibri runtime settings are required")
+            try:
+                req.cmd = validate_colibri_serve_command(
+                    req.runtime_id,
+                    req.runtime_settings,
+                    req.cmd,
+                )
+            except ColibriCommandError as exc:
+                raise HTTPException(400, str(exc)) from exc
+            report = collect_colibri_providers()
+            provider_report = next(
+                (
+                    item
+                    for item in report.get("providers", [])
+                    if item.get("id") == req.runtime_id
+                ),
+                None,
+            )
+            if not provider_report:
+                raise HTTPException(400, "Unknown Colibri runtime")
+            if not provider_report.get("actions", {}).get("start_available"):
+                reasons = [
+                    str(item.get("summary"))
+                    for item in provider_report.get("findings", [])
+                    if item.get("summary")
+                ]
+                raise HTTPException(
+                    409,
+                    "Colibri runtime is not launchable: "
+                    + (
+                        "; ".join(reasons)
+                        if reasons
+                        else "build, model, or port preflight failed"
+                    ),
+                )
+            req.served_model_id = str(
+                provider_report.get("endpoint", {}).get("model_id") or ""
+            )
+        elif _is_generated_ollama_docker_exec_cmd(req.cmd):
             req.cmd = req.cmd.strip()
         else:
             # Normalize away backslash-newline continuations (multi-line pasted

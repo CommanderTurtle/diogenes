@@ -14,6 +14,7 @@
       "port_env": "ULYSSES_COLIBRI_GLM_PORT",
       "default_port": 8642,
       "model_id": "glm-5.2-colibri",
+      "weight_repo": "mateogrgic/GLM-5.2-colibri-int4-with-int8-mtp",
       "minimum_commit": "5f167e5964f40a3a62d4cadb911543ce0f15b49b",
       "minimum_commit_reason": "Merged PR #274: single-GPU decode pipeline and expert-cache reserve fix",
       "cli_path": "c/coli",
@@ -39,6 +40,42 @@
       ],
       "supports_tools": true,
       "model_type": "llm",
+      "default_profile": "rtx5090-high-ram",
+      "profiles": {
+        "rtx5090-high-ram": {
+          "label": "RTX 5090 · high RAM",
+          "description": "Correctness-first single-GPU profile derived from issue #273 and current dev settings. Experimental expert caps, cache routing, and CUDA MTP remain off.",
+          "ram": "56",
+          "auto_tier": true,
+          "ctx": "4096",
+          "gpu": "0",
+          "vram": "0",
+          "policy": "balanced",
+          "env": {
+            "COLI_CUDA": "1",
+            "CUDA_DENSE": "1",
+            "COLI_CUDA_ATTN": "1",
+            "COLI_CUDA_PIPE": "2",
+            "DIRECT": "1",
+            "PIPE": "1",
+            "PIPE_WORKERS": "8",
+            "PILOT_REAL": "1",
+            "EXPERT_BUDGET": "0",
+            "CACHE_ROUTE": "0"
+          }
+        },
+        "upstream-auto": {
+          "label": "Upstream auto-tier",
+          "description": "Minimal current-dev auto-tier profile with no Ulysses tuning overrides.",
+          "ram": "0",
+          "auto_tier": true,
+          "ctx": "4096",
+          "gpu": "0",
+          "vram": "0",
+          "policy": "balanced",
+          "env": {}
+        }
+      },
       "documentation": {
         "repository": "https://github.com/JustVugg/colibri",
         "api": "https://github.com/JustVugg/colibri/blob/dev/docs/api.md",
@@ -59,8 +96,9 @@
       "port_env": "ULYSSES_COLIBRI_HY3_PORT",
       "default_port": 8643,
       "model_id": "hy3-colibri",
-      "minimum_commit": null,
-      "minimum_commit_reason": "Use the observed official source revision and record it in the build manifest",
+      "weight_repo": "UnderstandLing/Hy3-colibri-int4",
+      "minimum_commit": "08f8439ebfe1994b607aed6adf857c80e8894c4c",
+      "minimum_commit_reason": "Official main revision inspected for the native Hy3 provider contract",
       "cli_path": "c/coli",
       "engine_path": "c/hy3",
       "setup_path": "c/setup.sh",
@@ -99,6 +137,39 @@
       ],
       "supports_tools": null,
       "model_type": "llm",
+      "default_profile": "rtx5090-high-ram",
+      "profiles": {
+        "rtx5090-high-ram": {
+          "label": "RTX 5090 · high RAM",
+          "description": "5090 profile using the upstream auto-tier to fill measured free VRAM while reserving dense/KV headroom, with the documented direct-I/O and io_uring pipeline options.",
+          "ram": "56",
+          "auto_tier": true,
+          "ctx": "4096",
+          "gpu": "0",
+          "vram": "0",
+          "policy": "balanced",
+          "env": {
+            "COLI_CUDA": "1",
+            "CUDA_ATTN": "1",
+            "DIRECT": "1",
+            "PIPE": "2",
+            "PIPE_WORKERS": "8",
+            "EXPERT_BUDGET": "0",
+            "CACHE_ROUTE": "0"
+          }
+        },
+        "upstream-comfortable": {
+          "label": "Upstream comfortable",
+          "description": "The official README's 56 GB RAM / 16 GB VRAM planning profile without optional I/O overrides.",
+          "ram": "56",
+          "auto_tier": true,
+          "ctx": "4096",
+          "gpu": "0",
+          "vram": "16",
+          "policy": "balanced",
+          "env": {}
+        }
+      },
       "documentation": {
         "repository": "https://github.com/ErikTromp/colibri-hy3",
         "weights": "https://huggingface.co/UnderstandLing/Hy3-colibri-int4"

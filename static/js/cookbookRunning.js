@@ -467,6 +467,9 @@ export function _parseServePhase(snapshot) {
   if (/Ollama API ready on port\s+\d+/i.test(flat)) {
     return { phase: 'ready', status: 'ready' };
   }
+  if (/OpenAI-compatible API listening on http:\/\/[^\s]+\/v1/i.test(flat)) {
+    return { phase: 'ready', status: 'ready' };
+  }
   const llamaBuildMatches = [...flat.matchAll(/\[\s*(\d{1,3})%\]\s*(?:Building|Linking)/gi)];
   if (llamaBuildMatches.length) {
     const pct = Math.min(100, parseInt(llamaBuildMatches[llamaBuildMatches.length - 1][1], 10));
@@ -747,6 +750,7 @@ function _serveOutputLooksReady(task) {
   return !!task?._serveReady
     || /Application startup complete/i.test(out)
     || /Ollama API ready on port\s+\d+/i.test(out)
+    || /OpenAI-compatible API listening on http:\/\/[^\s]+\/v1/i.test(out)
     || /(?:GET|POST)\s+\/[^\s]*\s+HTTP\/[\d.]+"\s*2\d\d/i.test(out);
 }
 
@@ -1817,7 +1821,7 @@ function _serveCmdNeedsGpuPreflight(cmd, repo) {
   const c = String(cmd || '').toLowerCase();
   const r = String(repo || '').toLowerCase();
   if (!c || /gpu-cleanup|sglang-kernel|mlx-lm|pip\s+install|python\d*\s+-m\s+pip/.test(`${r} ${c}`)) return false;
-  return /\b(vllm\s+serve|sglang(?:\.launch_server|\s+serve)|mlx_lm\.server|mlx_image_server\.py|diffusion_server\.py|llama-server|llama_cpp\.server|text-generation-launcher|aphrodite|ollama\s+(?:serve|run))\b/.test(c);
+  return /\b(vllm\s+serve|sglang(?:\.launch_server|\s+serve)|mlx_lm\.server|mlx_image_server\.py|diffusion_server\.py|llama-server|llama_cpp\.server|text-generation-launcher|aphrodite|ollama\s+(?:serve|run)|(?:\/|\b)coli\s+serve)\b/.test(c);
 }
 
 function _selectedGpuIndexes(gpus) {
@@ -1993,6 +1997,9 @@ export async function _launchServeTask(shortName, repo, cmd, fields, hostOverrid
     hf_token: _envState.hfToken || undefined,
     gpus: _usedGpus || undefined,
     platform: _hplatform || undefined,
+    runtime_id: fields?.colibri_provider_id || undefined,
+    runtime_settings: fields?._colibri_settings || undefined,
+    served_model_id: fields?.colibri_model_id || undefined,
   };
 
   try {
