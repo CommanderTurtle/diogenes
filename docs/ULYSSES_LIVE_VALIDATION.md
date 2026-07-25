@@ -48,10 +48,14 @@ stopped through a confirmation-gated job.
 At the end of validation, ports 9377, 7999, and 8090 were closed and no
 Ulysses-owned tmux sessions remained.
 
-## Follow-up observation
+## Bifrost telemetry interpretation
 
-Bifrost logged `plugin status: telemetry - active`, while no telemetry setting
-was present in its local `.env`, `config.json`, or `startup.sh`. Determine from
-the installed Bifrost source and official configuration whether this is local
-instrumentation or outbound reporting before changing the production
-configuration.
+Bifrost logged `plugin status: telemetry - active`. Current official Bifrost
+documentation defines that always-active built-in as the local Prometheus
+metrics collector exposed at `/metrics`; outbound push, OpenTelemetry, Datadog,
+and Maxim exporters are separate opt-in plugins.
+
+The installed `config.json` has no plugin array or observability settings, and
+the local `.env` and `startup.sh` contain no push gateway, collector, or
+exporter reference. No configuration change is needed for the zero-outbound-
+telemetry requirement.

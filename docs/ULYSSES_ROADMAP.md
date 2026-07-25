@@ -18,6 +18,39 @@ Original Odysseus remote: `upstream` with pushing disabled
 
 Future Ulysses repository remote: reserved as `origin`
 
+## Implementation checkpoint — 2026-07-25
+
+The candidate is now a functional control-plane implementation, not only a
+design skeleton:
+
+- the native Services UI manages registered Docker Compose, JavaScript/Bun,
+  native tmux, and Hermes MCP runtimes through allowlisted argv-only plans;
+- each mutation is durable, confirmation-gated, locked per runtime, logged,
+  and constrained to the registered source root;
+- Firecrawl and SearXNG completed a live stop/start/health round-trip;
+- Camofox, Bifrost, and signal-cli completed live managed tmux start/log/stop
+  round-trips and were returned to their requested stopped state;
+- Sandwich 0.2.0 is installed at `~/Hermes/sandwich`, passes its 36-test
+  compatibility suite, and successfully ran Camofox's unchanged Node-oriented
+  package script without installing Node;
+- Chroma is present in Docker management, with its current production
+  persistence mismatch detected and migration apply intentionally gated;
+- Colibri GLM and Colibri Hy3 are separate native providers in Cookbook Serve,
+  with model detection, engine selection, advanced 5090 profiles, canonical
+  command rendering/validation, source sync/build plans, tmux launch
+  integration, endpoint observation, and distinct 8642/8643 ports;
+- Hermes remains a separately installed agent. Its host runtime, updater
+  integration, and MCP registry are managed without merging it with the
+  Odysseus agent MCP registry.
+
+Remaining transition gates are deliberately hardware/stateful: build both
+Colibri source trees on the 5090, validate the completed model downloads, run
+one provider at a time while vLLM is down, benchmark and tune the profiles,
+repair and snapshot Chroma in a maintenance window, build a Python 3.13
+candidate matching the golden runtime profile, and perform the final visual
+and rollback drills. Production remains independent until Nick performs those
+human-gated transitions.
+
 ## Product definition
 
 Ulysses keeps Odysseus's browser-based AI workspace and adds a secure host
@@ -89,10 +122,10 @@ can prove ownership and rollback.
 - [x] Rename its remote to `upstream`.
 - [x] Disable pushes to `upstream`.
 - [x] Create `ulysses/dev`.
-- [ ] Add Ulysses provenance, architecture, and threat-model documentation.
-- [ ] Run the upstream test baseline in an isolated environment.
-- [ ] Record upstream failures separately from Ulysses changes.
-- [ ] Establish small conventional commits by concern.
+- [x] Add Ulysses provenance, architecture, and threat-model documentation.
+- [x] Run the upstream test baseline in an isolated environment.
+- [x] Record upstream failures separately from Ulysses changes.
+- [x] Establish small conventional commits by concern.
 
 Exit gate: the new checkout is reproducible, clean, tested, and contains no
 production state.
@@ -428,37 +461,41 @@ Admin UI:
   the sanitized Ulysses APIs.
 - [x] Label `host`, `odysseus_agent`, and `hermes_agent` ownership explicitly;
   the Odysseus MCP integration form and Hermes MCP registry remain separate.
-- infrastructure overview and dependency graph;
+- [x] Add infrastructure overview and dependency relationships.
 - [x] A Services screen listing status, adapter, source/working root, ports,
   scope, ownership, dependencies, and capabilities.
-- [ ] Add adapter-specific health, configuration readiness, adoption detail,
+- [x] Add adapter-specific health, configuration readiness, adoption detail,
   and resource impact to each service view;
-- Up, Down, Restart, Update, and terminal/log actions backed by typed adapter
+- [x] Up, Down, Restart, Update, and terminal/log actions backed by typed adapter
   methods rather than arbitrary shell text;
-- existing-host discovery roots remain filesystem sources of truth, and
+- [x] Existing-host discovery roots remain filesystem sources of truth, and
   ambiguous matches stop with a diagnostic instead of being guessed;
-- persisted definitions and live observations remain separate so stale
+- [x] Persisted definitions and live observations remain separate so stale
   database state cannot pretend that a dead process is running;
-- a bounded activity center records queued/running/completed/failed actions,
-  progress, cancellation, output, actor, and target runtime;
-- runtime cards with type, version, uptime, ownership, adoption state, ports,
+- [x] A bounded activity center records planned/running/completed/failed
+  actions, progress, bounded output, and target runtime; cancellation remains
+  planned.
+- [x] Runtime cards with type, version, uptime, ownership, adoption state, ports,
   resources, and last health;
-- Docker, systemd, process, Git, GPU, model endpoint, and Chroma views;
-- bounded log streaming;
-- safe terminal observation where supported, not an arbitrary browser shell;
-- live console views backed by registered tmux panes or service log streams,
+- [x] Docker, process, Git, GPU, model endpoint, and Chroma views; systemd
+  remains observation-only.
+- [x] Bounded log retrieval.
+- [x] Safe terminal observation where supported, not an arbitrary browser shell.
+- [x] Live console views backed by registered tmux panes or service log streams,
   with explicit working directory and environment rather than inherited shell
   activation;
-- update availability and dirty-tree previews;
-- guarded plan/apply/rollback dialogs;
-- durable jobs and audit history;
-- Colibri build/download/profile/benchmark workflow;
-- Hermes profiles/MCPs/sessions status;
-- Chroma collections/storage/backup/ingestion status.
-- WSL/CUDA/Python diagnostics with evidence-backed repair plans.
-- Sandwich Bun and uv environment inventory, candidate builds, validation, and
-  rollback state.
-- a parallel JavaScript runtime/package view beside the existing Python-focused
+- [x] Update availability and dirty-tree previews.
+- [x] Guarded plan/apply dialogs; rollback execution remains a transition gate.
+- [x] Durable jobs and audit history.
+- [x] Colibri source/build/profile/launch workflow; hardware benchmarks remain
+  a transition gate.
+- [x] Hermes install/update/MCP status; profile/session expansion remains.
+- [x] Chroma collections/storage/persistence/snapshot status; migration and
+  restore remain gated.
+- [x] WSL/CUDA/Python diagnostics with evidence-backed repair previews.
+- [x] Sandwich Bun inventory and maintenance; uv candidate builds and rollback
+  remain transition gates.
+- [x] A parallel JavaScript runtime/package view beside the existing Python-focused
   Cookbook Dependencies panel.
 
 The production-safety default is read-only. Candidate/model launch actions show
@@ -520,8 +557,10 @@ corresponding rollback has been tested.
    Chroma. Git and NVIDIA detail views remain scheduled for the Services UI.
 5. [x] Render the first read-only topology/status API.
 6. [x] Integrate Sandwich as the first optional runtime.
-7. Adopt and validate the existing microservices, persistence, configuration,
+7. [x] Adopt and validate the existing microservices, persistence, configuration,
    Camofox browser capability, and lifecycle views. Chroma production migration
    remains human-gated; its candidate definition and read-only readiness report
    are complete.
-8. Implement and verify Colibri as the final provider integration.
+8. [x] Implement Colibri GLM and Colibri Hy3 as separate final provider
+   integrations. Source build, model load, generation, and 5090 benchmarks
+   remain human-gated because vLLM and production downloads are active.
