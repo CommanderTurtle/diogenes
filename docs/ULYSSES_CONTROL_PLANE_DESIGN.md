@@ -1,0 +1,154 @@
+# Ulysses control-plane design
+
+## Scope
+
+Ulysses adds one service-management surface to the existing Odysseus UI. It is
+Arcane-inspired in workflow, but manages more than Docker:
+
+- Docker Compose projects and containers;
+- native and tmux-hosted processes;
+- systemd user services;
+- Bun/Sandwich tools and MCP servers;
+- Python/uv environments;
+- model endpoints such as vLLM and, later, Colibri;
+- Chroma and other persistent services.
+
+It is intentionally not a scheduler, Kubernetes replacement, or arbitrary
+browser shell.
+
+## The service contract
+
+Every service definition records:
+
+- stable ID, label, adapter type, and capabilities;
+- source, install, working, data, and backup roots;
+- structured argv and explicit executable/interpreter;
+- environment-file and protected-secret references;
+- declared ports and dependencies;
+- health checks;
+- logs and optional registered tmux pane;
+- update and rollback strategy;
+- ownership state: external, observed, or managed.
+
+Every observation is separate from that definition:
+
+- discovered/running/stopped/degraded/unknown;
+- PID/container/unit/session identity;
+- resolved ports;
+- uptime and resource use;
+- current source/package/image version;
+- last health result and timestamp.
+
+Definitions are durable intent. Observations are disposable facts. A database
+record never makes a dead process “running.”
+
+## Adoption
+
+1. Discover under constrained roots such as
+   `${ULYSSES_MICROSERVICES_ROOT:-~/Hermes}`.
+2. Produce a read-only inventory and ambiguity report.
+3. Register the service as externally managed.
+4. Compare its live launch, environment keys, ports, and data paths with a
+   proposed Ulysses definition.
+5. Add read-only status, health, logs, and port views.
+6. Test the adapter against a fixture or human-started candidate.
+7. Preview configuration migration and rollback.
+8. Adopt only during an explicit maintenance window.
+
+Up/Down/Restart/Update controls remain hidden or disabled until adoption.
+
+## Execution isolation
+
+Ulysses never relies on shell activation for managed commands. Each execution
+starts with a sanitized environment, then applies its declared configuration:
+
+- Ulysses Python uses Ulysses's `.venv`.
+- Hermes remains a native installation with its own upstream-managed venv/home.
+- Odysseus production retains its known-good `.venv`.
+- Bun/npx-compatible tools use Sandwich.
+- Compose projects retain their own project roots and environment files.
+- tmux panes receive the service execution contract explicitly and do not
+  inherit whichever venv launched Ulysses.
+
+## Configuration
+
+The UI can centralize configuration without immediately moving values:
+
+- existing `.env` files remain authoritative during observation;
+- imports show a redacted source-to-target diff;
+- secrets are encrypted/referenced and never returned to normal API/UI reads;
+- one typed configuration set can materialize to Compose, systemd, native,
+  tmux, or MCP launch adapters;
+- all writes are previewable, backed up, atomic, and reversible.
+
+## UI
+
+Add a Services window/tool using the current Odysseus visual language:
+
+- Overview: status totals, ports, GPU/RAM, persistence warnings, action items.
+- Services: cards/table for every registered runtime.
+- Service detail: Overview, Config, Ports, Logs, Terminal, Updates, Recovery.
+- JavaScript: Sandwich runtime, globals, project locks, postinstall trust,
+  `bunx`/`npx` tools, consumers, update preview.
+- Activity: durable queued/running/completed/failed actions with cancellation.
+- Recovery: backups, Chroma persistence, Python/CUDA doctor, rollback.
+
+Cookbook Dependencies remains the Python/system package catalog. Its
+JavaScript-related links deep-link into the Sandwich view.
+
+The existing Cookbook Active view is the implementation precedent: it already
+tracks the vLLM task, readiness, PID, and tmux output. Ulysses generalizes that
+component rather than embedding a second terminal manager.
+
+The current six-pane workstation layout maps to:
+
+| Current pane | Ulysses representation |
+| --- | --- |
+| signal-cli daemon on 8090 | Messaging service card + health/log/console |
+| Camofox periodic stats on 9377 | Browser service metrics + health/log |
+| XFCE/WSLg desktop warnings | excluded host noise, available only in host diagnostics |
+| Odysseus Uvicorn on 7000 | Core API service card + request log |
+| vLLM OpenAI server on 8000 | Model endpoint card + metrics/log/console |
+| manual `~/Hermes` shell | replaced by inventory, config, and action views |
+
+The overview does not concatenate every terminal into one unreadable stream.
+It shows compact status/port/resource cards; selecting a service opens its own
+bounded logs and, where registered, its tmux console.
+
+## Browser and search capabilities
+
+- Camofox/Camofox MCP is the preferred general browser provider.
+- Ulysses does not auto-install Playwright or Playwright Chromium.
+- An existing Playwright installation can be reported and explicitly disabled.
+- Firecrawl's internal browser remains private to Firecrawl.
+- Firecrawl plus SearXNG provide the canonical agent search/scrape path.
+
+## Safety
+
+- all mutations require admin authorization;
+- runtime IDs select allowlisted adapter methods;
+- no user-supplied shell fragments;
+- one maintenance lock per runtime;
+- start and update are separate;
+- expected ports and resources are shown before apply;
+- starting a candidate model is always human-triggered;
+- action history is append-only with bounded retained output;
+- every migration and update has a rollback target.
+
+## Initial host mapping
+
+| Runtime | Adapter | Initial state |
+| --- | --- | --- |
+| Production Odysseus API | native/tmux observation | external |
+| vLLM 0.23.0 / Agents A1 | native model endpoint | external |
+| Chroma | Docker Compose/container | external; persistence repair required |
+| Hermes gateway | systemd user/native | external |
+| Camofox browser | native Bun service | external |
+| Camofox MCP | Sandwich stdio MCP | external |
+| Context-mode MCP | Sandwich stdio MCP | external |
+| Firecrawl | Docker Compose | external; dirty source preserved |
+| SearXNG | Docker Compose | external |
+| Bifrost | Sandwich/native | external |
+| signal-cli | native service | external |
+| Sandwich | native user runtime | observed, then managed |
+| Colibri | native CUDA model endpoint | not installed; final integration |
