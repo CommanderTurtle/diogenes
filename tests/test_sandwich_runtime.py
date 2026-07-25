@@ -1,4 +1,5 @@
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -8,6 +9,7 @@ from src.sandwich_runtime import (
     SandwichLayout,
     SandwichManifestError,
     load_sandwich_manifest,
+    observe_sandwich_installation,
     sandwich_operation_spec,
     sandwich_runtime_definition,
 )
@@ -105,3 +107,37 @@ def test_relative_layout_paths_are_rejected():
             state_root=Path("/home/example/.local/state/sandwich"),
             shell_rc=Path("/home/example/.bashrc"),
         )
+
+
+def test_sandwich_install_is_detected_without_a_clone(tmp_path):
+    component = tmp_path / "sandwich-source"
+    component_bin = component / "bin"
+    user_bin = tmp_path / "user-bin"
+    component_bin.mkdir(parents=True)
+    user_bin.mkdir()
+    for command in ("sandwich", "node", "npm", "npx", "pnpm", "yarn"):
+        executable = component_bin / command
+        executable.write_text("#!/bin/sh\n", encoding="utf-8")
+        executable.chmod(0o755)
+        (user_bin / command).symlink_to(executable)
+    bun = user_bin / "bun"
+    bun.write_text("#!/bin/sh\n", encoding="utf-8")
+    bun.chmod(0o755)
+
+    observed = observe_sandwich_installation(search_path=str(user_bin))
+
+    assert observed.installed is True
+    assert observed.source_root == component
+    assert observed.missing_commands == ()
+
+
+def test_partial_wrapper_set_is_not_reported_installed(tmp_path):
+    for command in ("bun", "sandwich", "node", "npm", "npx"):
+        executable = tmp_path / command
+        executable.write_text("#!/bin/sh\n", encoding="utf-8")
+        executable.chmod(0o755)
+
+    observed = observe_sandwich_installation(search_path=str(tmp_path))
+
+    assert observed.installed is False
+    assert observed.missing_commands == ("pnpm", "yarn")

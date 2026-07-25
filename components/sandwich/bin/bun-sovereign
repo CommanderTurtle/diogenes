@@ -1,4 +1,0 @@
-#!/usr/bin/env bash
-
-# Backward-compatible entrypoint retained for existing installations.
-exec "$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")/sandwich" "$@"

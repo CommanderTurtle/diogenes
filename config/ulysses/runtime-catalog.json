@@ -1,0 +1,116 @@
+{
+  "schema_version": "ulysses.runtime-catalog.v1",
+  "runtimes": [
+    {
+      "runtime_id": "odysseus.api",
+      "label": "Production Odysseus API",
+      "adapter": "native",
+      "ownership": "external",
+      "source_root": "${HOME}/Odysseus/odysseus",
+      "ports": [{"port": 7000, "host": "0.0.0.0"}],
+      "capabilities": ["workspace", "chat", "control-plane-source"]
+    },
+    {
+      "runtime_id": "vllm.server",
+      "label": "vLLM model server",
+      "adapter": "tmux",
+      "ownership": "external",
+      "source_root": "${HOME}/Odysseus/odysseus",
+      "ports": [{"port": 8000, "host": "0.0.0.0"}],
+      "capabilities": ["openai-api", "model-serving", "cuda"]
+    },
+    {
+      "runtime_id": "chroma.vector",
+      "label": "Chroma vector database",
+      "adapter": "docker_compose",
+      "ownership": "external",
+      "source_root": "${HOME}/Odysseus/odysseus",
+      "ports": [{"port": 8100, "host": "0.0.0.0"}],
+      "capabilities": ["vector-store", "rag", "persistent-data"]
+    },
+    {
+      "runtime_id": "hermes.gateway",
+      "label": "Hermes gateway",
+      "adapter": "systemd_user",
+      "ownership": "external",
+      "source_root": "${HOME}/.hermes/hermes-agent",
+      "dependencies": ["sandwich.runtime"],
+      "capabilities": ["agent-runtime", "gateway", "mcp-host"]
+    },
+    {
+      "runtime_id": "firecrawl.api",
+      "label": "Firecrawl",
+      "adapter": "docker_compose",
+      "ownership": "external",
+      "source_root": "${ULYSSES_MICROSERVICES_ROOT}/firecrawl/firecrawl",
+      "ports": [{"port": 3002, "host": "0.0.0.0"}],
+      "dependencies": ["searxng.search"],
+      "capabilities": ["web-scrape", "web-search"]
+    },
+    {
+      "runtime_id": "searxng.search",
+      "label": "SearXNG",
+      "adapter": "docker_compose",
+      "ownership": "external",
+      "source_root": "${ULYSSES_MICROSERVICES_ROOT}/SEARXNG/searxng",
+      "ports": [{"port": 7070, "host": "0.0.0.0"}],
+      "capabilities": ["web-search"]
+    },
+    {
+      "runtime_id": "bifrost.gateway",
+      "label": "Bifrost inference gateway",
+      "adapter": "native",
+      "ownership": "external",
+      "source_root": "${ULYSSES_MICROSERVICES_ROOT}/bifrost",
+      "ports": [{"port": 7999, "host": "0.0.0.0"}],
+      "dependencies": ["sandwich.runtime"],
+      "capabilities": ["openai-api", "inference-routing"]
+    },
+    {
+      "runtime_id": "camofox.browser",
+      "label": "Camofox browser",
+      "adapter": "native",
+      "ownership": "external",
+      "source_root": "${ULYSSES_MICROSERVICES_ROOT}/camofox/camofox-browser",
+      "ports": [{"port": 9377, "host": "127.0.0.1"}],
+      "dependencies": ["sandwich.runtime"],
+      "capabilities": ["browser", "web-automation"]
+    },
+    {
+      "runtime_id": "signal.cli",
+      "label": "signal-cli",
+      "adapter": "native",
+      "ownership": "external",
+      "source_root": "${ULYSSES_MICROSERVICES_ROOT}/signal-cli",
+      "ports": [{"port": 8090, "host": "127.0.0.1"}],
+      "capabilities": ["messaging", "signal"]
+    },
+    {
+      "runtime_id": "context.mode.mcp",
+      "label": "Context Mode MCP",
+      "adapter": "mcp_stdio",
+      "ownership": "external",
+      "source_root": "${ULYSSES_MICROSERVICES_ROOT}/context-mode",
+      "dependencies": ["hermes.gateway", "sandwich.runtime"],
+      "capabilities": ["mcp", "context-archive"]
+    },
+    {
+      "runtime_id": "camofox.mcp",
+      "label": "Camofox MCP",
+      "adapter": "mcp_stdio",
+      "ownership": "external",
+      "source_root": "${ULYSSES_MICROSERVICES_ROOT}/camofox-mcp",
+      "dependencies": ["camofox.browser", "hermes.gateway", "sandwich.runtime"],
+      "capabilities": ["mcp", "browser"]
+    },
+    {
+      "runtime_id": "firecrawl.cli",
+      "label": "Firecrawl CLI",
+      "adapter": "native",
+      "ownership": "external",
+      "source_root": "${ULYSSES_MICROSERVICES_ROOT}/firecrawl",
+      "dependencies": ["firecrawl.api", "sandwich.runtime"],
+      "capabilities": ["web-scrape", "cli"]
+    }
+  ]
+}

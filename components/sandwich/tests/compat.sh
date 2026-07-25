@@ -5,7 +5,7 @@ set -euo pipefail
 root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
 export SANDWICH_TEST_ROOT="$root"
 export PATH="$root/bin:$HOME/.bun/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-export SANDWICH_BUN="${SANDWICH_BUN:-${BUN_SOVEREIGN_BUN:-$HOME/.bun/bin/bun}}"
+export SANDWICH_BUN="${SANDWICH_BUN:-$HOME/.bun/bin/bun}"
 export DO_NOT_TRACK=1
 
 passed=0
@@ -38,7 +38,6 @@ matches() {
 node_version="$(node --version)"
 check "node --version is a Node-compatible v-string" matches "$node_version" '^v[0-9]+\.[0-9]+\.[0-9]+$'
 check "sandwich reports a semantic version" matches "$(sandwich --version)" '^[0-9]+\.[0-9]+\.[0-9]+$'
-check "legacy bun-sovereign alias resolves to Sandwich" equals "$(bun-sovereign --version)" "$(sandwich --version)"
 check "component manifest matches CLI version" \
     "$SANDWICH_BUN" -e '
         const root = process.env.SANDWICH_TEST_ROOT;

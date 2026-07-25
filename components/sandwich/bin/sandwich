@@ -17,7 +17,7 @@ doctor() {
     printf '  globalbin: %s\n' "$BUN_INSTALL_BIN"
     printf '  telemetry: DO_NOT_TRACK=%s\n' "${DO_NOT_TRACK:-unset}"
 
-    for name in sandwich bun-sovereign node npm npx pnpm yarn; do
+    for name in sandwich node npm npx pnpm yarn; do
         command_path="$(command -v "$name" 2>/dev/null || true)"
         printf '  %-14s %s\n' "$name:" "${command_path:-missing}"
         if [[ -z "$command_path" || "$(readlink -f -- "$command_path")" != "$SANDWICH_ROOT/bin/$name" ]]; then

@@ -5,8 +5,9 @@ Captured on 2026-07-25 without installing Node.
 ## Current runtime
 
 - Installed Bun: `1.3.14` (`0d9b296a`)
-- Sandwich compatibility suite: 37 passed
-- Ulysses Sandwich/runtime contract suite: 16 passed
+- Sandwich compatibility suite: 35 passed
+- Ulysses Sandwich/catalog/discovery contract suite: 27 passed
+- Detected installation: `/home/alienl/Hermes/sandwich`
 - Ulysses full isolated test suite using the upstream Bun fix build:
   4,761 passed, 3 skipped
 
@@ -26,8 +27,8 @@ environment without inheriting Ulysses's Python virtual environment.
 
 ## Hermes profile
 
-The original Bun Sovereign Hermes updater repair is preserved as a
-version-pinned Sandwich integration:
+The tested Hermes updater repair is preserved as a version-pinned Sandwich
+integration:
 
 - exact Hermes base revision;
 - reviewed Git patch;

@@ -41,7 +41,7 @@ done
 
 live_head="$(git -C "$live" rev-parse HEAD)"
 base_head="$(tr -d '[:space:]' <"$base_file")"
-printf 'Hermes Sandwich maintenance\n'
+printf 'Hermes Bun maintenance\n'
 printf '  live:        %s\n' "$live"
 printf '  live HEAD:   %s\n' "$live_head"
 printf '  patch base:  %s\n' "$base_head"

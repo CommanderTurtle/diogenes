@@ -36,9 +36,6 @@ Sandwich control command resolution at the user level.
 - `patches/` and `config/hermes.*`: version-pinned Hermes updater artifacts
 - `tests/compat.sh`: offline compatibility contract
 
-`bun-sovereign` remains as a backward-compatible alias for installations made
-before the project was renamed.
-
 ## Install
 
 Preview all destinations without changing the system:
@@ -57,8 +54,8 @@ sandwich doctor
 
 The installer creates timestamped backups under
 `~/.local/state/sandwich/backups`, installs user-owned links in
-`~/.local/bin`, and replaces only the marked Sandwich or legacy Bun Sovereign
-block in `~/.bashrc`. It preserves all unrelated PATH entries and shell
+`~/.local/bin`, and replaces only the marked Sandwich block in `~/.bashrc`.
+It preserves all unrelated PATH entries and shell
 configuration.
 
 ## Environment
@@ -71,13 +68,11 @@ Sandwich recognizes:
 - `SANDWICH_YARN_VERSION`: Yarn compatibility version
 - `BUN_INSTALL`: Bun installation root, normally `~/.bun`
 
-The former `BUN_SOVEREIGN_*` names remain accepted as compatibility fallbacks.
-
 ## Hermes integration profile
 
-Sandwich includes the tested Hermes updater repair that originally shipped
-with Bun Sovereign. The profile keeps the Hermes root, state directory,
-protected production roots, and upstream reference configurable:
+Sandwich includes the tested Hermes updater repair. The profile keeps the
+Hermes root, state directory, protected production roots, and upstream
+reference configurable:
 
 - `HERMES_LIVE_DIR`, default `~/.hermes/hermes-agent`
 - `HERMES_UPSTREAM_REF`, default `origin/main`

@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
@@ -89,6 +90,52 @@ class SandwichLayout:
             state_root=resolved_home / ".local" / "state" / "sandwich",
             shell_rc=resolved_home / ".bashrc",
         )
+
+
+@dataclass(frozen=True, slots=True)
+class SandwichInstallation:
+    installed: bool
+    command_paths: Mapping[str, Path]
+    missing_commands: tuple[str, ...]
+    source_root: Path | None = None
+
+
+def observe_sandwich_installation(
+    *,
+    search_path: str | None = None,
+) -> SandwichInstallation:
+    """Resolve a Sandwich install from PATH only."""
+
+    path = search_path if search_path is not None else os.environ.get("PATH")
+    resolved: dict[str, Path] = {}
+    for command in (
+        "bun",
+        "sandwich",
+        "node",
+        "npm",
+        "npx",
+        "pnpm",
+        "yarn",
+    ):
+        found = shutil.which(command, path=path)
+        if found:
+            resolved[command] = Path(found).resolve()
+
+    required = ("bun", "node", "npm", "npx", "pnpm", "yarn")
+    missing = tuple(command for command in required if command not in resolved)
+    installed = "sandwich" in resolved and not missing
+    canonical = resolved.get("sandwich")
+    source_root = (
+        canonical.parent.parent
+        if canonical is not None and canonical.parent.name == "bin"
+        else None
+    )
+    return SandwichInstallation(
+        installed=installed,
+        command_paths=MappingProxyType(resolved),
+        missing_commands=missing,
+        source_root=source_root,
+    )
 
 
 def _manifest_object(value: object, label: str) -> dict:

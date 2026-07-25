@@ -7,7 +7,7 @@ mode="${1:---check}"
 local_bin="$HOME/.local/bin"
 state_root="$HOME/.local/state/sandwich"
 bashrc="$HOME/.bashrc"
-commands=(sandwich bun-sovereign node npm npx pnpm yarn)
+commands=(sandwich node npm npx pnpm yarn)
 
 case "$mode" in
     --check|--apply) ;;
@@ -61,11 +61,11 @@ tmp_bashrc="$(mktemp "${bashrc}.sandwich.XXXXXX")"
 trap 'rm -f -- "$tmp_bashrc"' EXIT
 if [[ -f "$bashrc" ]]; then
     awk '
-        $0 == "# >>> sandwich >>>" || $0 == "# >>> bun-sovereign >>>" {
+        $0 == "# >>> sandwich >>>" {
             managed = 1
             next
         }
-        $0 == "# <<< sandwich <<<" || $0 == "# <<< bun-sovereign <<<" {
+        $0 == "# <<< sandwich <<<" {
             managed = 0
             next
         }
