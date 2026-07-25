@@ -8,7 +8,11 @@ from pathlib import Path
 from typing import Any
 
 from src.constants import DATA_DIR
-from src.ulysses_colibri import ColibriProvider, default_colibri_catalog
+from src.ulysses_colibri import (
+    ColibriProvider,
+    default_colibri_catalog,
+    resolve_cuda_compiler,
+)
 from src.ulysses_jobs import RuntimeJobError, RuntimeJobStore
 
 
@@ -138,6 +142,22 @@ class ColibriControl:
             )
         if endpoint.get("port_open"):
             raise RuntimeJobError("Stop the Colibri provider before rebuilding it")
+        prerequisites = (observed.get("build") or {}).get("prerequisites") or {}
+        if not prerequisites.get("ready"):
+            raise RuntimeJobError(
+                "Colibri build prerequisites are incomplete: "
+                + ", ".join(prerequisites.get("missing") or ["unknown prerequisite"])
+            )
+        nvcc = resolve_cuda_compiler()
+        if nvcc is None:
+            raise RuntimeJobError("CUDA compiler is not available")
+        validation_steps = [
+            {
+                **step,
+                "cwd": str(provider.build_cwd),
+            }
+            for step in provider.validation_steps
+        ]
         return [
             {
                 "label": "Verify GNU Make",
@@ -146,11 +166,18 @@ class ColibriControl:
             },
             {
                 "label": "Verify CUDA compiler",
-                "argv": ["nvcc", "--version"],
+                "argv": [str(nvcc), "--version"],
                 "timeout": 30,
             },
             {
                 "label": "Build native Colibri CUDA runtime",
+                "argv": list(provider.build_argv),
+                "cwd": str(provider.build_cwd),
+                "timeout": 3600,
+            },
+            *validation_steps,
+            {
+                "label": "Reassert canonical Colibri build configuration",
                 "argv": list(provider.build_argv),
                 "cwd": str(provider.build_cwd),
                 "timeout": 3600,

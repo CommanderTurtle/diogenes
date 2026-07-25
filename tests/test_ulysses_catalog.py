@@ -30,6 +30,9 @@ def test_default_catalog_resolves_portable_roots_and_sandwich(tmp_path):
     assert registry.get("firecrawl.api").source_root == (
         microservices / "firecrawl" / "firecrawl"
     )
+    assert registry.get("firecrawl.cli").source_root == (
+        microservices / "firecrawl" / "cli"
+    )
     assert registry.get("odysseus.api").ports[0].port == 7000
     assert registry.get("camofox.mcp").dependencies == (
         "camofox.browser",

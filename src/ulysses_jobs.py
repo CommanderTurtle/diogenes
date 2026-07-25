@@ -74,11 +74,16 @@ class RuntimeJobStore:
         return value
 
     def _save(self, record: dict[str, Any]) -> None:
+        path = self._job_path(str(record["id"]))
         atomic_write_json(
-            str(self._job_path(str(record["id"]))),
+            str(path),
             record,
             indent=2,
         )
+        try:
+            path.chmod(0o600)
+        except OSError:
+            pass
 
     def _lock_path(self, runtime_id: str) -> Path:
         safe = "".join(
@@ -112,8 +117,21 @@ class RuntimeJobStore:
                 raise RuntimeJobError("runtime job argv values must be strings")
             if step.get("shell"):
                 raise RuntimeJobError("shell runtime steps are not accepted")
+            expected_output = step.get("expected_output_contains")
+            if expected_output is not None and (
+                not isinstance(expected_output, str)
+                or not expected_output
+                or len(expected_output) > 512
+            ):
+                raise RuntimeJobError(
+                    "runtime job expected output must be a short non-empty string"
+                )
 
-        self.jobs_root.mkdir(parents=True, exist_ok=True)
+        self.jobs_root.mkdir(parents=True, exist_ok=True, mode=0o700)
+        try:
+            self.jobs_root.chmod(0o700)
+        except OSError:
+            pass
         token = secrets.token_urlsafe(32)
         now = time.time()
         job_id = uuid.uuid4().hex
@@ -339,6 +357,10 @@ def run_persisted_job(
     try:
         log_path.parent.mkdir(parents=True, exist_ok=True)
         with log_path.open("a", encoding="utf-8") as log:
+            try:
+                log_path.chmod(0o600)
+            except OSError:
+                pass
             for index, step in enumerate(record["steps"]):
                 label = str(step.get("label") or f"Step {index + 1}")
                 record["current_step"] = index
@@ -371,12 +393,24 @@ def run_persisted_job(
                         + "\nStep timed out.\n"
                     )
                 log.write(output)
+                expected_output = step.get("expected_output_contains")
+                output_matched = (
+                    expected_output is None or expected_output in output
+                )
+                if code == 0 and not output_matched:
+                    code = 65
+                    log.write(
+                        "\nExpected validation output was not observed: "
+                        f"{expected_output}\n"
+                    )
                 log.flush()
                 record["step_results"].append(
                     {
                         "index": index,
                         "label": label,
                         "exit_code": code,
+                        "expected_output_contains": expected_output,
+                        "output_matched": output_matched,
                         "started_at": started,
                         "ended_at": time.time(),
                     }

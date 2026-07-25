@@ -32,13 +32,23 @@ design skeleton:
   round-trips and were returned to their requested stopped state;
 - Sandwich 0.2.0 is installed at `~/Hermes/sandwich`, passes its 36-test
   compatibility suite, and successfully ran Camofox's unchanged Node-oriented
-  package script without installing Node;
+  package script without installing Node. Cookbook Extras detects the complete
+  Bun-owned command family and exposes confirmation-gated install/doctor jobs;
 - Chroma is present in Docker management, with its current production
   persistence mismatch detected and migration apply intentionally gated;
 - Colibri GLM and Colibri Hy3 are separate native providers in Cookbook Serve,
   with model detection, engine selection, advanced 5090 profiles, canonical
   command rendering/validation, source sync/build plans, tmux launch
-  integration, endpoint observation, and distinct 8642/8643 ports;
+  integration, endpoint observation, exact source/build/model manifests, and
+  distinct 8642/8643 ports;
+- runtime sources are pinned to their official Git origin and branch, dirty
+  trees and non-fast-forward updates fail closed, dependency order is enforced,
+  and update actions preserve the prior stopped/running state;
+- native and JavaScript tmux services explicitly discard Ulysses's
+  `VIRTUAL_ENV`, `PYTHONHOME`, and `PYTHONPATH` while retaining the declared
+  host/runtime environment;
+- signal-cli release updates require GitHub's official asset size and SHA-256
+  digest and retain one atomic rollback binary;
 - Hermes remains a separately installed agent. Its host runtime, updater
   integration, and MCP registry are managed without merging it with the
   Odysseus agent MCP registry.
@@ -229,7 +239,9 @@ layer:
   without inheriting Ulysses's Python environment.
 - [x] Keep `node`, `npm`, `npx`, `pnpm`, and `yarn` compatibility explicit and
   fail-loud.
-- [ ] Provide preview/install/doctor/update/rollback/uninstall operations.
+- [x] Provide confirmation-gated preview/install/doctor operations without
+  overwriting a divergent existing installation.
+- [ ] Add standalone Sandwich update/rollback/uninstall operations.
 - [x] Store a validated, versioned component and operation manifest; retain
   timestamped install and Hermes maintenance backups under the configurable
   Sandwich state root.
@@ -275,12 +287,34 @@ service, and roll back without mutating the adopted environment.
 
 Source/build:
 
-- pin a reviewed Colibri `dev` commit containing PR 274 and current OpenAI
-  server fixes;
+- pin the official origin, branch, fetched tip, and minimum reviewed commit;
 - clone into a Ulysses-managed source/cache root;
-- build Linux CUDA for `sm_120`;
+- build GLM with `make colibri CUDA=1 CUDA_ARCH=native`;
+- build Hy3 separately with `make hy3 CUDA=1 IOURING=1`;
 - record source SHA, toolchain, flags, binary hash, and self-test result;
 - never vendor a floating 16 MB source tree inside Ulysses.
+
+Exact model contracts:
+
+- GLM default:
+  `mastouri/GLM-5.2-colibri-int4-g64-with-int8-mtp` at revision
+  `5276684ba30ac0026c07220d3f389171a84eb074`; the older
+  `mateogrgic/GLM-5.2-colibri-int4-with-int8-mtp` remains recognized only as a
+  legacy reproducibility option;
+- Hy3 default: `UnderstandLing/Hy3-colibri-int4` at revision
+  `2aed3aedf043f81d8c03c0e98c27d1e61b29981d`;
+- readiness validates repository metadata, revision, model type, exact shard
+  counts, required files, and expected weight bytes before launch.
+
+Build readiness requires the upstream test suite, CUDA kernel tests, and, for
+Hy3, the official teacher-forcing oracle containing `32/32 positions`. A
+manifest records the source commit, binary/CLI hashes, nvcc identity, build
+argv, and validation results. Source drift or changed binaries invalidate it.
+The build preflight resolves CUDA's absolute `nvcc` path because non-login WSL
+processes do not include it in `PATH`; Hy3 additionally requires the
+`liburing` development header before its `IOURING=1` build can be planned.
+After validation, the canonical build command is reasserted before the
+manifest is written so Make's configuration stamp matches the final binary.
 
 Security/lifecycle:
 
@@ -304,6 +338,10 @@ RTX 5090 profile:
   result blindly;
 - A/B `COLI_CUDA_PIPE=2`, `CACHE_ROUTE`, `ROUTE_J`, `ROUTE_M`, direct I/O, and
   prefetch;
+- keep `EXPERT_BUDGET=0`: current `dev` quarantines the older issue #273
+  budget recipe after issue #303 measured quality collapse, zero MTP
+  acceptance, and worse speed; retain `CACHE_ROUTE` as a separate explicit
+  opt-in because it changes expert selection;
 - capture TTFT, tok/s, hit rate, disk time/throughput, RAM, VRAM, correctness,
   and quality.
 
@@ -391,8 +429,13 @@ Current production evidence:
   for CUDA 13.0; Ulysses must keep those layers distinct.
 - ONNX Runtime 1.27 requests CUDA 13 and cuDNN 9.
 - `libcudnn.so.9` exists under the production venv's NVIDIA site packages.
-- `onnxruntime.preload_dlls(directory="")` made the CUDA provider library
-  load successfully in a direct test.
+- adding the venv's discovered `site-packages/nvidia/*/lib` directories to a
+  child process's `LD_LIBRARY_PATH` resolves every dependency reported by
+  `ldd`; the issue is process-start linker scope, not a missing library;
+- `scripts/with-wsl-cuda-libs.sh` discovers those wheel libraries plus the WSL
+  and host CUDA library roots, validates the ONNX provider with `ldd`, and then
+  executes the candidate service. It never creates symlinks or edits a shell
+  profile;
 - `nvidia-smi` exists at `/usr/lib/wsl/lib/nvidia-smi` but is absent from the
   narrow non-login PATH used by some launch contexts.
 - `python-magic` is absent and unrelated to the CUDA provider failure.
@@ -434,7 +477,9 @@ Service-specific caution:
 - preserve Hermes profiles, sessions, pairing, MCPs, and systemd state;
 - preserve Firecrawl's seven local source changes;
 - do not recreate Chroma before persistence repair;
-- replace the unsafe signal-cli installer rather than wrapping it;
+- use the Ulysses signal-cli updater: accept only the official release asset,
+  verify declared size and SHA-256 digest, install atomically, and retain one
+  prior binary for rollback;
 - pin Bifrost/SearXNG/Chroma instead of updating on restart.
 - model capabilities separately from implementations: this host's browser
   capability is provided by Camofox/Camofox MCP, so Ulysses must not auto-install
@@ -444,14 +489,13 @@ Service-specific caution:
 - an existing optional Odysseus Playwright MCP may be reported and disabled,
   but never removed or replaced without an explicit adoption plan.
 
-### 8. Arcane-inspired UI
+### 8. Native Services UI
 
-Arcane is a methodology reference for filesystem-backed discovery, environment
-status, bounded activities, live logs/stats, and guarded lifecycle actions.
-Ulysses is not an Arcane fork and does not recreate a Docker-only control
-plane. It extends the existing Odysseus window/sidebar/Cookbook design with one
-common service model spanning Compose, native/tmux processes, systemd, MCPs,
-databases, and model endpoints.
+A Docker-management dashboard was evaluated only as a methodology reference
+for filesystem-backed discovery, environment status, bounded activities, live
+logs/stats, and guarded lifecycle actions. Ulysses uses the existing Odysseus
+window/sidebar/Cookbook design and one common service model spanning Compose,
+native/tmux processes, systemd, MCPs, databases, and model endpoints.
 
 Admin UI:
 

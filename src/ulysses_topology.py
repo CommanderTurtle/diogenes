@@ -148,6 +148,7 @@ def build_topology_report(
                 for name, path in sorted(sandwich.command_paths.items())
             },
             "missing_commands": list(sandwich.missing_commands),
+            "mismatched_commands": list(sandwich.mismatched_commands),
         },
         "compose": [
             {

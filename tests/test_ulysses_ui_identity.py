@@ -93,6 +93,32 @@ def test_services_window_uses_planned_confirmed_runtime_jobs() -> None:
     assert "method: 'PUT'" in services
     assert "expected_sha256" in services
     assert "SAVE ${runtimeId} CONFIG" in services
+    assert "!document.revealed && (document.secret_keys || []).length" in services
     assert "Validate & save" in services
+    assert "dependencies_unavailable" in services
+    assert "active_dependents" in services
+    assert "Update is gated." in services
+    assert "Native model runtimes" in services
+    assert "Copy WSL/CUDA launch" in services
+    assert "data-copy-cuda-launch" in services
     assert "method: 'DELETE'" not in services
     assert "arbitrary shell command" not in services
+
+
+def test_cookbook_recognizes_recommended_and_legacy_colibri_models() -> None:
+    cookbook = _read("static/js/cookbook.js").lower()
+    serve = _read("static/js/cookbookServe.js").lower()
+
+    for source in (cookbook, serve):
+        assert "mastouri--glm-5.2-colibri-int4-g64-with-int8-mtp" in source
+        assert "mateogrgic--glm-5.2-colibri-int4-with-int8-mtp" in source
+        assert "understandling--hy3-colibri-int4" in source
+
+
+def test_cookbook_extras_include_native_sandwich_installation() -> None:
+    cookbook = _read("static/js/cookbook.js")
+
+    assert "/api/ulysses/sandwich" in cookbook
+    assert "/api/ulysses/sandwich/jobs/plan" in cookbook
+    assert "sandwich.runtime" in cookbook
+    assert "Bun compatibility layer · never installs Node" in cookbook

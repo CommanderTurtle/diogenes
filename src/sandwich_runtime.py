@@ -98,6 +98,7 @@ class SandwichInstallation:
     command_paths: Mapping[str, Path]
     missing_commands: tuple[str, ...]
     source_root: Path | None = None
+    mismatched_commands: tuple[str, ...] = ()
 
 
 def observe_sandwich_installation(
@@ -123,19 +124,93 @@ def observe_sandwich_installation(
 
     required = ("bun", "node", "npm", "npx", "pnpm", "yarn")
     missing = tuple(command for command in required if command not in resolved)
-    installed = "sandwich" in resolved and not missing
     canonical = resolved.get("sandwich")
     source_root = (
         canonical.parent.parent
         if canonical is not None and canonical.parent.name == "bin"
         else None
     )
+    wrapper_commands = ("sandwich", "node", "npm", "npx", "pnpm", "yarn")
+    mismatched = (
+        tuple(
+            command
+            for command in wrapper_commands
+            if resolved.get(command)
+            != (source_root / "bin" / command).resolve()
+        )
+        if source_root is not None
+        else wrapper_commands
+    )
+    installed = not missing and not mismatched and source_root is not None
     return SandwichInstallation(
         installed=installed,
         command_paths=MappingProxyType(resolved),
         missing_commands=missing,
         source_root=source_root,
+        mismatched_commands=mismatched,
     )
+
+
+def collect_sandwich_status(
+    *,
+    repository_root: Path | None = None,
+    home: Path | None = None,
+    microservices_root: Path | None = None,
+    search_path: str | None = None,
+) -> dict[str, object]:
+    """Describe the bundled component and the active user installation."""
+
+    repo = (
+        repository_root
+        if repository_root is not None
+        else Path(__file__).resolve().parents[1]
+    ).resolve()
+    resolved_home = (home or Path.home()).resolve()
+    configured_root = microservices_root
+    if configured_root is None:
+        raw_root = os.environ.get("ULYSSES_MICROSERVICES_ROOT")
+        configured_root = Path(raw_root) if raw_root else resolved_home / "Hermes"
+    if not configured_root.is_absolute():
+        raise ValueError("ULYSSES_MICROSERVICES_ROOT must be absolute")
+    expected_root = (configured_root.resolve() / "sandwich").resolve()
+    bundled = load_sandwich_manifest(repo / "components" / "sandwich")
+    installation = observe_sandwich_installation(search_path=search_path)
+    installed_root = (
+        installation.source_root.resolve()
+        if installation.source_root is not None
+        else None
+    )
+    installed_version: str | None = None
+    if installed_root is not None:
+        try:
+            installed_version = load_sandwich_manifest(installed_root).version
+        except SandwichManifestError:
+            installed_version = None
+    location_current = installed_root == expected_root
+    version_current = installed_version == bundled.version
+    ready = installation.installed and location_current and version_current
+    return {
+        "schema_version": "ulysses.sandwich-status.v1",
+        "installed": installation.installed,
+        "ready": ready,
+        "bundled_version": bundled.version,
+        "installed_version": installed_version,
+        "bundled_root": str(bundled.component_root),
+        "expected_root": str(expected_root),
+        "source_root": str(installed_root) if installed_root is not None else None,
+        "location_current": location_current,
+        "version_current": version_current,
+        "commands": {
+            name: str(path)
+            for name, path in sorted(installation.command_paths.items())
+        },
+        "missing_commands": list(installation.missing_commands),
+        "mismatched_commands": list(installation.mismatched_commands),
+        "actions": {
+            "install_available": not ready,
+            "doctor_available": ready,
+        },
+    }
 
 
 def _manifest_object(value: object, label: str) -> dict:

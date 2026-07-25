@@ -9,7 +9,10 @@ from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
 from core.middleware import require_admin
-from src.sandwich_runtime import observe_sandwich_installation
+from src.sandwich_runtime import (
+    collect_sandwich_status,
+    observe_sandwich_installation,
+)
 from src.ulysses_chroma import collect_chroma_persistence
 from src.ulysses_colibri import collect_colibri_providers
 from src.ulysses_colibri_command import (
@@ -34,6 +37,7 @@ from src.ulysses_runtime_management import (
     read_runtime_log,
     save_runtime_document,
 )
+from src.ulysses_sandwich_control import SandwichControl
 from src.ulysses_topology import build_topology_report
 
 
@@ -75,6 +79,10 @@ class ManagedRuntimePlanRequest(BaseModel):
     action: str
 
 
+class SandwichLifecyclePlanRequest(BaseModel):
+    action: str
+
+
 class RuntimeDocumentSaveRequest(BaseModel):
     expected_sha256: str | None = None
     content: str
@@ -98,9 +106,11 @@ def setup_ulysses_routes(
     hermes_control_factory: Callable[[], HermesControl] = HermesControl,
     colibri_control_factory: Callable[[], ColibriControl] = ColibriControl,
     runtime_control_factory: Callable[[], ManagedRuntimeControl] = ManagedRuntimeControl,
+    sandwich_control_factory: Callable[[], SandwichControl] = SandwichControl,
+    sandwich_collector: Callable[[], dict] = collect_sandwich_status,
     managed_runtime_collector: Callable[[], dict] = collect_managed_runtimes,
     readiness_collector: Callable[
-        [dict, dict, dict], dict
+        [dict, dict, dict, dict, dict], dict
     ] = collect_switchover_readiness,
 ) -> APIRouter:
     router = APIRouter(prefix="/api/ulysses", tags=["ulysses"])
@@ -112,6 +122,11 @@ def setup_ulysses_routes(
         registry = default_runtime_registry()
         sandwich = observe_sandwich_installation()
         return build_topology_report(registry, snapshot, sandwich)
+
+    @router.get("/sandwich")
+    async def get_sandwich_status(request: Request) -> dict:
+        require_admin(request)
+        return await run_in_threadpool(sandwich_collector)
 
     @router.get("/chroma/persistence")
     async def get_chroma_persistence(request: Request) -> dict:
@@ -196,6 +211,23 @@ def setup_ulysses_routes(
             plan, token = await run_in_threadpool(
                 runtime_control_factory().create_plan,
                 runtime_id=body.runtime_id,
+                action=body.action,
+            )
+            return {"job": plan, "confirmation_token": token}
+        except RuntimeJobError as exc:
+            raise _job_http_error(exc) from exc
+
+    @router.post("/sandwich/jobs/plan")
+    async def plan_sandwich_lifecycle(
+        request: Request,
+        body: SandwichLifecyclePlanRequest,
+    ) -> dict:
+        require_admin(request)
+        status = await run_in_threadpool(sandwich_collector)
+        try:
+            plan, token = await run_in_threadpool(
+                sandwich_control_factory().create_plan,
+                status,
                 action=body.action,
             )
             return {"job": plan, "confirmation_token": token}
@@ -319,7 +351,15 @@ def setup_ulysses_routes(
             hermes = hermes_control_factory().decorate_report(
                 hermes_collector()
             )
-            return readiness_collector(topology, chroma, hermes)
+            colibri = colibri_collector()
+            managed = managed_runtime_collector()
+            return readiness_collector(
+                topology,
+                chroma,
+                hermes,
+                colibri,
+                managed,
+            )
 
         return await run_in_threadpool(collect)
 

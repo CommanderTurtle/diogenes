@@ -10,8 +10,9 @@ processes were not mutated.
 - Odysseus application remained on port 7000 (PID 6709).
 - vLLM remained on port 8000 (PID 12823).
 - Chroma remained on loopback port 8100.
-- Both Colibri model downloads continued from the production virtual
-  environment.
+- Colibri downloads continued uninterrupted. The protected production virtual
+  environment was neither replaced nor modified; a later observed Hy3
+  downloader was running from a dedicated temporary environment.
 
 ## Docker lifecycle round-trip
 
@@ -59,3 +60,49 @@ The installed `config.json` has no plugin array or observability settings, and
 the local `.env` and `startup.sh` contain no push gateway, collector, or
 exporter reference. No configuration change is needed for the zero-outbound-
 telemetry requirement.
+
+## Source-only hardening after live validation
+
+While model downloads and the production GPU workload remained active, the
+candidate received a source-only audit. No service, container, model, source
+checkout, or production virtual environment was changed.
+
+- official Git origins/branches, clean worktrees, and fast-forward-only source
+  updates are enforced;
+- dependent runtime lifecycle and prior running/stopped state are preserved;
+- active JavaScript/native services cannot be source-synced;
+- managed tmux launches remove Ulysses Python-environment leakage;
+- redacted `.env` and JSON documents cannot accidentally overwrite real
+  values, while an explicit authorized **Unredact & edit** flow remains;
+- Sandwich readiness requires the complete Bun-owned compatibility command
+  family and Cookbook exposes exact bundled install/doctor jobs;
+- signal-cli release installation requires the official asset size and SHA-256
+  digest and retains one atomic rollback binary;
+- Colibri source, build, and model manifests invalidate stale binaries or
+  incomplete/wrong model artifacts;
+- the WSL/CUDA launcher scopes discovered NVIDIA wheel libraries to the
+  candidate child process and validates ONNX linkage without symlinks.
+
+The final source review also found:
+
+- CUDA 13.3's compiler is present at `/usr/local/cuda/bin/nvcc`; non-login
+  `PATH` lookup alone is insufficient, so build preflight and manifest capture
+  use the resolved absolute path;
+- Hy3's canonical `IOURING=1` build is currently blocked because the runtime
+  library exists but the `liburing` development header does not. Ulysses
+  reports that prerequisite rather than attempting an install or beginning a
+  doomed CUDA build;
+- current Colibri `dev` quarantines nonzero `EXPERT_BUDGET` after issue #303
+  found quality collapse, zero MTP acceptance, and worse throughput. Ulysses
+  keeps it at zero even though the older issue #273 recipe used four;
+- a model is not ready unless its Hugging Face local-download metadata carries
+  the exact pinned revision in addition to matching the full shard/file/byte
+  layout.
+
+CUDA builds, model validation, provider launches, ORT GPU-session validation,
+and throughput benchmarks remain deliberately deferred until both downloads
+finish and the production GPU is released.
+
+The final isolated candidate suite completed with 4,890 passed, 3 skipped, and
+no failures. Python compilation, JSON parsing, shell syntax, browser-targeted
+JavaScript compilation, and `git diff --check` also passed.

@@ -1,4 +1,4 @@
-// Ulysses Services — read-only host control-plane window.
+// Ulysses Services — observed state plus human-gated host lifecycle plans.
 //
 // Lifecycle actions are identity-bound, planned first, separately confirmed,
 // and executed by the durable argv-only Ulysses job runner.
@@ -377,7 +377,7 @@ function runtimeDocumentsHtml(item) {
   if (expandedRuntime !== item.id) return '';
   if (!payload) return '<div class="uly-empty-state compact">Loading configuration…</div>';
   return (payload.documents || []).map((document) => {
-    const secretLocked = document.format === 'env' && !document.revealed && (document.secret_keys || []).length;
+    const secretLocked = !document.revealed && (document.secret_keys || []).length;
     return `
       <div class="uly-runtime-document" data-runtime-document="${esc(document.id)}" style="margin-top:8px;padding:8px;border:1px solid var(--border);border-radius:6px;">
         <div style="display:flex;align-items:center;gap:7px;margin-bottom:6px;">
@@ -422,6 +422,9 @@ function managedRuntimeCard(item) {
         <div class="uly-service-path">${(compose.images || []).map(esc).join(' · ')}</div>` : ''}
       ${pkg ? `<div class="uly-service-deps"><b>${esc(pkg.name || 'package')}</b><code>${esc(pkg.version || 'version unknown')}</code><span>${esc(pkg.package_manager || 'Bun-compatible')}</span></div>` : ''}
       ${item.port_collision ? '<div class="uly-finding severity-warning"><strong>Declared port is owned by another runtime.</strong><p>Start stays disabled until the collision is cleared.</p></div>' : ''}
+      ${(item.dependencies_unavailable || []).length ? `<div class="uly-finding severity-warning"><strong>Required runtime is stopped.</strong><p>Start the dependency first: ${esc(item.dependencies_unavailable.join(', '))}.</p></div>` : ''}
+      ${(item.active_dependents || []).length ? `<div class="uly-finding severity-warning"><strong>Active runtimes depend on this service.</strong><p>Stop these first before stopping this runtime: ${esc(item.active_dependents.join(', '))}.</p></div>` : ''}
+      ${item.update_blocked_reason ? `<div class="uly-finding severity-warning"><strong>Update is gated.</strong><p>${esc(item.update_blocked_reason)}</p></div>` : ''}
       <div class="uly-capability-list" style="margin-top:8px;">
         ${runtimeActionButtons(item)}
         <button type="button" data-runtime-config="${esc(item.id)}">${isExpanded ? 'Close config' : 'Config'}</button>
@@ -468,6 +471,7 @@ function renderReadiness() {
   const phases = [
     ['source', 'Source'],
     ['python', 'Python and GPU runtime'],
+    ['models', 'Native model runtimes'],
     ['services', 'Services and ports'],
     ['data', 'Data and Chroma'],
     ['human_gate', 'Human cutover gates'],
@@ -502,6 +506,9 @@ function renderReadiness() {
               <code>${esc(item.code)}</code>
               <p>${esc(item.evidence)}</p>
               <small>${esc(item.operator_action)}</small>
+              ${item.code === 'python.onnx.cuda_linkage' && readiness?.candidate?.cuda_launch_command
+                ? `<button type="button" data-copy-cuda-launch="${esc(readiness.candidate.cuda_launch_command)}" style="margin-top:7px;">Copy WSL/CUDA launch</button>`
+                : ''}
             </div>`).join('')}
         </section>`;
     }).join('')}`;
@@ -758,6 +765,17 @@ function render() {
   });
   root.querySelectorAll('[data-hermes-action]').forEach((button) => {
     button.addEventListener('click', () => planHermesAction(button.dataset.hermesAction));
+  });
+  root.querySelectorAll('[data-copy-cuda-launch]').forEach((button) => {
+    button.addEventListener('click', async () => {
+      const command = button.dataset.copyCudaLaunch || '';
+      try {
+        await navigator.clipboard.writeText(command);
+        uiModule.showToast('Copied the WSL/CUDA-safe Ulysses launch command.', 5000);
+      } catch {
+        uiModule.showToast(command, 9000);
+      }
+    });
   });
   root.querySelectorAll('[data-hermes-mcp-action]').forEach((button) => {
     button.addEventListener('click', () => planHermesMcpAction({

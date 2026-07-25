@@ -10,7 +10,7 @@ import time
 from pathlib import Path
 
 from core.atomic_io import atomic_write_json
-from src.ulysses_colibri import default_colibri_catalog
+from src.ulysses_colibri import default_colibri_catalog, resolve_cuda_compiler
 
 
 def _output(argv: list[str], cwd: Path | None = None) -> str:
@@ -50,6 +50,9 @@ def write_manifest(provider_id: str) -> Path:
     if not provider.engine_path.is_file() or not provider.cli_path.is_file():
         raise FileNotFoundError("Colibri build outputs are incomplete")
     build_config_path = provider.build_cwd / ".build-config"
+    nvcc = resolve_cuda_compiler()
+    if nvcc is None:
+        raise FileNotFoundError("CUDA compiler is unavailable")
     payload = {
         "schema_version": "ulysses.colibri-build.v1",
         "provider_id": provider.provider_id,
@@ -60,6 +63,7 @@ def write_manifest(provider_id: str) -> Path:
             cwd=provider.source_root,
         ),
         "build_argv": list(provider.build_argv),
+        "validation_steps": list(provider.validation_steps),
         "build_config": (
             build_config_path.read_text(encoding="utf-8", errors="replace").strip()
             if build_config_path.is_file()
@@ -69,7 +73,7 @@ def write_manifest(provider_id: str) -> Path:
         "engine_sha256": _sha256(provider.engine_path),
         "cli_path": str(provider.cli_path),
         "cli_sha256": _sha256(provider.cli_path),
-        "nvcc": _output(["nvcc", "--version"]),
+        "nvcc": _output([str(nvcc), "--version"]),
         "recorded_at": time.time(),
     }
     path = provider.build_cwd / ".ulysses-build.json"

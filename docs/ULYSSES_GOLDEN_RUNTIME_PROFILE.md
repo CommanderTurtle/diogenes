@@ -77,3 +77,28 @@ A candidate environment cannot replace or retarget production unless it:
 
 “Newer” vLLM, Torch, Transformers, Triton, CUDA, or cuDNN versions do not waive
 these gates.
+
+## ONNX Runtime CUDA loader finding
+
+The production ONNX Runtime CUDA provider is not missing cuDNN. Its requested
+`libcudnn.so.9` is present inside the production environment under the NVIDIA
+wheel library tree. With that environment's
+`site-packages/nvidia/*/lib` directories prepended to a new child process's
+`LD_LIBRARY_PATH`, `ldd` resolves every provider dependency.
+
+This is a process-start linker-path problem. It does not justify creating
+versionless or cross-version `.so` symlinks, changing `/usr/lib`, modifying a
+login shell, or normalizing the production environment.
+
+Ulysses provides `scripts/with-wsl-cuda-libs.sh` as the scoped candidate
+launcher. It:
+
+1. resolves `ULYSSES_VENV` when explicitly supplied, otherwise the candidate's
+   own `.venv` (an inherited `VIRTUAL_ENV` is deliberately ignored);
+2. discovers its NVIDIA wheel library directories;
+3. adds the host CUDA and WSL driver library roots when present;
+4. validates the ONNX CUDA provider with `ldd`;
+5. executes the requested command, defaulting to the candidate Uvicorn server.
+
+The launcher has been syntax- and contract-tested only. An actual CUDA provider
+session remains a post-download, GPU-release validation gate.

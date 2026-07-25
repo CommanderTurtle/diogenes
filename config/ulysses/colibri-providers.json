@@ -10,18 +10,70 @@
       "source_env": "ULYSSES_COLIBRI_GLM_ROOT",
       "source_default": "Odysseus/colibri",
       "model_env": "ULYSSES_COLIBRI_GLM_MODEL",
-      "model_default": "colibri-models/mateogrgic--GLM-5.2-colibri-int4-with-int8-mtp",
+      "model_default": "colibri-models/mastouri--GLM-5.2-colibri-int4-g64-with-int8-mtp",
       "port_env": "ULYSSES_COLIBRI_GLM_PORT",
       "default_port": 8642,
       "model_id": "glm-5.2-colibri",
-      "weight_repo": "mateogrgic/GLM-5.2-colibri-int4-with-int8-mtp",
+      "weight_repo": "mastouri/GLM-5.2-colibri-int4-g64-with-int8-mtp",
+      "model_variants": [
+        {
+          "id": "gs64-int8-mtp",
+          "label": "GLM-5.2 gs64 + int8 MTP",
+          "repository": "mastouri/GLM-5.2-colibri-int4-g64-with-int8-mtp",
+          "revision": "5276684ba30ac0026c07220d3f389171a84eb074",
+          "directory": "mastouri--GLM-5.2-colibri-int4-g64-with-int8-mtp",
+          "recommended": true,
+          "model_type": "glm_moe_dsa",
+          "main_shards": 141,
+          "mtp_shards": 1,
+          "weight_bytes": 429255863080,
+          "required_files": [
+            "config.json",
+            "generation_config.json",
+            "tokenizer.json",
+            "tokenizer_config.json"
+          ],
+          "quality_note": "Current upstream-recommended group-size-64 container; preserves substantially more quality than legacy per-row int4."
+        },
+        {
+          "id": "legacy-per-row-int8-mtp",
+          "label": "GLM-5.2 legacy per-row + int8 MTP",
+          "repository": "mateogrgic/GLM-5.2-colibri-int4-with-int8-mtp",
+          "revision": "3cc8db99b1b13fc79325d987ba3c1c430766b3b8",
+          "directory": "mateogrgic--GLM-5.2-colibri-int4-with-int8-mtp",
+          "recommended": false,
+          "model_type": "glm_moe_dsa",
+          "main_shards": 141,
+          "mtp_shards": 3,
+          "weight_bytes": 383739826712,
+          "required_files": [
+            "config.json",
+            "generation_config.json",
+            "tokenizer.json",
+            "tokenizer_config.json"
+          ],
+          "quality_note": "Legacy issue-#273 reference container. Upstream reports roughly nine percentage points lower quality and think-mode looping; accepted for reproducibility but not recommended."
+        }
+      ],
       "minimum_commit": "5f167e5964f40a3a62d4cadb911543ce0f15b49b",
       "minimum_commit_reason": "Merged PR #274: single-GPU decode pipeline and expert-cache reserve fix",
       "cli_path": "c/coli",
       "engine_path": "c/colibri",
       "setup_path": "c/setup.sh",
       "build_cwd": "c",
-      "build_argv": ["make", "CUDA=1", "CUDA_ARCH=native"],
+      "build_argv": ["make", "colibri", "CUDA=1", "CUDA_ARCH=native"],
+      "validation_steps": [
+        {
+          "label": "Run upstream Colibri tests",
+          "argv": ["make", "test"],
+          "timeout": 1800
+        },
+        {
+          "label": "Validate Colibri CUDA kernels",
+          "argv": ["make", "cuda-test", "CUDA=1", "CUDA_ARCH=native"],
+          "timeout": 900
+        }
+      ],
       "plan_args": ["plan", "--auto-tier", "--gpu", "0", "--json"],
       "doctor_args": ["doctor", "--auto-tier", "--gpu", "0", "--json"],
       "serve_args": [
@@ -97,6 +149,27 @@
       "default_port": 8643,
       "model_id": "hy3-colibri",
       "weight_repo": "UnderstandLing/Hy3-colibri-int4",
+      "model_variants": [
+        {
+          "id": "int4-int8-mtp",
+          "label": "Hy3 int4 + int8 MTP",
+          "repository": "UnderstandLing/Hy3-colibri-int4",
+          "revision": "2aed3aedf043f81d8c03c0e98c27d1e61b29981d",
+          "directory": "UnderstandLing--Hy3-colibri-int4",
+          "recommended": true,
+          "model_type": "hy_v3",
+          "main_shards": 101,
+          "mtp_shards": 6,
+          "weight_bytes": 152446149696,
+          "required_files": [
+            "config.json",
+            "generation_config.json",
+            "tokenizer.json",
+            "tokenizer_config.json"
+          ],
+          "quality_note": "The sole pre-converted container supported by the official Colibri-Hy3 fork."
+        }
+      ],
       "minimum_commit": "08f8439ebfe1994b607aed6adf857c80e8894c4c",
       "minimum_commit_reason": "Official main revision inspected for the native Hy3 provider contract",
       "cli_path": "c/coli",
@@ -104,6 +177,24 @@
       "setup_path": "c/setup.sh",
       "build_cwd": "c",
       "build_argv": ["make", "hy3", "CUDA=1", "IOURING=1"],
+      "validation_steps": [
+        {
+          "label": "Run upstream Colibri-Hy3 tests",
+          "argv": ["make", "test"],
+          "timeout": 1800
+        },
+        {
+          "label": "Validate Colibri-Hy3 CUDA kernels",
+          "argv": ["make", "cuda-test", "CUDA=1", "CUDA_ARCH=native"],
+          "timeout": 900
+        },
+        {
+          "label": "Validate the Hy3 teacher-forcing oracle",
+          "argv": ["env", "SNAP=./hy3_tiny", "TF=1", "./hy3", "64", "16", "16"],
+          "timeout": 300,
+          "expected_output_contains": "32/32 positions"
+        }
+      ],
       "plan_args": [
         "plan",
         "--ram",
@@ -135,7 +226,7 @@
         "--host",
         "127.0.0.1"
       ],
-      "supports_tools": null,
+      "supports_tools": true,
       "model_type": "llm",
       "default_profile": "rtx5090-high-ram",
       "profiles": {
@@ -147,6 +238,7 @@
           "ctx": "4096",
           "gpu": "0",
           "vram": "0",
+          "verbose": true,
           "policy": "balanced",
           "env": {
             "COLI_CUDA": "1",

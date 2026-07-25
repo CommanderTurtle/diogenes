@@ -102,6 +102,8 @@ def build_colibri_serve_argv(
     env["CACHE_ROUTE"] = "1" if _enabled(
         settings, "cache_route", env.get("CACHE_ROUTE") == "1"
     ) else "0"
+    # Current upstream dev quarantines this knob after issue #303: every
+    # measured non-zero setting was slower or incoherent and broke MTP.
     env["EXPERT_BUDGET"] = "0"
     io_pipeline = str(settings.get("io_pipeline", env.get("PIPE", "0")))
     if io_pipeline not in {"0", "1", "2"}:
@@ -247,7 +249,9 @@ def build_colibri_serve_argv(
                     ),
                 ]
             )
-    if provider.family == "hy3" and _enabled(settings, "verbose", False):
+    if provider.family == "hy3" and _enabled(
+        settings, "verbose", bool(profile.get("verbose"))
+    ):
         argv.append("--verbose")
     argv.extend(
         [

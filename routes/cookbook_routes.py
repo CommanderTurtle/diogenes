@@ -62,7 +62,7 @@ from routes.cookbook_helpers import (
     _normalize_llama_cpp_python_cache_types,
     ModelDownloadRequest, ServeRequest,
 )
-from src.ulysses_colibri import collect_colibri_providers
+from src.ulysses_colibri import collect_colibri_providers, default_colibri_catalog
 from src.ulysses_colibri_command import (
     ColibriCommandError,
     validate_colibri_serve_command,
@@ -76,6 +76,21 @@ _HF_TOKEN_STATUS_SNIPPET = (
     'Add one in Odysseus Cookbook -> Settings -> HuggingFace Token."; '
     'fi'
 )
+
+
+def _serve_supports_tools(runtime_id: str | None, command: str) -> bool | None:
+    """Prefer a registered engine capability, then preserve the CLI fallback."""
+    capability = next(
+        (
+            provider.supports_tools
+            for provider in default_colibri_catalog()
+            if provider.provider_id == runtime_id
+        ),
+        None,
+    )
+    if capability is not None:
+        return capability
+    return True if "--enable-auto-tool-choice" in command else None
 
 
 def _append_mlx_image_server_script(runner_lines: list[str]) -> None:
@@ -1800,12 +1815,7 @@ def setup_cookbook_routes() -> APIRouter:
         # If the serve command opts models into OpenAI tool-calling, record it so
         # agent_loop trusts emitted tool_calls instead of the name heuristic.
         is_ollama_endpoint = "ollama" in (req.cmd or "").lower()
-        supports_tools = (
-            True
-            if req.runtime_id == "colibri.glm"
-            or "--enable-auto-tool-choice" in req.cmd
-            else None
-        )
+        supports_tools = _serve_supports_tools(req.runtime_id, req.cmd or "")
         # Pin the model the user launched for every Cookbook-created LLM
         # endpoint, not just Ollama. Some OpenAI-compatible servers report a
         # deployment alias from /v1/models, and a stale server can answer on the

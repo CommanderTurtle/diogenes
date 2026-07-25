@@ -42,6 +42,7 @@ def test_hy3_profile_uses_separate_binary_model_and_port() -> None:
     assert argv[argv.index("--vram") + 1] == "0"
     assert argv[argv.index("--port") + 1] == "8643"
     assert env["PIPE"] == "2"
+    assert "--verbose" in argv
 
 
 def test_command_round_trip_rejects_manual_mutation() -> None:

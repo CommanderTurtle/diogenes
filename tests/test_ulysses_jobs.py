@@ -42,6 +42,10 @@ def test_plan_persists_only_a_confirmation_hash(tmp_path: Path) -> None:
     assert "confirmation_hash" in persisted
     assert "confirmation_hash" not in plan
     assert plan["status"] == "planned"
+    assert (tmp_path / "jobs").stat().st_mode & 0o777 == 0o700
+    assert (
+        tmp_path / "jobs" / f"{plan['id']}.json"
+    ).stat().st_mode & 0o777 == 0o600
 
 
 def test_execute_requires_both_token_and_phrase(tmp_path: Path) -> None:
@@ -105,6 +109,7 @@ def test_worker_checkpoints_steps_and_releases_lock(tmp_path: Path) -> None:
     assert "gateway active" in Path(completed["log_path"]).read_text(
         encoding="utf-8"
     )
+    assert Path(completed["log_path"]).stat().st_mode & 0o777 == 0o600
 
 
 def test_shell_steps_are_rejected(tmp_path: Path) -> None:
@@ -117,6 +122,68 @@ def test_shell_steps_are_rejected(tmp_path: Path) -> None:
             confirmation_phrase="UNSAFE",
             steps=[{"argv": ["echo", "no"], "shell": True}],
         )
+
+
+def test_expected_output_is_a_hard_validation_gate(tmp_path: Path) -> None:
+    store = RuntimeJobStore(tmp_path)
+    plan, token = store.create_plan(
+        runtime_id="colibri.hy3",
+        action="build",
+        summary="Validate Hy3 oracle",
+        confirmation_phrase="BUILD",
+        steps=[
+            {
+                "label": "Oracle",
+                "argv": ["./hy3"],
+                "expected_output_contains": "32/32 positions",
+            }
+        ],
+    )
+    store.execute(
+        plan["id"],
+        confirmation_token=token,
+        confirmation_phrase="BUILD",
+        launcher=lambda _argv, _cwd: os.getpid(),
+    )
+
+    def fake_run(argv, **_kwargs):
+        return subprocess.CompletedProcess(argv, 0, "31/32 positions\n", "")
+
+    assert run_persisted_job(tmp_path, plan["id"], run=fake_run) == 65
+    completed = store.get(plan["id"], reconcile=False)
+    assert completed["status"] == "failed"
+    assert completed["step_results"][0]["output_matched"] is False
+
+
+def test_expected_output_match_succeeds(tmp_path: Path) -> None:
+    store = RuntimeJobStore(tmp_path)
+    plan, token = store.create_plan(
+        runtime_id="colibri.hy3",
+        action="build",
+        summary="Validate Hy3 oracle",
+        confirmation_phrase="BUILD",
+        steps=[
+            {
+                "label": "Oracle",
+                "argv": ["./hy3"],
+                "expected_output_contains": "32/32 positions",
+            }
+        ],
+    )
+    store.execute(
+        plan["id"],
+        confirmation_token=token,
+        confirmation_phrase="BUILD",
+        launcher=lambda _argv, _cwd: os.getpid(),
+    )
+
+    def fake_run(argv, **_kwargs):
+        return subprocess.CompletedProcess(argv, 0, "32/32 positions\n", "")
+
+    assert run_persisted_job(tmp_path, plan["id"], run=fake_run) == 0
+    completed = store.get(plan["id"], reconcile=False)
+    assert completed["status"] == "succeeded"
+    assert completed["step_results"][0]["output_matched"] is True
 
 
 def test_job_logs_are_tailed_inside_the_state_root(tmp_path: Path) -> None:

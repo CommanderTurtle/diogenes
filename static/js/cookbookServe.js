@@ -53,7 +53,9 @@ const _CACHED_MODELS_SCAN_TTL = 6 * 3600 * 1000;
 
 function _colibriRuntimeIdForModel(model) {
   const identity = `${model?.repo_id || ''} ${model?.name || ''} ${model?.path || ''}`.toLowerCase();
-  if (identity.includes('mateogrgic/glm-5.2-colibri-int4-with-int8-mtp')
+  if (identity.includes('mastouri/glm-5.2-colibri-int4-g64-with-int8-mtp')
+      || identity.includes('mastouri--glm-5.2-colibri-int4-g64-with-int8-mtp')
+      || identity.includes('mateogrgic/glm-5.2-colibri-int4-with-int8-mtp')
       || identity.includes('mateogrgic--glm-5.2-colibri-int4-with-int8-mtp')) return 'colibri.glm';
   if (identity.includes('understandling/hy3-colibri-int4')
       || identity.includes('understandling--hy3-colibri-int4')) return 'colibri.hy3';
@@ -2514,7 +2516,7 @@ function _rerenderCachedModels() {
         setChecked('colibri_cache_route', false);
         setChecked('colibri_cuda_mtp', false);
         setChecked('colibri_tool_salvage', false);
-        setChecked('colibri_verbose', false);
+        setChecked('colibri_verbose', !!profile.verbose);
         const activeGpus = String(profile.gpu ?? '0').split(',').map(value => value.trim()).filter(Boolean);
         panel.querySelectorAll('.cookbook-gpu-btn').forEach(button => {
           button.classList.toggle('active', activeGpus.includes(button.dataset.gpu));

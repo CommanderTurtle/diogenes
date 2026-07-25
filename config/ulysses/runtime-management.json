@@ -12,6 +12,8 @@
       "compose": "docker-compose.yaml",
       "env_files": [".env"],
       "git_update": true,
+      "source_url": "https://github.com/firecrawl/firecrawl",
+      "source_branch": "main",
       "build_on_update": true,
       "ports": [3002]
     },
@@ -42,18 +44,6 @@
       "ports": [8100]
     },
     {
-      "id": "camofox.mcp.compose",
-      "label": "Camofox MCP container",
-      "category": "docker",
-      "root": "${ULYSSES_MICROSERVICES_ROOT}/camofox-mcp",
-      "compose": "docker-compose.yml",
-      "env_files": [],
-      "git_update": true,
-      "build_on_update": false,
-      "ports": [9377],
-      "optional": true
-    },
-    {
       "id": "camofox.browser",
       "label": "Camofox browser",
       "category": "javascript",
@@ -65,6 +55,8 @@
       "launch": ["bun", "start"],
       "tmux_session": "ulysses-camofox-browser",
       "git_update": true,
+      "source_url": "https://github.com/jo-inc/camofox-browser",
+      "source_branch": "master",
       "build_script": "build",
       "ports": [9377]
     },
@@ -96,6 +88,8 @@
       "package_json": "package.json",
       "env_files": [],
       "git_update": true,
+      "source_url": "https://github.com/CommanderTurtle/context-mode.git",
+      "source_branch": "main",
       "build_script": "build",
       "hermes_mcp": true,
       "ports": []
@@ -111,6 +105,8 @@
       "package_json": "package.json",
       "env_files": [],
       "git_update": true,
+      "source_url": "https://github.com/redf0x1/camofox-mcp.git",
+      "source_branch": "main",
       "build_script": "build",
       "hermes_mcp": true,
       "ports": []
@@ -126,6 +122,8 @@
       "package_json": "package.json",
       "env_files": [],
       "git_update": true,
+      "source_url": "https://github.com/firecrawl/cli",
+      "source_branch": "main",
       "build_script": "build",
       "ports": []
     },

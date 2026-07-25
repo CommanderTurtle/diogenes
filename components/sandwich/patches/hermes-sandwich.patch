@@ -498,7 +498,7 @@ index d00491f6e..83269f74a 100644
 - *   used whenever the agent makes a browser call without a cloud provider
 - *   configured, so it must already be installed before any session starts.
 - *   Its postinstall is also small.
-+ * - ``agent-browser`` is NOT eager in the Bun-sovereign deployment profile.
++ * - ``agent-browser`` is NOT eager in the Bun-only deployment profile.
 + *   Browser calls are routed to the separately managed Camofox MCP/server, so
 + *   installing another browser backend during every Hermes update is both
 + *   redundant and an unwanted lifecycle-script surface.

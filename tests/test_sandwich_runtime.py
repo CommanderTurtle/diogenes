@@ -8,6 +8,7 @@ from src.sandwich_runtime import (
     SANDWICH_SCHEMA,
     SandwichLayout,
     SandwichManifestError,
+    collect_sandwich_status,
     load_sandwich_manifest,
     observe_sandwich_installation,
     sandwich_operation_spec,
@@ -129,6 +130,7 @@ def test_sandwich_install_is_detected_without_a_clone(tmp_path):
     assert observed.installed is True
     assert observed.source_root == component
     assert observed.missing_commands == ()
+    assert observed.mismatched_commands == ()
 
 
 def test_partial_wrapper_set_is_not_reported_installed(tmp_path):
@@ -141,3 +143,53 @@ def test_partial_wrapper_set_is_not_reported_installed(tmp_path):
 
     assert observed.installed is False
     assert observed.missing_commands == ("pnpm", "yarn")
+
+
+def test_mixed_system_node_is_not_reported_as_sandwich(tmp_path):
+    component = tmp_path / "sandwich-source"
+    component_bin = component / "bin"
+    path_bin = tmp_path / "path-bin"
+    component_bin.mkdir(parents=True)
+    path_bin.mkdir()
+    for command in ("sandwich", "npm", "npx", "pnpm", "yarn"):
+        executable = component_bin / command
+        executable.write_text("#!/bin/sh\n", encoding="utf-8")
+        executable.chmod(0o755)
+        (path_bin / command).symlink_to(executable)
+    for command in ("bun", "node"):
+        executable = path_bin / command
+        executable.write_text("#!/bin/sh\n", encoding="utf-8")
+        executable.chmod(0o755)
+
+    observed = observe_sandwich_installation(search_path=str(path_bin))
+
+    assert observed.installed is False
+    assert observed.missing_commands == ()
+    assert observed.mismatched_commands == ("node",)
+
+
+def test_status_requires_expected_services_location(tmp_path):
+    component = tmp_path / "external-sandwich"
+    component_bin = component / "bin"
+    path_bin = tmp_path / "path-bin"
+    component_bin.mkdir(parents=True)
+    path_bin.mkdir()
+    for command in ("sandwich", "node", "npm", "npx", "pnpm", "yarn"):
+        executable = component_bin / command
+        executable.write_text("#!/bin/sh\n", encoding="utf-8")
+        executable.chmod(0o755)
+        (path_bin / command).symlink_to(executable)
+    bun = path_bin / "bun"
+    bun.write_text("#!/bin/sh\n", encoding="utf-8")
+    bun.chmod(0o755)
+
+    status = collect_sandwich_status(
+        repository_root=REPOSITORY_ROOT,
+        home=tmp_path,
+        microservices_root=tmp_path / "Hermes",
+        search_path=str(path_bin),
+    )
+
+    assert status["installed"] is True
+    assert status["location_current"] is False
+    assert status["ready"] is False

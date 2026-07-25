@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
+import re
+import shutil
 import socket
 import subprocess
 import time
@@ -46,6 +49,7 @@ class ColibriProvider:
     port: int
     model_id: str
     weight_repo: str
+    model_variants: tuple[dict[str, Any], ...]
     minimum_commit: str | None
     minimum_commit_reason: str
     cli_path: Path
@@ -53,6 +57,7 @@ class ColibriProvider:
     setup_path: Path
     build_cwd: Path
     build_argv: tuple[str, ...]
+    validation_steps: tuple[dict[str, Any], ...]
     plan_args: tuple[str, ...]
     doctor_args: tuple[str, ...]
     serve_args: tuple[str, ...]
@@ -140,6 +145,117 @@ def load_colibri_catalog(
             isinstance(item, str) and item for item in build_argv
         ):
             raise ColibriCatalogError("Colibri build argv is invalid")
+        model_variants = raw.get("model_variants")
+        if not isinstance(model_variants, list) or not model_variants:
+            raise ColibriCatalogError("Colibri model variants are required")
+        normalized_variants: list[dict[str, Any]] = []
+        variant_ids: set[str] = set()
+        for variant in model_variants:
+            if not isinstance(variant, dict):
+                raise ColibriCatalogError("Colibri model variant must be an object")
+            variant_id = str(variant.get("id") or "")
+            directory = str(variant.get("directory") or "")
+            revision = str(variant.get("revision") or "")
+            required_files = variant.get("required_files")
+            if (
+                not variant_id
+                or variant_id in variant_ids
+                or not re.fullmatch(r"[a-z0-9][a-z0-9.-]*", variant_id)
+            ):
+                raise ColibriCatalogError("Colibri model variant id is invalid")
+            if (
+                not directory
+                or Path(directory).name != directory
+                or directory in {".", ".."}
+            ):
+                raise ColibriCatalogError("Colibri model variant directory is invalid")
+            if not re.fullmatch(r"[0-9a-f]{40}", revision):
+                raise ColibriCatalogError("Colibri model revision must be pinned")
+            if (
+                not isinstance(required_files, list)
+                or not required_files
+                or not all(
+                    isinstance(item, str)
+                    and item
+                    and not Path(item).is_absolute()
+                    and ".." not in Path(item).parts
+                    for item in required_files
+                )
+            ):
+                raise ColibriCatalogError("Colibri required model files are invalid")
+            try:
+                main_shards = int(variant["main_shards"])
+                mtp_shards = int(variant["mtp_shards"])
+                weight_bytes = int(variant["weight_bytes"])
+            except (KeyError, TypeError, ValueError) as exc:
+                raise ColibriCatalogError(
+                    "Colibri model layout is invalid"
+                ) from exc
+            if main_shards < 1 or mtp_shards < 0 or weight_bytes < 1:
+                raise ColibriCatalogError("Colibri model layout is invalid")
+            variant_ids.add(variant_id)
+            normalized_variants.append(
+                {
+                    **variant,
+                    "id": variant_id,
+                    "directory": directory,
+                    "revision": revision,
+                    "main_shards": main_shards,
+                    "mtp_shards": mtp_shards,
+                    "weight_bytes": weight_bytes,
+                    "required_files": [str(item) for item in required_files],
+                    "recommended": bool(variant.get("recommended")),
+                }
+            )
+        recommended = [
+            item for item in normalized_variants if item["recommended"]
+        ]
+        if len(recommended) != 1:
+            raise ColibriCatalogError(
+                "exactly one Colibri model variant must be recommended"
+            )
+        if Path(str(raw["model_default"])).name != recommended[0]["directory"]:
+            raise ColibriCatalogError(
+                "Colibri model default must select the recommended variant"
+            )
+        if str(raw["weight_repo"]) != recommended[0].get("repository"):
+            raise ColibriCatalogError(
+                "Colibri weight repository must select the recommended variant"
+            )
+        validation_steps = raw.get("validation_steps")
+        if not isinstance(validation_steps, list) or not validation_steps:
+            raise ColibriCatalogError("Colibri validation steps are required")
+        normalized_validation: list[dict[str, Any]] = []
+        for step in validation_steps:
+            if not isinstance(step, dict):
+                raise ColibriCatalogError("Colibri validation step must be an object")
+            argv = step.get("argv")
+            if (
+                not str(step.get("label") or "")
+                or not isinstance(argv, list)
+                or not argv
+                or not all(isinstance(item, str) and item for item in argv)
+            ):
+                raise ColibriCatalogError("Colibri validation step is invalid")
+            timeout = int(step.get("timeout") or 300)
+            if not 1 <= timeout <= 7200:
+                raise ColibriCatalogError("Colibri validation timeout is invalid")
+            normalized_validation.append(
+                {
+                    "label": str(step["label"]),
+                    "argv": list(argv),
+                    "timeout": timeout,
+                    **(
+                        {
+                            "expected_output_contains": str(
+                                step["expected_output_contains"]
+                            )
+                        }
+                        if step.get("expected_output_contains")
+                        else {}
+                    ),
+                }
+            )
         providers.append(
             ColibriProvider(
                 provider_id=provider_id,
@@ -152,6 +268,7 @@ def load_colibri_catalog(
                 port=port,
                 model_id=str(raw["model_id"]),
                 weight_repo=str(raw["weight_repo"]),
+                model_variants=tuple(normalized_variants),
                 minimum_commit=(
                     str(raw["minimum_commit"]) if raw.get("minimum_commit") else None
                 ),
@@ -167,6 +284,7 @@ def load_colibri_catalog(
                     source_root, raw["build_cwd"], "build_cwd"
                 ),
                 build_argv=tuple(build_argv),
+                validation_steps=tuple(normalized_validation),
                 plan_args=tuple(str(item) for item in raw.get("plan_args") or []),
                 doctor_args=tuple(
                     str(item) for item in raw.get("doctor_args") or []
@@ -220,10 +338,39 @@ def _git(provider: ColibriProvider) -> dict[str, Any]:
             "origin": None,
             "dirty": False,
             "minimum_commit_present": False,
+            "upstream_commit": None,
+            "ahead": 0,
+            "behind": 0,
+            "current": False,
         }
     branch = _run(["git", "-C", str(root), "branch", "--show-current"])
     commit = _run(["git", "-C", str(root), "rev-parse", "HEAD"])
     origin = _run(["git", "-C", str(root), "remote", "get-url", "origin"])
+    upstream_commit = _run(
+        [
+            "git",
+            "-C",
+            str(root),
+            "rev-parse",
+            f"origin/{provider.source_branch}",
+        ]
+    )
+    ahead = 0
+    behind = 0
+    if upstream_commit:
+        counts = _run(
+            [
+                "git",
+                "-C",
+                str(root),
+                "rev-list",
+                "--left-right",
+                "--count",
+                f"HEAD...origin/{provider.source_branch}",
+            ]
+        ).split()
+        if len(counts) == 2 and all(item.isdigit() for item in counts):
+            ahead, behind = (int(item) for item in counts)
     dirty = bool(
         _run(
             [
@@ -265,7 +412,51 @@ def _git(provider: ColibriProvider) -> dict[str, Any]:
         "origin": origin or None,
         "dirty": dirty,
         "minimum_commit_present": minimum_present,
+        "upstream_commit": upstream_commit or None,
+        "ahead": ahead,
+        "behind": behind,
+        "current": bool(upstream_commit and ahead == 0 and behind == 0),
     }
+
+
+_MAIN_SHARD_RE = re.compile(r"^out-(\d{5})\.safetensors$")
+_MTP_SHARD_RE = re.compile(r"^out-mtp-(\d{5})\.safetensors$")
+
+
+def _download_revision(root: Path) -> str | None:
+    metadata = root / ".cache" / "huggingface" / "download" / "config.json.metadata"
+    try:
+        revision = metadata.read_text(encoding="utf-8").splitlines()[0].strip()
+    except (OSError, IndexError):
+        return None
+    return revision if re.fullmatch(r"[0-9a-f]{40}", revision) else None
+
+
+def _select_model_variant(
+    provider: ColibriProvider,
+    root: Path,
+    *,
+    revision: str | None,
+    main_count: int,
+    mtp_count: int,
+    weight_bytes: int,
+) -> tuple[dict[str, Any], str]:
+    for variant in provider.model_variants:
+        if revision and revision == variant["revision"]:
+            return variant, "huggingface-revision"
+    for variant in provider.model_variants:
+        if root.name == variant["directory"]:
+            return variant, "directory"
+    for variant in provider.model_variants:
+        if (
+            main_count == variant["main_shards"]
+            and mtp_count == variant["mtp_shards"]
+            and weight_bytes == variant["weight_bytes"]
+        ):
+            return variant, "weight-layout"
+    return next(
+        item for item in provider.model_variants if item["recommended"]
+    ), "provider-default"
 
 
 def _model(provider: ColibriProvider) -> dict[str, Any]:
@@ -278,6 +469,7 @@ def _model(provider: ColibriProvider) -> dict[str, Any]:
             "model_type": None,
             "shards": 0,
             "bytes": 0,
+            "variant": None,
         }
     config_path = root / "config.json"
     try:
@@ -285,6 +477,17 @@ def _model(provider: ColibriProvider) -> dict[str, Any]:
     except (OSError, json.JSONDecodeError):
         config = {}
     shards = list(root.glob("out-*.safetensors")) if root.is_dir() else []
+    main_shards = sorted(
+        path for path in shards if _MAIN_SHARD_RE.fullmatch(path.name)
+    )
+    mtp_shards = sorted(
+        path for path in shards if _MTP_SHARD_RE.fullmatch(path.name)
+    )
+    unknown_shards = sorted(
+        path
+        for path in shards
+        if path not in main_shards and path not in mtp_shards
+    )
     incomplete = (
         list((root / ".cache").rglob("*.incomplete"))
         + list((root / ".cache").rglob("*.lock"))
@@ -297,20 +500,180 @@ def _model(provider: ColibriProvider) -> dict[str, Any]:
             total_bytes += path.stat().st_size
         except OSError:
             continue
+    revision = _download_revision(root) if root.is_dir() else None
+    variant, detected_by = _select_model_variant(
+        provider,
+        root,
+        revision=revision,
+        main_count=len(main_shards),
+        mtp_count=len(mtp_shards),
+        weight_bytes=total_bytes,
+    )
+    expected_main = {
+        f"out-{index:05d}.safetensors"
+        for index in range(variant["main_shards"])
+    }
+    expected_mtp = {
+        f"out-mtp-{index:05d}.safetensors"
+        for index in range(variant["mtp_shards"])
+    }
+    actual_main = {path.name for path in main_shards}
+    actual_mtp = {path.name for path in mtp_shards}
+    missing_shards = sorted(
+        (expected_main - actual_main) | (expected_mtp - actual_mtp)
+    )
+    extra_shards = sorted(
+        (actual_main - expected_main)
+        | (actual_mtp - expected_mtp)
+        | {path.name for path in unknown_shards}
+    )
+    missing_files = [
+        name
+        for name in variant["required_files"]
+        if not (root / name).is_file()
+    ]
+    model_type = config.get("model_type") if isinstance(config, dict) else None
+    revision_matches = revision == variant["revision"]
+    layout_complete = (
+        not missing_shards
+        and not extra_shards
+        and not missing_files
+        and total_bytes == variant["weight_bytes"]
+        and model_type == variant["model_type"]
+        and revision_matches
+    )
     return {
         "configured": True,
         "path": str(root),
         "present": (
             root.is_dir()
             and config_path.is_file()
-            and bool(shards)
+            and layout_complete
             and not incomplete
         ),
-        "model_type": config.get("model_type") if isinstance(config, dict) else None,
+        "model_type": model_type,
         "shards": len(shards),
+        "main_shards": len(main_shards),
+        "mtp_shards": len(mtp_shards),
         "bytes": total_bytes,
         "download_markers": len(incomplete),
+        "download_revision": revision,
+        "revision_matches": revision_matches,
+        "layout_complete": layout_complete,
+        "missing_shards": len(missing_shards),
+        "missing_shard_sample": missing_shards[:8],
+        "extra_shards": len(extra_shards),
+        "extra_shard_sample": extra_shards[:8],
+        "missing_files": missing_files,
+        "expected_weight_bytes": variant["weight_bytes"],
+        "variant": {
+            "id": variant["id"],
+            "label": variant["label"],
+            "repository": variant["repository"],
+            "revision": variant["revision"],
+            "recommended": variant["recommended"],
+            "quality_note": variant.get("quality_note"),
+            "detected_by": detected_by,
+        },
     }
+
+
+def _sha256(path: Path) -> str | None:
+    try:
+        digest = hashlib.sha256()
+        with path.open("rb") as stream:
+            for block in iter(lambda: stream.read(1024 * 1024), b""):
+                digest.update(block)
+        return digest.hexdigest()
+    except OSError:
+        return None
+
+
+def resolve_cuda_compiler() -> Path | None:
+    configured = os.environ.get("CUDA_HOME")
+    candidates = (
+        [Path(configured) / "bin" / "nvcc"] if configured else []
+    )
+    candidates.append(Path("/usr/local/cuda/bin/nvcc"))
+    discovered = shutil.which("nvcc")
+    if discovered:
+        candidates.append(Path(discovered))
+    for candidate in candidates:
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return candidate.resolve()
+    return None
+
+
+def _build_prerequisites(provider: ColibriProvider) -> dict[str, Any]:
+    compiler = resolve_cuda_compiler()
+    make = shutil.which("make")
+    gcc = shutil.which("gcc")
+    requires_io_uring = "IOURING=1" in provider.build_argv
+    io_uring_candidates = (
+        Path("/usr/include/liburing.h"),
+        Path("/tmp/liburing-install/include/liburing.h"),
+    )
+    io_uring_header = next(
+        (path for path in io_uring_candidates if path.is_file()),
+        None,
+    )
+    missing = []
+    if not make:
+        missing.append("GNU Make")
+    if not gcc:
+        missing.append("GCC")
+    if compiler is None:
+        missing.append("CUDA compiler")
+    if requires_io_uring and io_uring_header is None:
+        missing.append("liburing development headers")
+    return {
+        "ready": not missing,
+        "missing": missing,
+        "make": make,
+        "gcc": gcc,
+        "nvcc": str(compiler) if compiler is not None else None,
+        "requires_io_uring": requires_io_uring,
+        "io_uring_header": (
+            str(io_uring_header) if io_uring_header is not None else None
+        ),
+    }
+
+
+def _validate_build_manifest(
+    provider: ColibriProvider,
+    manifest: object,
+    *,
+    source_commit: str | None,
+    build_config: str,
+) -> tuple[bool, list[str]]:
+    if not isinstance(manifest, dict):
+        return False, ["build manifest is missing or unreadable"]
+    expected = {
+        "schema_version": "ulysses.colibri-build.v1",
+        "provider_id": provider.provider_id,
+        "source_url": provider.source_url,
+        "source_branch": provider.source_branch,
+        "source_commit": source_commit,
+        "build_argv": list(provider.build_argv),
+        "validation_steps": list(provider.validation_steps),
+        "build_config": build_config or None,
+        "engine_path": str(provider.engine_path),
+        "cli_path": str(provider.cli_path),
+    }
+    reasons = [
+        f"{key} does not match"
+        for key, value in expected.items()
+        if manifest.get(key) != value
+    ]
+    engine_hash = _sha256(provider.engine_path)
+    cli_hash = _sha256(provider.cli_path)
+    if not engine_hash or manifest.get("engine_sha256") != engine_hash:
+        reasons.append("engine hash does not match")
+    if not cli_hash or manifest.get("cli_sha256") != cli_hash:
+        reasons.append("CLI hash does not match")
+    if not str(manifest.get("nvcc") or "").strip():
+        reasons.append("CUDA compiler provenance is missing")
+    return not reasons, reasons
 
 
 def _http_json(url: str, *, timeout: float = 1.5) -> dict[str, Any] | None:
@@ -363,7 +726,7 @@ def observe_colibri_provider(provider: ColibriProvider) -> dict[str, Any]:
         for item in (models or {}).get("data", [])
         if isinstance(item, dict) and item.get("id")
     ]
-    source_ready = bool(
+    provenance_ready = bool(
         git["present"]
         and git["origin"] == provider.source_url
         and git["branch"] == provider.source_branch
@@ -371,8 +734,17 @@ def observe_colibri_provider(provider: ColibriProvider) -> dict[str, Any]:
         and provider.cli_path.is_file()
         and provider.setup_path.is_file()
     )
+    source_ready = provenance_ready and bool(git["current"])
     built = provider.engine_path.is_file()
     cuda_built = built and ("CUDA=1" in build_config or "CUDA=ON" in build_config)
+    manifest_valid, manifest_reasons = _validate_build_manifest(
+        provider,
+        build_manifest,
+        source_commit=git.get("commit"),
+        build_config=build_config,
+    )
+    build_ready = built and cuda_built and manifest_valid
+    prerequisites = _build_prerequisites(provider)
     running = health is not None and provider.model_id in served_ids
     collision = port_open and health is None
     findings: list[dict[str, str]] = []
@@ -385,7 +757,7 @@ def observe_colibri_provider(provider: ColibriProvider) -> dict[str, Any]:
                 "evidence": str(provider.source_root),
             }
         )
-    elif not source_ready:
+    elif not provenance_ready:
         findings.append(
             {
                 "code": f"{provider.provider_id}.source_mismatch",
@@ -406,6 +778,18 @@ def observe_colibri_provider(provider: ColibriProvider) -> dict[str, Any]:
                 "evidence": str(provider.source_root),
             }
         )
+    if git["present"] and (git.get("ahead") or git.get("behind")):
+        findings.append(
+            {
+                "code": f"{provider.provider_id}.source_not_current",
+                "severity": "warning",
+                "summary": "Colibri source is not at its fetched official branch tip.",
+                "evidence": (
+                    f"ahead={git.get('ahead', 0)}; behind={git.get('behind', 0)}; "
+                    f"upstream={git.get('upstream_commit')}"
+                ),
+            }
+        )
     if model["configured"] and not model["present"]:
         findings.append(
             {
@@ -413,6 +797,37 @@ def observe_colibri_provider(provider: ColibriProvider) -> dict[str, Any]:
                 "severity": "error",
                 "summary": "Configured Colibri model is incomplete.",
                 "evidence": str(model["path"]),
+            }
+        )
+    if (
+        model["configured"]
+        and isinstance(model.get("variant"), dict)
+        and not model["variant"].get("recommended")
+    ):
+        findings.append(
+            {
+                "code": f"{provider.provider_id}.legacy_model_variant",
+                "severity": "warning",
+                "summary": "Configured Colibri model is an accepted legacy variant.",
+                "evidence": str(model["variant"].get("quality_note") or ""),
+            }
+        )
+    if built and not manifest_valid:
+        findings.append(
+            {
+                "code": f"{provider.provider_id}.build_unverified",
+                "severity": "error",
+                "summary": "Colibri build does not match a current Ulysses build manifest.",
+                "evidence": "; ".join(manifest_reasons),
+            }
+        )
+    if not prerequisites["ready"]:
+        findings.append(
+            {
+                "code": f"{provider.provider_id}.build_prerequisites",
+                "severity": "error",
+                "summary": "Native Colibri build prerequisites are incomplete.",
+                "evidence": ", ".join(prerequisites["missing"]),
             }
         )
     if collision:
@@ -443,6 +858,7 @@ def observe_colibri_provider(provider: ColibriProvider) -> dict[str, Any]:
             "engine_path": str(provider.engine_path),
             "built": built,
             "cuda_built": cuda_built,
+            "ready": build_ready,
             "build_config": build_config or None,
             "cwd": str(provider.build_cwd),
             "argv": list(provider.build_argv),
@@ -450,6 +866,10 @@ def observe_colibri_provider(provider: ColibriProvider) -> dict[str, Any]:
             "manifest": (
                 build_manifest if isinstance(build_manifest, dict) else None
             ),
+            "manifest_valid": manifest_valid,
+            "manifest_reasons": manifest_reasons,
+            "validation_steps": list(provider.validation_steps),
+            "prerequisites": prerequisites,
         },
         "model": model,
         "weight_repo": provider.weight_repo,
@@ -493,11 +913,18 @@ def observe_colibri_provider(provider: ColibriProvider) -> dict[str, Any]:
         "findings": findings,
         "actions": {
             "sync_available": not running and not git.get("dirty", False),
-            "build_available": source_ready and not git.get("dirty", False) and not running,
-            "doctor_available": source_ready and built and model["present"] and not running,
+            "build_available": (
+                source_ready
+                and prerequisites["ready"]
+                and not git.get("dirty", False)
+                and not running
+            ),
+            "doctor_available": (
+                source_ready and build_ready and model["present"] and not running
+            ),
             "start_available": (
                 source_ready
-                and cuda_built
+                and build_ready
                 and model["present"]
                 and not port_open
             ),

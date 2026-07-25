@@ -111,7 +111,7 @@
       "label": "Firecrawl CLI",
       "adapter": "native",
       "ownership": "external",
-      "source_root": "${ULYSSES_MICROSERVICES_ROOT}/firecrawl",
+      "source_root": "${ULYSSES_MICROSERVICES_ROOT}/firecrawl/cli",
       "dependencies": ["firecrawl.api", "sandwich.runtime"],
       "capabilities": ["web-scrape", "cli"]
     }

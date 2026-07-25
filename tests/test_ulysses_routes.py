@@ -84,6 +84,19 @@ class _FakeRuntimeControl:
         )
 
 
+class _FakeSandwichControl:
+    def create_plan(self, _report, *, action):
+        return (
+            {
+                "id": "f" * 32,
+                "runtime_id": "sandwich.runtime",
+                "action": action,
+                "status": "planned",
+            },
+            "sandwich-confirmation-token",
+        )
+
+
 def _client(
     monkeypatch,
     gate,
@@ -130,12 +143,21 @@ def _client(
             hermes_control_factory=_FakeHermesControl,
             colibri_control_factory=_FakeColibriControl,
             runtime_control_factory=_FakeRuntimeControl,
+            sandwich_control_factory=_FakeSandwichControl,
+            sandwich_collector=lambda: {
+                "schema_version": "ulysses.sandwich-status.v1",
+                "installed": True,
+                "ready": True,
+                "bundled_version": "0.2.0",
+                "installed_version": "0.2.0",
+                "source_root": "/home/example/Hermes/sandwich",
+            },
             managed_runtime_collector=lambda: {
                 "schema_version": "ulysses.managed-runtimes.v1",
                 "sandwich_installed": True,
                 "runtimes": [{"id": "firecrawl.api", "category": "docker"}],
             },
-            readiness_collector=lambda _topology, _chroma, _hermes: {
+            readiness_collector=lambda _topology, _chroma, _hermes, _colibri, _managed: {
                 "schema_version": "ulysses.switchover-readiness.v1",
                 "mode": "read_only",
                 "transition_ready": False,
@@ -171,6 +193,25 @@ def test_admin_receives_read_only_topology(monkeypatch):
     assert payload["schema_version"] == "ulysses.topology.v1"
     assert payload["javascript_runtime"]["id"] == "sandwich"
     assert "runtimes" in payload
+
+
+def test_admin_receives_sandwich_status_and_can_plan_doctor(monkeypatch):
+    client = _client(monkeypatch, lambda _request: None)
+
+    status = client.get("/api/ulysses/sandwich")
+    planned = client.post(
+        "/api/ulysses/sandwich/jobs/plan",
+        json={"action": "doctor"},
+    )
+
+    assert status.status_code == 200
+    assert status.json()["source_root"] == "/home/example/Hermes/sandwich"
+    assert planned.status_code == 200
+    assert planned.json()["job"]["runtime_id"] == "sandwich.runtime"
+    assert (
+        planned.json()["confirmation_token"]
+        == "sandwich-confirmation-token"
+    )
 
 
 def test_chroma_persistence_requires_admin(monkeypatch):

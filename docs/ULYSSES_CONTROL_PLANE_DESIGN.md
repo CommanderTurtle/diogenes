@@ -2,15 +2,15 @@
 
 ## Scope
 
-Ulysses adds one service-management surface to the existing Odysseus UI. It is
-Arcane-inspired in workflow, but manages more than Docker:
+Ulysses adds one service-management surface in the existing Odysseus UI and
+manages more than Docker:
 
 - Docker Compose projects and containers;
 - native and tmux-hosted processes;
 - systemd user services;
 - Bun/Sandwich tools and MCP servers;
 - Python/uv environments;
-- model endpoints such as vLLM and, later, Colibri;
+- model endpoints such as vLLM, Colibri GLM, and Colibri Hy3;
 - Chroma and other persistent services.
 
 It is intentionally not a scheduler, Kubernetes replacement, or arbitrary
@@ -96,11 +96,15 @@ starts with a sanitized environment, then applies its declared configuration:
 
 ## Configuration
 
-The UI can centralize configuration without immediately moving values:
+The UI edits each project's own registered configuration file without
+centralizing unrelated values:
 
 - existing `.env` files remain authoritative during observation;
-- imports show a redacted source-to-target diff;
-- secrets are encrypted/referenced and never returned to normal API/UI reads;
+- normal reads redact sensitive values and disable Save while placeholders are
+  present;
+- an explicit **Unredact & edit** action fetches the real registered document
+  for an authorized local administrator;
+- the backend refuses to persist literal `<redacted>` placeholders;
 - one typed configuration set can materialize to Compose, systemd, native,
   tmux, or MCP launch adapters;
 - all writes are previewable, backed up, atomic, and reversible.
@@ -117,8 +121,10 @@ Add a Services window/tool using the current Odysseus visual language:
 - Activity: durable queued/running/completed/failed actions with cancellation.
 - Recovery: backups, Chroma persistence, Python/CUDA doctor, rollback.
 
-Cookbook Dependencies remains the Python/system package catalog. Its
-JavaScript-related links deep-link into the Sandwich view.
+Cookbook Dependencies keeps its Python/system package catalog and adds an
+Extras group for separately installed Sandwich, Hermes, Colibri GLM, and
+Colibri Hy3 runtimes. Sandwich detection/install/doctor is available there;
+service and package operations live in the Services JavaScript view.
 
 The existing Cookbook Active view is the implementation precedent: it already
 tracks the vLLM task, readiness, PID, and tmux output. Ulysses generalizes that
@@ -139,13 +145,12 @@ The overview does not concatenate every terminal into one unreadable stream.
 It shows compact status/port/resource cards; selecting a service opens its own
 bounded logs and, where registered, its tmux console.
 
-The first implemented UI slice is read-only and uses the existing Odysseus
-window manager, icon rail, sidebar, theme variables, resizing, docking, and
-minimize behavior. Its Overview, Services, JavaScript, and Chroma views consume
-only `GET /api/ulysses/topology` and
-`GET /api/ulysses/chroma/persistence`. No lifecycle button is rendered until
-the corresponding runtime has an adoption record, typed action plan, durable
-job runner, and rollback contract.
+The Services UI uses the existing Odysseus window manager, icon rail, sidebar,
+theme variables, resizing, docking, and minimize behavior. Overview, Services,
+JavaScript, Chroma, Activity, and Recovery combine read-only observations with
+allowlisted lifecycle plans. A lifecycle button is enabled only when the
+runtime has an adoption record, typed action plan, durable job runner, and the
+required safety contract.
 
 ## Browser and search capabilities
 
@@ -182,8 +187,21 @@ job runner, and rollback contract.
 | SearXNG | Docker Compose | external |
 | Bifrost | Sandwich/native | external |
 | signal-cli | native service | external |
-| Sandwich | native user runtime | observed, then managed |
-| Colibri | native CUDA model endpoint | not installed; final integration |
+| Sandwich | native user runtime | managed exact component |
+| Colibri GLM | native CUDA model endpoint | source present; build/model verification gated |
+| Colibri Hy3 | separate native CUDA endpoint | source present; build/model verification gated |
+
+## Runtime update invariants
+
+- Git-backed runtimes have a registered official origin and branch.
+- Dirty worktrees, origin/branch mismatches, and non-fast-forward updates fail
+  closed.
+- JavaScript/native source sync is refused while the runtime is active.
+- Docker updates preserve the prior stopped/running state.
+- Dependencies start first and prevent unsafe dependent/dependency stops.
+- Firecrawl depends on SearXNG; Camofox MCP depends on Camofox.
+- All job directories are private (`0700`) and job records/logs are `0600`.
+- Job success may require a declared output oracle, not merely exit code zero.
 
 ## Chroma persistence gate
 

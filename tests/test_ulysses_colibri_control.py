@@ -21,6 +21,12 @@ def _report(*, present=True, ready=True, dirty=False, port_open=False):
                     "branch": "dev",
                 },
                 "endpoint": {"port_open": port_open},
+                "build": {
+                    "prerequisites": {
+                        "ready": True,
+                        "missing": [],
+                    }
+                },
             }
         ]
     }
@@ -60,7 +66,29 @@ def test_build_plan_uses_catalog_argv_and_manifest(tmp_path: Path) -> None:
     build = next(
         step for step in plan["steps"] if step["label"].startswith("Build native")
     )
-    assert build["argv"] == ["make", "CUDA=1", "CUDA_ARCH=native"]
+    assert build["argv"] == [
+        "make",
+        "colibri",
+        "CUDA=1",
+        "CUDA_ARCH=native",
+    ]
+    verify_cuda = next(
+        step for step in plan["steps"] if step["label"] == "Verify CUDA compiler"
+    )
+    assert verify_cuda["argv"][0].endswith("/nvcc")
+    assert any(
+        step["argv"][:2] == ["make", "cuda-test"]
+        for step in plan["steps"]
+    )
+    build_index = plan["steps"].index(build)
+    cuda_test_index = next(
+        index
+        for index, step in enumerate(plan["steps"])
+        if step["argv"][:2] == ["make", "cuda-test"]
+    )
+    assert build_index < cuda_test_index
+    assert plan["steps"][-2]["argv"] == build["argv"]
+    assert plan["steps"][-2]["label"].startswith("Reassert canonical")
     assert plan["steps"][-1]["argv"][-2:] == ["--provider", "colibri.glm"]
 
 

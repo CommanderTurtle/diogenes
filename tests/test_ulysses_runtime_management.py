@@ -37,6 +37,85 @@ def test_catalog_resolves_project_native_paths(tmp_path: Path) -> None:
     assert item["documents"][0]["path"] == (services / "example" / ".env").resolve()
 
 
+def test_git_updates_require_a_pinned_official_source(tmp_path: Path) -> None:
+    payload = {
+        "schema_version": manager.SCHEMA,
+        "runtimes": [
+            {
+                "id": "example.runtime",
+                "label": "Example",
+                "category": "javascript",
+                "root": "${ULYSSES_MICROSERVICES_ROOT}/example",
+                "git_update": True,
+                "ports": [],
+            }
+        ],
+    }
+    catalog = tmp_path / "catalog.json"
+    catalog.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(manager.RuntimeJobError, match="not pinned safely"):
+        manager.load_runtime_management(
+            catalog,
+            home=tmp_path,
+            services_root=tmp_path / "services",
+        )
+
+
+def test_catalog_rejects_unknown_variables_and_dependency_cycles(tmp_path: Path) -> None:
+    catalog = tmp_path / "catalog.json"
+    catalog.write_text(
+        json.dumps(
+            {
+                "schema_version": manager.SCHEMA,
+                "runtimes": [
+                    {
+                        "id": "first.runtime",
+                        "label": "First",
+                        "category": "native",
+                        "root": "${UNSUPPORTED_ROOT}/first",
+                        "ports": [],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(manager.RuntimeJobError, match="unsupported variables"):
+        manager.load_runtime_management(
+            catalog,
+            home=tmp_path,
+            services_root=tmp_path / "services",
+        )
+
+    payload = json.loads(catalog.read_text(encoding="utf-8"))
+    payload["runtimes"] = [
+        {
+            "id": "first.runtime",
+            "label": "First",
+            "category": "native",
+            "root": "${HOME}/first",
+            "depends_on": ["second.runtime"],
+            "ports": [],
+        },
+        {
+            "id": "second.runtime",
+            "label": "Second",
+            "category": "native",
+            "root": "${HOME}/second",
+            "depends_on": ["first.runtime"],
+            "ports": [],
+        },
+    ]
+    catalog.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(manager.RuntimeJobError, match="contain a cycle"):
+        manager.load_runtime_management(
+            catalog,
+            home=tmp_path,
+            services_root=tmp_path / "services",
+        )
+
+
 def test_env_document_is_redacted_until_explicit_reveal(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -140,6 +219,15 @@ def test_json_document_redacts_provider_keys_and_validates_before_save(
     assert "<redacted>" in document["content"]
     assert document["secret_keys"]
 
+    with pytest.raises(manager.RuntimeJobError, match="reveal the document"):
+        manager.save_runtime_document(
+            "example.gateway",
+            "config-0",
+            expected_sha256=manager._hash(config),
+            content=document["content"],
+            confirmation_phrase="SAVE example.gateway CONFIG",
+        )
+
     with pytest.raises(manager.RuntimeJobError, match="JSON configuration is invalid"):
         manager.save_runtime_document(
             "example.gateway",
@@ -179,17 +267,20 @@ def test_javascript_start_plan_requires_sandwich_and_uses_fixed_tmux(
         action="start",
     )
 
-    assert plan["steps"][0]["argv"] == [
+    assert plan["steps"][0]["argv"][:9] == [
         "tmux",
         "new-session",
         "-d",
+        "-E",
         "-s",
         "ulysses-example-browser",
         "-c",
         str(runtime),
-        "bun",
-        "start",
+        "/usr/bin/env",
     ]
+    assert plan["steps"][0]["argv"][-2:] == ["bun", "start"]
+    assert "/usr/bin/env" in plan["steps"][0]["argv"]
+    assert "VIRTUAL_ENV" in plan["steps"][0]["argv"]
 
 
 def test_native_update_plan_stops_installs_and_restarts_managed_session(
@@ -332,3 +423,142 @@ def test_stopped_compose_with_occupied_port_disables_start_and_update(
     assert runtime["port_collision"] is True
     assert runtime["actions"]["start"] is False
     assert runtime["actions"]["update"] is False
+
+
+def test_compose_update_preserves_stopped_state(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "compose"
+    root.mkdir()
+    compose_path = root / "compose.yml"
+    compose_path.write_text("services: {}\n", encoding="utf-8")
+    item = {
+        "id": "example.compose",
+        "label": "Example Compose",
+        "category": "docker",
+        "root": root,
+        "documents": (),
+        "compose": compose_path,
+        "ports": [],
+    }
+    monkeypatch.setattr(
+        manager,
+        "collect_managed_runtimes",
+        lambda: {
+            "runtimes": [
+                {
+                    "id": "example.compose",
+                    "status": "stopped",
+                    "dependencies_ready": True,
+                    "active_dependents": [],
+                }
+            ]
+        },
+    )
+
+    steps = manager.ManagedRuntimeControl(tmp_path / "state")._steps(
+        item,
+        "update",
+    )
+
+    assert [step["label"] for step in steps] == ["Pull Compose images"]
+    assert not any("up" in step["argv"] for step in steps)
+
+
+def test_dependency_contract_blocks_start_and_active_dependent_blocks_stop(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "compose"
+    root.mkdir()
+    compose_path = root / "compose.yml"
+    compose_path.write_text("services: {}\n", encoding="utf-8")
+    item = {
+        "id": "firecrawl.api",
+        "label": "Firecrawl",
+        "category": "docker",
+        "root": root,
+        "documents": (),
+        "compose": compose_path,
+        "depends_on": ["searxng.search"],
+        "ports": [],
+    }
+    control = manager.ManagedRuntimeControl(tmp_path / "state")
+    monkeypatch.setattr(
+        manager,
+        "collect_managed_runtimes",
+        lambda: {
+            "runtimes": [
+                {
+                    "id": "firecrawl.api",
+                    "status": "stopped",
+                    "dependencies_ready": False,
+                    "dependencies_unavailable": ["searxng.search"],
+                    "active_dependents": [],
+                }
+            ]
+        },
+    )
+    with pytest.raises(manager.RuntimeJobError, match="searxng.search"):
+        control._steps(item, "start")
+
+    monkeypatch.setattr(
+        manager,
+        "collect_managed_runtimes",
+        lambda: {
+            "runtimes": [
+                {
+                    "id": "searxng.search",
+                    "status": "running",
+                    "dependencies_ready": True,
+                    "dependencies_unavailable": [],
+                    "active_dependents": ["firecrawl.api"],
+                }
+            ]
+        },
+    )
+    searx = {**item, "id": "searxng.search", "depends_on": []}
+    with pytest.raises(manager.RuntimeJobError, match="firecrawl.api"):
+        control._steps(searx, "stop")
+
+
+@pytest.mark.parametrize("action", ["sync", "update"])
+def test_external_active_runtime_rejects_source_mutation(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    action: str,
+) -> None:
+    root = tmp_path / "browser"
+    root.mkdir()
+    item = {
+        "id": "example.browser",
+        "label": "Example browser",
+        "category": "javascript",
+        "root": root,
+        "documents": (),
+        "git_update": True,
+        "source_url": "https://github.com/example/browser",
+        "source_branch": "main",
+        "ports": [9377],
+    }
+    monkeypatch.setattr(
+        manager,
+        "collect_managed_runtimes",
+        lambda: {
+            "runtimes": [
+                {
+                    "id": "example.browser",
+                    "status": "running",
+                    "dependencies_ready": True,
+                    "dependencies_unavailable": [],
+                    "active_dependents": [],
+                    "tmux": {"managed": False},
+                }
+            ]
+        },
+    )
+
+    message = "stop the active runtime" if action == "sync" else "active runtime is external"
+    with pytest.raises(manager.RuntimeJobError, match=message):
+        manager.ManagedRuntimeControl(tmp_path / "state")._steps(item, action)

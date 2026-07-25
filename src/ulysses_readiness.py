@@ -101,6 +101,78 @@ def _git_state(repository_root: Path) -> dict[str, Any]:
     return {"branch": branch or None, "upstream": upstream or None, "dirty": dirty}
 
 
+def _onnx_cuda_linkage(root: Path) -> dict[str, Any]:
+    candidates = sorted(
+        (root / ".venv" / "lib").glob(
+            "python*/site-packages/onnxruntime/capi/libonnxruntime_providers_cuda.so"
+        )
+    )
+    if not candidates:
+        return {
+            "provider": None,
+            "missing": [],
+            "cudnn": None,
+            "proposed_library_path": [],
+            "resolved_with_proposed_path": False,
+        }
+    provider = candidates[0]
+    site_packages = provider.parents[2]
+    cudnn_candidates = sorted(
+        (site_packages / "nvidia" / "cudnn" / "lib").glob("libcudnn.so.9")
+    )
+    proposed_paths = sorted(
+        path
+        for path in (site_packages / "nvidia").glob("*/lib")
+        if path.is_dir()
+    )
+    proposed_paths.extend(
+        path
+        for path in (
+            Path("/usr/local/cuda/targets/x86_64-linux/lib"),
+            Path("/usr/lib/wsl/lib"),
+        )
+        if path.is_dir()
+    )
+    proposed = list(dict.fromkeys(str(path) for path in proposed_paths))
+
+    def missing(env: dict[str, str] | None = None) -> list[str]:
+        try:
+            result = subprocess.run(
+                ["ldd", str(provider)],
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=20,
+                env=env,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return ["linker inspection unavailable"]
+        values = []
+        for line in ((result.stdout or "") + (result.stderr or "")).splitlines():
+            if "not found" in line:
+                values.append(line.split("=>", 1)[0].strip())
+        return sorted(set(values))
+
+    current_missing = missing()
+    proposed_env = {
+        **os.environ,
+        "LD_LIBRARY_PATH": ":".join(
+            [*proposed, os.environ.get("LD_LIBRARY_PATH", "")]
+        ).rstrip(":"),
+    }
+    proposed_missing = missing(proposed_env)
+    return {
+        "provider": str(provider),
+        "missing": current_missing,
+        "cudnn": str(cudnn_candidates[0]) if cudnn_candidates else None,
+        "proposed_library_path": proposed,
+        "missing_with_proposed_path": proposed_missing,
+        "resolved_with_proposed_path": bool(
+            current_missing and not proposed_missing
+        ),
+    }
+
+
 def _item(
     code: str,
     phase: str,
@@ -126,6 +198,8 @@ def collect_switchover_readiness(
     topology: dict[str, Any],
     chroma: dict[str, Any],
     hermes: dict[str, Any],
+    colibri: dict[str, Any] | None = None,
+    managed_runtimes: dict[str, Any] | None = None,
     *,
     repository_root: Path | None = None,
     production_root: Path | None = None,
@@ -141,6 +215,9 @@ def collect_switchover_readiness(
     git = _git_state(repo)
     candidate_env = _environment(repo)
     production_env = _environment(prod)
+    candidate_onnx = _onnx_cuda_linkage(repo)
+    production_onnx = _onnx_cuda_linkage(prod)
+    cuda_launcher = (repo / "scripts" / "with-wsl-cuda-libs.sh").resolve()
     items: list[dict[str, Any]] = []
 
     items.append(
@@ -223,6 +300,133 @@ def collect_switchover_readiness(
                 required=required,
             )
         )
+
+    javascript_runtime = topology.get("javascript_runtime") or {}
+    sandwich_ready = bool(
+        javascript_runtime.get("installed")
+        and not javascript_runtime.get("missing_commands")
+    )
+    items.append(
+        _item(
+            "services.sandwich.ready",
+            "services",
+            "Sandwich Bun compatibility runtime is complete",
+            "passed" if sandwich_ready else "blocked",
+            (
+                f"source={javascript_runtime.get('source_root')}; "
+                f"missing={javascript_runtime.get('missing_commands') or []}"
+            ),
+            "Install or repair Sandwich before managing JavaScript runtimes.",
+        )
+    )
+
+    for provider in (colibri or {}).get("providers") or []:
+        provider_id = str(provider.get("id") or "colibri.unknown")
+        label = str(provider.get("label") or provider_id)
+        source_ready = bool((provider.get("source") or {}).get("ready"))
+        build_ready = bool((provider.get("build") or {}).get("ready"))
+        model_ready = bool((provider.get("model") or {}).get("present"))
+        for suffix, title, ready, evidence, action in (
+            (
+                "source",
+                f"{label} source is current and pinned",
+                source_ready,
+                json.dumps(provider.get("source") or {}, sort_keys=True),
+                "Fast-forward the official provider source before building.",
+            ),
+            (
+                "build",
+                f"{label} CUDA build is verified",
+                build_ready,
+                json.dumps(
+                    {
+                        key: (provider.get("build") or {}).get(key)
+                        for key in (
+                            "built",
+                            "cuda_built",
+                            "manifest_valid",
+                            "manifest_reasons",
+                        )
+                    },
+                    sort_keys=True,
+                ),
+                "Run the confirmed Ulysses build plan and retain its manifest.",
+            ),
+            (
+                "model",
+                f"{label} model container is complete",
+                model_ready,
+                json.dumps(provider.get("model") or {}, sort_keys=True),
+                "Complete the pinned Hugging Face download and verify every shard.",
+            ),
+        ):
+            items.append(
+                _item(
+                    f"{provider_id}.{suffix}.ready",
+                    "models",
+                    title,
+                    "passed" if ready else "blocked",
+                    evidence,
+                    action,
+                )
+            )
+
+    managed = (managed_runtimes or {}).get("runtimes") or []
+    required_managed = [item for item in managed if not item.get("optional")]
+    missing_sources = [
+        str(item.get("id"))
+        for item in required_managed
+        if not item.get("source_exists")
+    ]
+    invalid_configs = [
+        str(item.get("id"))
+        for item in required_managed
+        if (
+            item.get("category") == "docker"
+            and not (item.get("compose") or {}).get("valid")
+        )
+        or (
+            item.get("category") == "javascript"
+            and item.get("package") is not None
+            and not (item.get("package") or {}).get("valid")
+        )
+    ]
+    items.append(
+        _item(
+            "services.managed.catalog",
+            "services",
+            "Required managed runtime projects are present and valid",
+            "passed" if not missing_sources and not invalid_configs else "blocked",
+            (
+                f"missing_sources={missing_sources}; "
+                f"invalid_configs={invalid_configs}"
+            ),
+            "Repair the declared native project roots or configuration before cutover.",
+        )
+    )
+
+    onnx_present = candidate_onnx["provider"] is not None
+    onnx_linked = onnx_present and not candidate_onnx["missing"]
+    items.append(
+        _item(
+            "python.onnx.cuda_linkage",
+            "python",
+            "ONNX Runtime CUDA libraries resolve without symlink patching",
+            "passed" if onnx_linked else "pending",
+            json.dumps(
+                {
+                    "candidate": candidate_onnx,
+                    "production": production_onnx,
+                },
+                sort_keys=True,
+            ),
+            (
+                "Use the detected venv cuDNN library directory in the candidate launch environment; "
+                "do not create unversioned compatibility symlinks."
+            ),
+            required=False,
+        )
+    )
 
     active_ports = sorted(
         {
@@ -347,10 +551,18 @@ def collect_switchover_readiness(
             "repository_root": str(repo),
             "git": git,
             "environment": candidate_env,
+            "onnx_cuda_linkage": candidate_onnx,
+            "cuda_launch_wrapper": (
+                str(cuda_launcher) if cuda_launcher.is_file() else None
+            ),
+            "cuda_launch_command": (
+                str(cuda_launcher) if cuda_launcher.is_file() else None
+            ),
         },
         "production": {
             "repository_root": str(prod),
             "environment": production_env,
+            "onnx_cuda_linkage": production_onnx,
             "active_ports": active_ports,
         },
         "counts": {

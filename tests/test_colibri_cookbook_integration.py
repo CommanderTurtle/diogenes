@@ -1,4 +1,5 @@
 from routes.cookbook_helpers import ServeRequest, _parse_serve_phase
+from routes.cookbook_routes import _serve_supports_tools
 
 
 def test_colibri_native_ready_line_marks_serve_ready() -> None:
@@ -11,7 +12,7 @@ def test_colibri_native_ready_line_marks_serve_ready() -> None:
 
 def test_serve_request_carries_structured_colibri_identity() -> None:
     request = ServeRequest(
-        repo_id="mateogrgic--GLM-5.2-colibri-int4-with-int8-mtp",
+        repo_id="mastouri--GLM-5.2-colibri-int4-g64-with-int8-mtp",
         cmd="/home/alienl/Odysseus/colibri/c/coli serve",
         runtime_id="colibri.glm",
         runtime_settings={"profile": "rtx5090-high-ram"},
@@ -20,3 +21,16 @@ def test_serve_request_carries_structured_colibri_identity() -> None:
 
     assert request.runtime_id == "colibri.glm"
     assert request.runtime_settings == {"profile": "rtx5090-high-ram"}
+
+
+def test_registered_colibri_capability_and_cli_fallback_are_preserved() -> None:
+    assert _serve_supports_tools("colibri.glm", "") is True
+    assert _serve_supports_tools("colibri.hy3", "") is True
+    assert (
+        _serve_supports_tools(
+            "vllm",
+            "vllm serve model --enable-auto-tool-choice --tool-call-parser qwen3",
+        )
+        is True
+    )
+    assert _serve_supports_tools("vllm", "vllm serve model") is None
