@@ -31,7 +31,7 @@ from core.platform_compat import (
     safe_chmod,
     which_tool,
 )
-from routes.shell_routes import TMUX_LOG_DIR
+from routes.shell_routes import TMUX_LOG_DIR, _normalize_ulysses_vllm_install
 from src.host_docker_access import (
     HOST_DOCKER_ACCESS_HINT,
     HOST_DOCKER_SOCKET_PATH,
@@ -2032,6 +2032,10 @@ def setup_cookbook_routes() -> APIRouter:
             local=not bool(req.remote_host),
             in_venv=sys.prefix != sys.base_prefix,
         )
+        req.cmd, managed_vllm_reconcile = _normalize_ulysses_vllm_install(
+            req.cmd,
+            remote_host=req.remote_host,
+        )
         is_pip_install = bool(req.cmd and "pip install" in req.cmd)
         if is_pip_install:
             # Keep big dependency wheel builds (vLLM, …) off the home filesystem's
@@ -2205,6 +2209,11 @@ def setup_cookbook_routes() -> APIRouter:
                 runner_lines.append(_safe_env_prefix(req.env_prefix))
             else:
                 runner_lines.append("deactivate 2>/dev/null; hash -r")
+            if managed_vllm_reconcile:
+                runner_lines.append(
+                    'echo "[ulysses] Replacing an unconstrained vLLM/Torch/Triton '
+                    'repair with the configured exact uv lock."'
+                )
             _append_venv_nvidia_library_path_lines(runner_lines, cmd=req.cmd)
             if "sglang.launch_server" in req.cmd or "mlx_lm.server" in req.cmd or re.search(r"\bvllm\s+serve\b", req.cmd or ""):
                 _append_openai_port_preflight_lines(runner_lines, cmd=req.cmd, expected_model=req.repo_id)

@@ -20,6 +20,7 @@ from routes.shell_routes import (
     _docker_row_status,
     _package_installed_from_probe,
     _package_pip_update_status,
+    _normalize_ulysses_vllm_install,
     _ulysses_vllm_lock_contract,
     _package_probe_script,
     _package_status_note,
@@ -418,6 +419,33 @@ class TestPackageProbeStatus:
         assert contract["python"] == str(python.absolute())
         assert contract["venv"] == str(venv.resolve())
         assert _ulysses_vllm_lock_contract(remote_host="gpu@example") is None
+
+        normalized, changed = _normalize_ulysses_vllm_install(
+            f"{python} -m pip install -U vllm transformers"
+        )
+        assert changed is True
+        assert normalized == (
+            f"uv pip install --python {python} -r {lock.resolve()} --strict"
+        )
+
+        torch_normalized, torch_changed = _normalize_ulysses_vllm_install(
+            f"{python} -m pip install -U torch"
+        )
+        assert torch_changed is True
+        assert torch_normalized == normalized
+
+        generic, generic_changed = _normalize_ulysses_vllm_install(
+            f"{python} -m pip install diffusers"
+        )
+        assert generic_changed is False
+        assert generic.endswith("pip install diffusers")
+
+        remote, remote_changed = _normalize_ulysses_vllm_install(
+            "python -m pip install -U vllm",
+            remote_host="gpu@example",
+        )
+        assert remote_changed is False
+        assert remote == "python -m pip install -U vllm"
 
     def test_llama_cpp_is_installed_when_native_llama_server_exists(self):
         probe = {

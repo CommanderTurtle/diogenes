@@ -87,6 +87,11 @@ _ULYSSES_VLLM_LOCK_PACKAGES = (
     "torchvision",
     "triton",
 )
+_ULYSSES_VLLM_MUTATION_RE = re.compile(
+    r"(?<![A-Za-z0-9_.-])(?:vllm|torch|torchaudio|torchvision|triton)"
+    r"(?=$|[\s<>=!~,\[\]])",
+    re.IGNORECASE,
+)
 
 
 def _ulysses_vllm_lock_contract(*, remote_host: str | None = None) -> dict | None:
@@ -141,6 +146,39 @@ def _ulysses_vllm_lock_contract(*, remote_host: str | None = None) -> dict | Non
         "versions": required,
         "exact": True,
     }
+
+
+def _normalize_ulysses_vllm_install(
+    command: str,
+    *,
+    remote_host: str | None = None,
+) -> tuple[str, bool]:
+    """Route local vLLM/Torch/Triton pip mutations through the exact uv lock.
+
+    This is the server-side guard for both current and stale browser bundles:
+    Dependencies, Reinstall, and crash-diagnosis actions all pass through the
+    same model-serve task endpoint.
+    """
+    contract = _ulysses_vllm_lock_contract(remote_host=remote_host)
+    if (
+        not contract
+        or "pip install" not in (command or "")
+        or not _ULYSSES_VLLM_MUTATION_RE.search(command)
+    ):
+        return command, False
+    managed = shlex.join(
+        [
+            "uv",
+            "pip",
+            "install",
+            "--python",
+            contract["python"],
+            "-r",
+            contract["lock_path"],
+            "--strict",
+        ]
+    )
+    return managed, managed != command
 
 
 def _ssh_base_argv(host: str, ssh_port: str | None) -> list[str]:
