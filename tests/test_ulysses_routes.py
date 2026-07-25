@@ -12,7 +12,7 @@ from src.ulysses_discovery import HostDiscoverySnapshot
 routes = pytest.importorskip("routes.ulysses_routes")
 
 
-def _client(monkeypatch, gate, *, chroma_report=None):
+def _client(monkeypatch, gate, *, chroma_report=None, hermes_report=None):
     monkeypatch.setattr(routes, "require_admin", gate)
     monkeypatch.setattr(
         routes,
@@ -35,6 +35,11 @@ def _client(monkeypatch, gate, *, chroma_report=None):
             chroma_collector=lambda: chroma_report
             or {
                 "schema_version": "ulysses.chroma-persistence.v1",
+                "mode": "read_only",
+            },
+            hermes_collector=lambda: hermes_report
+            or {
+                "schema_version": "ulysses.hermes-adoption.v1",
                 "mode": "read_only",
             },
         )
@@ -92,6 +97,30 @@ def test_admin_receives_read_only_chroma_persistence(monkeypatch):
         lambda _request: None,
         chroma_report=report,
     ).get("/api/ulysses/chroma/persistence")
+
+    assert response.status_code == 200
+    assert response.json() == report
+
+
+def test_hermes_adoption_requires_admin(monkeypatch):
+    def gate(_request: Request):
+        raise HTTPException(403, "Admin only")
+
+    response = _client(monkeypatch, gate).get("/api/ulysses/hermes/adoption")
+    assert response.status_code == 403
+
+
+def test_admin_receives_read_only_hermes_adoption(monkeypatch):
+    report = {
+        "schema_version": "ulysses.hermes-adoption.v1",
+        "mode": "read_only",
+        "status": "ready",
+    }
+    response = _client(
+        monkeypatch,
+        lambda _request: None,
+        hermes_report=report,
+    ).get("/api/ulysses/hermes/adoption")
 
     assert response.status_code == 200
     assert response.json() == report

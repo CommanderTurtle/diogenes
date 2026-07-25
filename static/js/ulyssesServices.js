@@ -17,6 +17,7 @@ let loading = false;
 let activeTab = 'overview';
 let topology = null;
 let chroma = null;
+let hermes = null;
 let loadError = '';
 let serviceQuery = '';
 let serviceScope = 'all';
@@ -98,6 +99,7 @@ function ensureModal() {
         <button type="button" data-tab="overview" role="tab">Overview</button>
         <button type="button" data-tab="services" role="tab">Services</button>
         <button type="button" data-tab="javascript" role="tab">JavaScript</button>
+        <button type="button" data-tab="hermes" role="tab">Hermes</button>
         <button type="button" data-tab="chroma" role="tab">Chroma</button>
       </div>
       <div class="uly-services-body">
@@ -215,7 +217,8 @@ function renderOverview() {
   const compose = Array.isArray(topology?.compose) ? topology.compose : [];
   const scoped = (scope) => runtimes.filter((item) => item.scope === scope).length;
   const issueCount = (Array.isArray(topology?.issues) ? topology.issues.length : 0)
-    + (Array.isArray(chroma?.findings) ? chroma.findings.length : 0);
+    + (Array.isArray(chroma?.findings) ? chroma.findings.length : 0)
+    + (Array.isArray(hermes?.findings) ? hermes.findings.length : 0);
 
   return `
     <div class="uly-services-observed">Observed ${esc(formatObservedAt(topology?.observed_at))}</div>
@@ -351,6 +354,76 @@ function collectionRow(collection) {
     </tr>`;
 }
 
+function renderHermes() {
+  if (!hermes) {
+    return '<div class="uly-empty-state">Hermes adoption observation is unavailable.</div>';
+  }
+  const install = hermes.install || {};
+  const gateway = hermes.gateway || {};
+  const ownership = hermes.ownership || {};
+  const servers = Array.isArray(hermes.mcp_servers) ? hermes.mcp_servers : [];
+  const findings = Array.isArray(hermes.findings) ? hermes.findings : [];
+  const preview = hermes.adoption_preview || {};
+  const actions = Array.isArray(hermes.lifecycle_actions) ? hermes.lifecycle_actions : [];
+  return `
+    <section class="uly-services-panel">
+      <div class="uly-panel-heading">
+        <div>
+          <h3>Native Hermes installation</h3>
+          <p>Observed in place; Ulysses never relocates Hermes into its own virtual environment.</p>
+        </div>
+        ${statusBadge(hermes.status)}
+      </div>
+      <dl class="uly-runtime-facts">
+        <div><dt>Version</dt><dd>${esc(install.version || 'Unknown')}</dd></div>
+        <div><dt>Source</dt><dd><code>${esc(install.source_root || 'Not detected')}</code></dd></div>
+        <div><dt>Python environment</dt><dd><code>${esc(install.virtual_environment || 'Not detected')}</code></dd></div>
+        <div><dt>Revision</dt><dd><code>${esc(install.commit || 'Unknown')}</code></dd></div>
+        <div><dt>Gateway</dt><dd>${esc(gateway.unit || 'Unknown')} · ${esc(gateway.active_state || 'unknown')}/${esc(gateway.sub_state || 'unknown')}</dd></div>
+        <div><dt>Registry owner</dt><dd><span class="uly-scope-pill scope-hermes_agent">${esc(scopeLabel(ownership.scope))}</span> ${esc(ownership.agent_registry || 'separate')}</dd></div>
+      </dl>
+      ${findings.map((finding) => `
+        <div class="uly-finding severity-${esc(finding.severity)}">
+          <strong>${esc(finding.summary)}</strong>
+          <code>${esc(finding.code)}</code>
+          <p>${esc(finding.evidence)}</p>
+        </div>`).join('')}
+    </section>
+    <section class="uly-services-panel">
+      <div class="uly-panel-heading">
+        <div>
+          <h3>Hermes MCP registry</h3>
+          <p>Command shape is visible; environment values and credential arguments are always redacted.</p>
+        </div>
+        <span class="uly-scope-pill scope-hermes_agent">Hermes agent</span>
+      </div>
+      <div class="uly-command-grid">
+        ${servers.map((server) => `
+          <div>
+            <strong>${esc(server.name)} ${statusBadge(server.enabled ? 'ready' : 'stopped')}</strong>
+            <code>${esc([server.command, ...(server.args || [])].join(' '))}</code>
+            <small>${esc(server.transport)} · env keys: ${esc((server.environment_keys || []).join(', ') || 'none')}</small>
+          </div>`).join('') || '<div class="uly-empty-state compact">No Hermes MCP servers are registered.</div>'}
+      </div>
+    </section>
+    <section class="uly-services-panel uly-migration-plan">
+      <div class="uly-panel-heading">
+        <div><h3>Adoption preview</h3><p>Registration adds a management record; it does not merge agents or rewrite Hermes configuration.</p></div>
+        <span class="uly-services-badge status-warn">human-gated</span>
+      </div>
+      <div class="uly-plan-columns">
+        <div><strong>Preservation</strong><ol>
+          <li>Native install: ${preview.preserves_native_install ? 'preserved' : 'not verified'}</li>
+          <li>Hermes MCP registry: ${preview.preserves_agent_registry ? 'preserved' : 'not verified'}</li>
+          <li>Backup required: ${preview.backup_required ? 'yes' : 'unknown'}</li>
+        </ol></div>
+        <div><strong>Gates</strong><ol>${(preview.gates || []).map((item) => `<li>${esc(item)}</li>`).join('')}</ol></div>
+        <div><strong>Lifecycle</strong><ol>${actions.map((action) => `<li><strong>${esc(action.label)}</strong> — ${esc(action.reason)}</li>`).join('')}</ol></div>
+      </div>
+      <button type="button" disabled title="Adoption apply requires durable jobs and explicit confirmation">Adoption unavailable — durable job runner required</button>
+    </section>`;
+}
+
 function renderChroma() {
   if (!chroma) {
     return '<div class="uly-empty-state">Chroma persistence observation is unavailable.</div>';
@@ -446,9 +519,11 @@ function render() {
   }
   root.innerHTML = activeTab === 'javascript'
     ? renderJavaScript()
-    : activeTab === 'chroma'
-      ? renderChroma()
-      : renderOverview();
+    : activeTab === 'hermes'
+      ? renderHermes()
+      : activeTab === 'chroma'
+        ? renderChroma()
+        : renderOverview();
   root.querySelector('[data-open-chroma]')?.addEventListener('click', () => {
     activeTab = 'chroma';
     render();
@@ -468,13 +543,15 @@ async function load() {
     if (!response.ok) throw new Error(`${path} returned HTTP ${response.status}`);
     return response.json();
   };
-  const [topologyResult, chromaResult] = await Promise.allSettled([
+  const [topologyResult, chromaResult, hermesResult] = await Promise.allSettled([
     request('/api/ulysses/topology'),
     request('/api/ulysses/chroma/persistence'),
+    request('/api/ulysses/hermes/adoption'),
   ]);
   topology = topologyResult.status === 'fulfilled' ? topologyResult.value : null;
   chroma = chromaResult.status === 'fulfilled' ? chromaResult.value : null;
-  const errors = [topologyResult, chromaResult]
+  hermes = hermesResult.status === 'fulfilled' ? hermesResult.value : null;
+  const errors = [topologyResult, chromaResult, hermesResult]
     .filter((result) => result.status === 'rejected')
     .map((result) => result.reason?.message || String(result.reason));
   loadError = errors.join(' · ');

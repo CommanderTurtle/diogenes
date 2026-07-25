@@ -70,6 +70,9 @@ def test_services_window_preserves_agent_and_mcp_boundaries() -> None:
     assert "never copies or merges" in services
     assert "/api/ulysses/topology" in services
     assert "/api/ulysses/chroma/persistence" in services
+    assert "/api/ulysses/hermes/adoption" in services
+    assert "Ulysses never relocates Hermes into its own virtual environment" in services
+    assert "environment values and credential arguments are always redacted" in services
 
 
 def test_services_window_is_read_only_until_adoption_exists() -> None:
@@ -78,6 +81,7 @@ def test_services_window_is_read_only_until_adoption_exists() -> None:
     assert "This first UI stage intentionally exposes no lifecycle actions." in services
     assert "read-only" in services
     assert "Apply unavailable — maintenance window required" in services
+    assert "Adoption unavailable — durable job runner required" in services
     assert "method: 'POST'" not in services
     assert "method: 'PUT'" not in services
     assert "method: 'DELETE'" not in services
