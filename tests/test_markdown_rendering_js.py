@@ -22,6 +22,9 @@ def _run_markdown_case(markdown: str, render_expr: str = "mod.mdToHtml(input)", 
     script = textwrap.dedent(
         r"""
         import fs from 'node:fs';
+        import os from 'node:os';
+        import path from 'node:path';
+        import { pathToFileURL } from 'node:url';
 
         globalThis.window = { location: { origin: 'http://localhost' }, katex: null };
         if (__WITH_KATEX__) {
@@ -84,8 +87,11 @@ def _run_markdown_case(markdown: str, render_expr: str = "mod.mdToHtml(input)", 
             .replace(/'/g, '&#39;');`
         );
 
-        const moduleUrl = 'data:text/javascript;base64,' + Buffer.from(source).toString('base64');
-        const mod = await import(moduleUrl);
+        const moduleDir = fs.mkdtempSync(path.join(os.tmpdir(), 'odysseus-markdown-'));
+        const modulePath = path.join(moduleDir, 'markdown.mjs');
+        fs.writeFileSync(modulePath, source);
+        const mod = await import(pathToFileURL(modulePath).href);
+        fs.rmSync(moduleDir, { recursive: true, force: true });
         const input = JSON.parse(process.argv[1]);
         console.log(JSON.stringify({ html: __RENDER_EXPR__ }));
         """

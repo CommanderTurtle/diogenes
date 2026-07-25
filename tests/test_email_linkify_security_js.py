@@ -63,6 +63,9 @@ def test_email_url_scheme_checks_strip_embedded_controls():
     js = textwrap.dedent(
         f"""
         import fs from 'node:fs';
+        import os from 'node:os';
+        import path from 'node:path';
+        import {{ pathToFileURL }} from 'node:url';
 
         let source = fs.readFileSync('{_HELPER.as_posix()}', 'utf8');
         source = source
@@ -70,7 +73,11 @@ def test_email_url_scheme_checks_strip_embedded_controls():
           .replace('function _isDangerousUrl', 'export function _isDangerousUrl')
           .replace('function _isDangerousSrcset', 'export function _isDangerousSrcset');
 
-        const mod = await import('data:text/javascript;base64,' + Buffer.from(source).toString('base64'));
+        const moduleDir = fs.mkdtempSync(path.join(os.tmpdir(), 'odysseus-email-utils-'));
+        const modulePath = path.join(moduleDir, 'utils.mjs');
+        fs.writeFileSync(modulePath, source);
+        const mod = await import(pathToFileURL(modulePath).href);
+        fs.rmSync(moduleDir, {{ recursive: true, force: true }});
         const checks = {{
           compact: mod._compactUrlSchemeValue('java\\n script:\\talert(1)'),
           jsUrl: mod._isDangerousUrl('java\\n script:\\talert(1)'),

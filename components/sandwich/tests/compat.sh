@@ -62,6 +62,10 @@ check "node CommonJS stdin via --input-type=commonjs" \
     equals \
     "$(printf 'module.exports = { value: 42 }; process.stdout.write(String(module.exports.value))\n' | node --input-type=commonjs)" \
     "42"
+check "node resolves generated base64 JavaScript data modules" \
+    equals \
+    "$(node --input-type=module -e 'const url = "data:text/javascript;base64,ZXhwb3J0IGNvbnN0IHZhbHVlPTQyOw=="; const loaded = await import(url); process.stdout.write(String(loaded.value));')" \
+    "42"
 
 fixture="$(mktemp -d)"
 trap 'rm -rf -- "$fixture"' EXIT

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 from pathlib import Path
 from typing import Any
@@ -21,6 +22,8 @@ CONFIRMATION_PHRASES = {
     "restart": "RESTART HERMES",
     "update": "BACK UP AND UPDATE HERMES",
 }
+MCP_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+MCP_ENV_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
 class HermesControl:
@@ -251,5 +254,88 @@ class HermesControl:
                 "owner": "hermes_agent",
                 "source_root": (report.get("install") or {}).get("source_root"),
                 "gateway_unit": (report.get("gateway") or {}).get("unit"),
+            },
+        )
+
+    def create_mcp_plan(
+        self,
+        report: dict[str, Any],
+        *,
+        action: str,
+        name: str,
+        command: str = "",
+        args: list[str] | None = None,
+        environment: dict[str, str] | None = None,
+    ) -> tuple[dict[str, Any], str]:
+        if action not in {"add", "remove", "test"}:
+            raise RuntimeJobError("unsupported Hermes MCP action")
+        if not MCP_NAME_RE.fullmatch(name):
+            raise RuntimeJobError("invalid Hermes MCP server name")
+        if not self.adoption_status(report)["current"]:
+            raise RuntimeJobError("Hermes must be adopted before MCP management")
+        executable = self._identity(report)["executable"]
+        if action == "test":
+            argv = [executable, "mcp", "test", name]
+            phrase = f"TEST HERMES MCP {name}"
+        elif action == "remove":
+            argv = [executable, "mcp", "remove", name]
+            phrase = f"REMOVE HERMES MCP {name}"
+        else:
+            if command not in {"npx", "bunx"}:
+                raise RuntimeJobError("Hermes stdio MCP command must use npx or bunx")
+            resolved_args = list(args or [])
+            if not resolved_args or len(resolved_args) > 50 or any(
+                not isinstance(value, str)
+                or not value
+                or len(value) > 500
+                or any(char in value for char in "\r\n\0")
+                for value in resolved_args
+            ):
+                raise RuntimeJobError("Hermes MCP arguments are invalid")
+            resolved_environment = dict(environment or {})
+            if any(
+                not MCP_ENV_RE.fullmatch(str(key))
+                or not isinstance(value, str)
+                or len(value) > 2000
+                or any(char in value for char in "\r\n\0")
+                for key, value in resolved_environment.items()
+            ):
+                raise RuntimeJobError("Hermes MCP environment is invalid")
+            argv = [executable, "mcp", "add", name, "--command", command]
+            if resolved_environment:
+                argv.extend(
+                    [
+                        "--env",
+                        *[
+                            f"{key}={value}"
+                            for key, value in sorted(resolved_environment.items())
+                        ],
+                    ]
+                )
+            argv.extend(["--args", *resolved_args])
+            phrase = f"ADD HERMES MCP {name}"
+        return self.jobs.create_plan(
+            runtime_id="hermes.gateway",
+            action=f"mcp_{action}",
+            summary=f"{action.capitalize()} Hermes MCP server {name}",
+            confirmation_phrase=phrase,
+            steps=[
+                {
+                    "label": f"{action.capitalize()} Hermes MCP server",
+                    "argv": argv,
+                    "timeout": 180,
+                },
+                {
+                    "label": "Verify Hermes MCP registry",
+                    "argv": [executable, "mcp", "list"],
+                    "timeout": 60,
+                },
+            ],
+            expires_in=600,
+            metadata={
+                "owner": "hermes_agent",
+                "mcp_name": name,
+                "mcp_action": action,
+                "environment_keys": sorted((environment or {}).keys()),
             },
         )

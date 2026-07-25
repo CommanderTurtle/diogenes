@@ -30,7 +30,7 @@ def _layout(tmp_path: Path) -> SandwichLayout:
 def test_bundled_manifest_is_valid_and_mutations_are_human_gated():
     manifest = load_sandwich_manifest(COMPONENT_ROOT)
 
-    assert manifest.version == "0.1.0"
+    assert manifest.version == "0.2.0"
     assert manifest.operations["install_preview"].mutating is False
     assert manifest.operations["hermes_check"].mutating is False
     assert manifest.operations["hermes_apply"].maintenance_window is True

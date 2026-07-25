@@ -46,6 +46,17 @@ class _FakeHermesControl:
             "confirmation-token",
         )
 
+    def create_mcp_plan(self, _report, *, action, name, **_kwargs):
+        return (
+            {
+                "id": "e" * 32,
+                "action": f"mcp_{action}",
+                "status": "planned",
+                "metadata": {"mcp_name": name},
+            },
+            "mcp-confirmation-token",
+        )
+
 
 class _FakeColibriControl:
     def create_plan(self, _report, *, provider_id, action):
@@ -57,6 +68,19 @@ class _FakeColibriControl:
                 "status": "planned",
             },
             "colibri-confirmation-token",
+        )
+
+
+class _FakeRuntimeControl:
+    def create_plan(self, *, runtime_id, action):
+        return (
+            {
+                "id": "d" * 32,
+                "runtime_id": runtime_id,
+                "action": action,
+                "status": "planned",
+            },
+            "runtime-confirmation-token",
         )
 
 
@@ -105,6 +129,12 @@ def _client(
             },
             hermes_control_factory=_FakeHermesControl,
             colibri_control_factory=_FakeColibriControl,
+            runtime_control_factory=_FakeRuntimeControl,
+            managed_runtime_collector=lambda: {
+                "schema_version": "ulysses.managed-runtimes.v1",
+                "sandwich_installed": True,
+                "runtimes": [{"id": "firecrawl.api", "category": "docker"}],
+            },
             readiness_collector=lambda _topology, _chroma, _hermes: {
                 "schema_version": "ulysses.switchover-readiness.v1",
                 "mode": "read_only",
@@ -259,6 +289,26 @@ def test_admin_can_create_a_confirmed_colibri_build_plan(monkeypatch):
     assert payload["confirmation_token"] == "colibri-confirmation-token"
 
 
+def test_admin_receives_managed_runtime_categories(monkeypatch):
+    response = _client(monkeypatch, lambda _request: None).get(
+        "/api/ulysses/runtimes"
+    )
+
+    assert response.status_code == 200
+    assert response.json()["runtimes"][0]["id"] == "firecrawl.api"
+
+
+def test_admin_can_create_a_managed_runtime_plan(monkeypatch):
+    response = _client(monkeypatch, lambda _request: None).post(
+        "/api/ulysses/runtimes/jobs/plan",
+        json={"runtime_id": "signal.cli", "action": "start"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["job"]["runtime_id"] == "signal.cli"
+    assert response.json()["confirmation_token"] == "runtime-confirmation-token"
+
+
 def test_admin_can_create_a_confirmed_hermes_job_plan(monkeypatch):
     response = _client(monkeypatch, lambda _request: None).post(
         "/api/ulysses/hermes/jobs/plan",
@@ -269,6 +319,17 @@ def test_admin_can_create_a_confirmed_hermes_job_plan(monkeypatch):
     payload = response.json()
     assert payload["job"]["status"] == "planned"
     assert payload["confirmation_token"] == "confirmation-token"
+
+
+def test_admin_can_plan_a_hermes_owned_mcp_test(monkeypatch):
+    response = _client(monkeypatch, lambda _request: None).post(
+        "/api/ulysses/hermes/mcp/jobs/plan",
+        json={"action": "test", "name": "camofox-mcp"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["job"]["action"] == "mcp_test"
+    assert response.json()["confirmation_token"] == "mcp-confirmation-token"
 
 
 def test_runtime_job_execution_requires_admin(monkeypatch):

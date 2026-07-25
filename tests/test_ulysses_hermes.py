@@ -5,7 +5,7 @@ from pathlib import Path
 import src.ulysses_hermes as hermes
 
 
-def test_mcp_arguments_are_secret_safe(monkeypatch, tmp_path: Path) -> None:
+def test_mcp_arguments_include_authenticated_management_values(monkeypatch, tmp_path: Path) -> None:
     config = tmp_path / ".hermes" / "config.yaml"
     config.parent.mkdir()
     config.write_text(
@@ -41,11 +41,19 @@ mcp_servers:
     servers = {server["name"]: server for server in report["mcp_servers"]}
 
     assert servers["camofox"]["args"][-1] == "CAMOFOX_URL=<redacted>"
+    assert servers["camofox"]["configured_args"][-1] == "CAMOFOX_URL=http://localhost:9377"
+    assert servers["camofox"]["environment"] == {
+        "CAMOFOX_URL": "http://localhost:9377"
+    }
     assert servers["camofox"]["environment_keys"] == ["CAMOFOX_URL"]
     assert servers["private"]["args"][-1] == "<redacted>"
+    assert servers["private"]["configured_args"][-1] == "top-secret"
+    assert servers["private"]["environment"] == {
+        "PRIVATE_TOKEN": "do-not-return"
+    }
     assert servers["private"]["environment_keys"] == ["PRIVATE_TOKEN"]
-    assert "top-secret" not in str(report)
-    assert "do-not-return" not in str(report)
+    assert "top-secret" in str(report)
+    assert "do-not-return" in str(report)
 
 
 def test_adoption_preview_preserves_native_hermes(monkeypatch, tmp_path: Path) -> None:

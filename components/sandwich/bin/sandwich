@@ -44,7 +44,7 @@ case "${1:-doctor}" in
         doctor
         ;;
     version|--version|-v)
-        printf '%s\n' '0.1.0'
+        printf '%s\n' '0.2.0'
         ;;
     help|--help|-h)
         printf '%s\n' 'usage: sandwich [doctor|version|help]'

@@ -3,8 +3,9 @@
 // This mirrors the loader in tests/test_markdown_rendering_js.py so the streaming
 // tests exercise the exact same renderer the browser runs.
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 
@@ -45,8 +46,12 @@ export async function loadMarkdown() {
     () =>
       `var escapeHtml = (v) => String(v ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');`,
   );
-  const url = 'data:text/javascript;base64,' + Buffer.from(src).toString('base64');
-  return import(url);
+  const moduleDir = fs.mkdtempSync(path.join(os.tmpdir(), 'odysseus-streaming-'));
+  const modulePath = path.join(moduleDir, 'markdown.mjs');
+  fs.writeFileSync(modulePath, src);
+  const loaded = await import(pathToFileURL(modulePath).href);
+  fs.rmSync(moduleDir, { recursive: true, force: true });
+  return loaded;
 }
 
 // Canonicalize rendered HTML so two renders that produce the SAME DOM compare

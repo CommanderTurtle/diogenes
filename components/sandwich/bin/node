@@ -1,13 +1,15 @@
 #!/usr/bin/env bash
 
 source "$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")/../lib/common.sh"
+readonly node_preload="$SANDWICH_ROOT/lib/node-compat-preload.ts"
+[[ -f "$node_preload" ]] || bs_die "Node compatibility preload is missing: $node_preload"
 
 case "${1:-}" in
     --version|-v)
-        exec "$SANDWICH_BIN" -e 'process.stdout.write(process.version + "\n")'
+        exec "$SANDWICH_BIN" --preload "$node_preload" -e 'process.stdout.write(process.version + "\n")'
         ;;
     --help|-h)
-        exec "$SANDWICH_BIN" --help
+        exec "$SANDWICH_BIN" --preload "$node_preload" --help
         ;;
 esac
 
@@ -45,17 +47,18 @@ if ((${#translated_args[@]} == 0)); then
             printf 'node: --input-type can only be used with string input via --eval, --print, or STDIN\n' >&2
             exit 9
         fi
-        exec "$SANDWICH_BIN" repl
+        exec "$SANDWICH_BIN" --preload "$node_preload" repl
     fi
-    exec "$SANDWICH_BIN" -
+    exec "$SANDWICH_BIN" --preload "$node_preload" -
 fi
 
 if [[ "${translated_args[0]}" == "--test" ]]; then
-    translated_args[0]="test"
+    translated_args=("${translated_args[@]:1}")
+    exec "$SANDWICH_BIN" test --preload "$node_preload" "${translated_args[@]}"
 fi
 
 # Bun already evaluates stdin, --eval, and --print as JavaScript/TypeScript
 # modules with both ESM and CommonJS compatibility. Node's --input-type flag
 # is therefore a semantic no-op after validation and must not be forwarded:
 # Bun treats the unknown flag as a request for top-level CLI help.
-exec "$SANDWICH_BIN" "${translated_args[@]}"
+exec "$SANDWICH_BIN" --preload "$node_preload" "${translated_args[@]}"

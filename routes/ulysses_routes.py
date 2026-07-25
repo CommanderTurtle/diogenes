@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
 from core.middleware import require_admin
@@ -27,6 +27,13 @@ from src.ulysses_jobs import (
     RuntimeJobError,
 )
 from src.ulysses_readiness import collect_switchover_readiness
+from src.ulysses_runtime_management import (
+    ManagedRuntimeControl,
+    collect_managed_runtimes,
+    read_runtime_documents,
+    read_runtime_log,
+    save_runtime_document,
+)
 from src.ulysses_topology import build_topology_report
 
 
@@ -38,6 +45,14 @@ class HermesAdoptionApplyRequest(BaseModel):
 
 class HermesLifecyclePlanRequest(BaseModel):
     action: str
+
+
+class HermesMcpPlanRequest(BaseModel):
+    action: str
+    name: str
+    command: str = ""
+    args: list[str] = Field(default_factory=list)
+    environment: dict[str, str] = Field(default_factory=dict)
 
 
 class RuntimeJobExecuteRequest(BaseModel):
@@ -53,6 +68,17 @@ class ColibriCommandRequest(BaseModel):
 class ColibriLifecyclePlanRequest(BaseModel):
     runtime_id: str
     action: str
+
+
+class ManagedRuntimePlanRequest(BaseModel):
+    runtime_id: str
+    action: str
+
+
+class RuntimeDocumentSaveRequest(BaseModel):
+    expected_sha256: str | None = None
+    content: str
+    confirmation_phrase: str
 
 
 def _job_http_error(exc: RuntimeJobError) -> HTTPException:
@@ -71,6 +97,8 @@ def setup_ulysses_routes(
     colibri_collector: Callable[[], dict] = collect_colibri_providers,
     hermes_control_factory: Callable[[], HermesControl] = HermesControl,
     colibri_control_factory: Callable[[], ColibriControl] = ColibriControl,
+    runtime_control_factory: Callable[[], ManagedRuntimeControl] = ManagedRuntimeControl,
+    managed_runtime_collector: Callable[[], dict] = collect_managed_runtimes,
     readiness_collector: Callable[
         [dict, dict, dict], dict
     ] = collect_switchover_readiness,
@@ -100,6 +128,79 @@ def setup_ulysses_routes(
     async def get_colibri_providers(request: Request) -> dict:
         require_admin(request)
         return await run_in_threadpool(colibri_collector)
+
+    @router.get("/runtimes")
+    async def get_managed_runtimes(request: Request) -> dict:
+        require_admin(request)
+        return await run_in_threadpool(managed_runtime_collector)
+
+    @router.get("/runtimes/{runtime_id}/documents")
+    async def get_runtime_documents(
+        request: Request,
+        runtime_id: str,
+        reveal: bool = False,
+    ) -> dict:
+        require_admin(request)
+        try:
+            return await run_in_threadpool(
+                read_runtime_documents,
+                runtime_id,
+                reveal=reveal,
+            )
+        except RuntimeJobError as exc:
+            raise HTTPException(400, str(exc)) from exc
+
+    @router.put("/runtimes/{runtime_id}/documents/{document_id}")
+    async def put_runtime_document(
+        request: Request,
+        runtime_id: str,
+        document_id: str,
+        body: RuntimeDocumentSaveRequest,
+    ) -> dict:
+        require_admin(request)
+        try:
+            return await run_in_threadpool(
+                save_runtime_document,
+                runtime_id,
+                document_id,
+                expected_sha256=body.expected_sha256,
+                content=body.content,
+                confirmation_phrase=body.confirmation_phrase,
+            )
+        except RuntimeJobError as exc:
+            raise _job_http_error(exc) from exc
+
+    @router.get("/runtimes/{runtime_id}/log")
+    async def get_managed_runtime_log(
+        request: Request,
+        runtime_id: str,
+        max_chars: int = 20000,
+    ) -> dict:
+        require_admin(request)
+        try:
+            return await run_in_threadpool(
+                read_runtime_log,
+                runtime_id,
+                max_chars=max_chars,
+            )
+        except RuntimeJobError as exc:
+            raise HTTPException(400, str(exc)) from exc
+
+    @router.post("/runtimes/jobs/plan")
+    async def plan_managed_runtime(
+        request: Request,
+        body: ManagedRuntimePlanRequest,
+    ) -> dict:
+        require_admin(request)
+        try:
+            plan, token = await run_in_threadpool(
+                runtime_control_factory().create_plan,
+                runtime_id=body.runtime_id,
+                action=body.action,
+            )
+            return {"job": plan, "confirmation_token": token}
+        except RuntimeJobError as exc:
+            raise _job_http_error(exc) from exc
 
     @router.post("/colibri/command")
     async def render_colibri_command(
@@ -170,6 +271,27 @@ def setup_ulysses_routes(
                 hermes_control_factory().create_lifecycle_plan,
                 report,
                 action=body.action,
+            )
+            return {"job": plan, "confirmation_token": token}
+        except RuntimeJobError as exc:
+            raise _job_http_error(exc) from exc
+
+    @router.post("/hermes/mcp/jobs/plan")
+    async def plan_hermes_mcp(
+        request: Request,
+        body: HermesMcpPlanRequest,
+    ) -> dict:
+        require_admin(request)
+        report = await run_in_threadpool(hermes_collector)
+        try:
+            plan, token = await run_in_threadpool(
+                hermes_control_factory().create_mcp_plan,
+                report,
+                action=body.action,
+                name=body.name,
+                command=body.command,
+                args=body.args,
+                environment=body.environment,
             )
             return {"job": plan, "confirmation_token": token}
         except RuntimeJobError as exc:

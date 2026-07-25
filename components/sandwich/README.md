@@ -11,7 +11,9 @@ pretending that Bun and another package manager have identical semantics.
 ## Guarantees
 
 - `node` executes JavaScript with Bun and reports Bun's Node-compatible
-  `process.version`.
+  `process.version`. Its preload also resolves generated base64 JavaScript data
+  modules used by Node-oriented test harnesses. Bun does not support general URL
+  imports; oversized generated modules should use an ordinary temporary ESM file.
 - `npx` executes packages through `bun x --bun`.
 - common npm, pnpm, and Yarn operations translate to tested Bun commands.
 - `npm ci` requires `bun.lock` and uses `bun install --frozen-lockfile`.

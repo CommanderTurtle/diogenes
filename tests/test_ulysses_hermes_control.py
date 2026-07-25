@@ -105,3 +105,71 @@ def test_unadopted_hermes_cannot_create_a_lifecycle_plan(tmp_path: Path) -> None
     control = HermesControl(tmp_path / "control")
     with pytest.raises(RuntimeJobError, match="must be adopted"):
         control.create_lifecycle_plan(_report(tmp_path), action="restart")
+
+
+def _adopt(control: HermesControl, report: dict) -> None:
+    control.apply_adoption(
+        report,
+        confirmation_phrase="ADOPT HERMES IN PLACE",
+        expected_source_root=report["install"]["source_root"],
+        expected_gateway_unit="hermes-gateway.service",
+    )
+
+
+def test_mcp_add_plan_uses_fixed_argv_and_keeps_args_last(tmp_path: Path) -> None:
+    control = HermesControl(tmp_path / "control")
+    report = _report(tmp_path)
+    _adopt(control, report)
+
+    plan, token = control.create_mcp_plan(
+        report,
+        action="add",
+        name="camofox-mcp",
+        command="npx",
+        args=["-y", "camofox-mcp"],
+        environment={"CAMOFOX_URL": "http://localhost:9377"},
+    )
+
+    assert token
+    assert plan["confirmation_phrase"] == "ADD HERMES MCP camofox-mcp"
+    assert plan["steps"][0]["argv"] == [
+        report["install"]["executable"],
+        "mcp",
+        "add",
+        "camofox-mcp",
+        "--command",
+        "npx",
+        "--env",
+        "CAMOFOX_URL=http://localhost:9377",
+        "--args",
+        "-y",
+        "camofox-mcp",
+    ]
+    assert plan["metadata"]["environment_keys"] == ["CAMOFOX_URL"]
+    assert all(not step.get("shell") for step in plan["steps"])
+
+
+def test_mcp_add_plan_accepts_authenticated_environment_values(tmp_path: Path) -> None:
+    control = HermesControl(tmp_path / "control")
+    report = _report(tmp_path)
+    _adopt(control, report)
+
+    plan, _token = control.create_mcp_plan(
+        report,
+        action="add",
+        name="private-mcp",
+        command="bunx",
+        args=["private-mcp"],
+        environment={"API_TOKEN": "local-value"},
+    )
+    assert "API_TOKEN=local-value" in plan["steps"][0]["argv"]
+
+
+def test_unadopted_hermes_cannot_manage_mcp_servers(tmp_path: Path) -> None:
+    control = HermesControl(tmp_path / "control")
+    with pytest.raises(RuntimeJobError, match="must be adopted"):
+        control.create_mcp_plan(
+            _report(tmp_path),
+            action="test",
+            name="context-mode",
+        )

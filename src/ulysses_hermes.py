@@ -1,4 +1,4 @@
-"""Secret-safe, read-only discovery for an existing native Hermes install."""
+"""Authenticated, read-only discovery for an existing native Hermes install."""
 
 from __future__ import annotations
 
@@ -134,8 +134,24 @@ def _mcp_servers(config: dict[str, Any]) -> list[dict[str, Any]]:
         if not isinstance(raw, dict):
             continue
         command = str(raw.get("command") or "")
+        configured_args = (
+            [str(value) for value in raw.get("args")]
+            if isinstance(raw.get("args"), list)
+            else []
+        )
         safe_args, argument_env_keys = _redacted_args(raw.get("args"))
         raw_env = raw.get("env", raw.get("environment", {}))
+        configured_environment = (
+            {str(key): str(value) for key, value in raw_env.items()}
+            if isinstance(raw_env, dict)
+            else {}
+        )
+        for index, value in enumerate(configured_args[:-1]):
+            if value not in {"--env", "--environment"}:
+                continue
+            key, separator, configured_value = configured_args[index + 1].partition("=")
+            if separator and _ENV_NAME.fullmatch(key):
+                configured_environment[key] = configured_value
         mapped_env_keys = (
             [str(key) for key in raw_env]
             if isinstance(raw_env, dict)
@@ -150,6 +166,8 @@ def _mcp_servers(config: dict[str, Any]) -> list[dict[str, Any]]:
                 "command": command,
                 "command_path": shutil.which(command) if command else None,
                 "args": safe_args,
+                "configured_args": configured_args,
+                "environment": configured_environment,
                 "environment_keys": sorted(
                     set(argument_env_keys) | set(mapped_env_keys)
                 ),

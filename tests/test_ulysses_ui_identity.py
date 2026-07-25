@@ -73,7 +73,7 @@ def test_services_window_preserves_agent_and_mcp_boundaries() -> None:
     assert "/api/ulysses/hermes/adoption" in services
     assert "/api/ulysses/readiness" in services
     assert "Ulysses never relocates Hermes into its own virtual environment" in services
-    assert "environment values and credential arguments are always redacted" in services
+    assert "authenticated management view shows each configured command" in services
 
 
 def test_services_window_uses_planned_confirmed_runtime_jobs() -> None:
@@ -90,6 +90,9 @@ def test_services_window_uses_planned_confirmed_runtime_jobs() -> None:
     assert "Nick owns the maintenance-window stop" in services
     assert "Python and GPU runtime" in services
     assert "method: 'POST'" in services
-    assert "method: 'PUT'" not in services
+    assert "method: 'PUT'" in services
+    assert "expected_sha256" in services
+    assert "SAVE ${runtimeId} CONFIG" in services
+    assert "Validate & save" in services
     assert "method: 'DELETE'" not in services
     assert "arbitrary shell command" not in services

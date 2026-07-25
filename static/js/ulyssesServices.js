@@ -20,6 +20,10 @@ let hermes = null;
 let runtimeJobs = [];
 let jobLogs = {};
 let readiness = null;
+let managedRuntimes = null;
+let runtimeDocuments = {};
+let runtimeLogs = {};
+let expandedRuntime = '';
 let loadError = '';
 let serviceQuery = '';
 let serviceScope = 'all';
@@ -101,6 +105,7 @@ function ensureModal() {
         <button type="button" data-tab="overview" role="tab">Overview</button>
         <button type="button" data-tab="readiness" role="tab">Readiness</button>
         <button type="button" data-tab="services" role="tab">Services</button>
+        <button type="button" data-tab="docker" role="tab">Docker</button>
         <button type="button" data-tab="javascript" role="tab">JavaScript</button>
         <button type="button" data-tab="hermes" role="tab">Hermes</button>
         <button type="button" data-tab="chroma" role="tab">Chroma</button>
@@ -310,7 +315,9 @@ function renderServices() {
     </div>
     <div class="uly-service-grid">
       ${runtimes.map(serviceCard).join('') || '<div class="uly-empty-state">No services match this filter.</div>'}
-    </div>`;
+    </div>
+    ${renderManagedCategory('native')}`;
+  wireManagedRuntimeEvents(root);
 }
 
 function renderJavaScript() {
@@ -343,7 +350,113 @@ function renderJavaScript() {
         ${Object.entries(commands).sort(([a], [b]) => a.localeCompare(b)).map(([name, path]) => `
           <div><strong>${esc(name)}</strong><code title="${esc(path)}">${esc(path)}</code></div>`).join('')}
       </div>
-    </section>`;
+    </section>
+    ${renderManagedCategory('javascript')}`;
+}
+
+function managedItems(category) {
+  return (managedRuntimes?.runtimes || []).filter((item) => item.category === category);
+}
+
+function capabilityChain(item) {
+  const dependencies = item.depends_on || [];
+  if (!dependencies.length) return '';
+  return `<div class="uly-service-deps"><b>Uses</b>${dependencies.map((id) => `<code>${esc(id)}</code>`).join('')}</div>`;
+}
+
+function runtimeActionButtons(item) {
+  const actions = item.actions || {};
+  const labels = { start: 'Start', stop: 'Stop', restart: 'Restart', sync: 'Git sync', update: 'Update' };
+  return Object.entries(labels).map(([action, label]) =>
+    `<button type="button" data-runtime-action="${action}" data-runtime-id="${esc(item.id)}"${actions[action] ? '' : ' disabled'}>${label}</button>`
+  ).join('');
+}
+
+function runtimeDocumentsHtml(item) {
+  const payload = runtimeDocuments[item.id];
+  if (expandedRuntime !== item.id) return '';
+  if (!payload) return '<div class="uly-empty-state compact">Loading configuration…</div>';
+  return (payload.documents || []).map((document) => {
+    const secretLocked = document.format === 'env' && !document.revealed && (document.secret_keys || []).length;
+    return `
+      <div class="uly-runtime-document" data-runtime-document="${esc(document.id)}" style="margin-top:8px;padding:8px;border:1px solid var(--border);border-radius:6px;">
+        <div style="display:flex;align-items:center;gap:7px;margin-bottom:6px;">
+          <strong>${esc(document.label)}</strong>
+          <code>${esc(document.format)}</code>
+          <span style="margin-left:auto;font-size:10px;opacity:.6;">${document.exists ? 'existing file' : 'new file'}</span>
+          ${secretLocked ? `<button type="button" data-runtime-reveal="${esc(item.id)}">Unredact & edit</button>` : ''}
+        </div>
+        <textarea data-runtime-editor="${esc(document.id)}" data-runtime-sha="${esc(document.sha256 || '')}" spellcheck="false" style="width:100%;min-height:170px;resize:vertical;background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:4px;padding:8px;font:11px/1.45 monospace;">${esc(document.content || '')}</textarea>
+        <div style="display:flex;align-items:center;gap:7px;margin-top:6px;">
+          <small style="opacity:.65;flex:1;">Save validates the native ${esc(document.format)} format and refuses stale edits. Saving never restarts the runtime automatically.</small>
+          <button type="button" data-runtime-save="${esc(item.id)}" data-document-id="${esc(document.id)}"${secretLocked ? ' disabled title="Reveal the existing secret values before saving this file."' : ''}>Validate & save</button>
+        </div>
+      </div>`;
+  }).join('');
+}
+
+function managedRuntimeCard(item) {
+  const ports = item.ports || [];
+  const compose = item.compose || null;
+  const pkg = item.package || null;
+  const isExpanded = expandedRuntime === item.id;
+  return `
+    <article class="uly-service-card" data-managed-runtime="${esc(item.id)}" style="display:block;">
+      <div class="uly-service-card-head">
+        <div><h3>${esc(item.label)}</h3><code>${esc(item.id)}</code></div>
+        ${statusBadge(item.status)}
+      </div>
+      <div class="uly-service-meta">
+        ${item.capability_group ? `<span>${esc(item.capability_group)}</span>` : ''}
+        ${item.role ? `<span>${esc(item.role)}</span>` : ''}
+        ${item.hermes_mcp ? '<span class="uly-scope-pill scope-hermes_agent">Hermes MCP project</span>' : ''}
+        ${item.git?.present ? `<span>Git ${esc(item.git.branch || 'detached')}</span>` : ''}
+        ${item.git?.dirty ? '<span style="color:var(--orange,#ffb86c);">Git changes preserved · sync blocked</span>' : ''}
+      </div>
+      <div class="uly-service-path">${esc(item.root)}</div>
+      <div class="uly-service-ports">${ports.length ? ports.map((port) => `<span class="${port.active ? 'active' : ''}">127.0.0.1:${esc(port.port)}</span>`).join('') : '<span class="muted">Command/tool runtime</span>'}</div>
+      ${capabilityChain(item)}
+      ${compose ? `
+        <div class="uly-service-deps"><b>Compose services</b>${(compose.services || []).map((service) => `<code>${esc(service)}</code>`).join('')}</div>
+        <div class="uly-capability-list">${(compose.containers || []).map((container) => `<span>${esc(container.name || container.service || 'container')} · ${esc(container.state || container.status || 'observed')}</span>`).join('') || '<span class="muted">No project containers are running</span>'}</div>
+        <div class="uly-service-path">${(compose.images || []).map(esc).join(' · ')}</div>` : ''}
+      ${pkg ? `<div class="uly-service-deps"><b>${esc(pkg.name || 'package')}</b><code>${esc(pkg.version || 'version unknown')}</code><span>${esc(pkg.package_manager || 'Bun-compatible')}</span></div>` : ''}
+      ${item.port_collision ? '<div class="uly-finding severity-warning"><strong>Declared port is owned by another runtime.</strong><p>Start stays disabled until the collision is cleared.</p></div>' : ''}
+      <div class="uly-capability-list" style="margin-top:8px;">
+        ${runtimeActionButtons(item)}
+        <button type="button" data-runtime-config="${esc(item.id)}">${isExpanded ? 'Close config' : 'Config'}</button>
+        <button type="button" data-runtime-log="${esc(item.id)}">Logs</button>
+      </div>
+      ${runtimeDocumentsHtml(item)}
+      ${runtimeLogs[item.id] == null ? '' : `<pre style="max-height:260px;overflow:auto;white-space:pre-wrap;margin-top:8px;padding:8px;background:var(--bg);border:1px solid var(--border);border-radius:5px;">${esc(runtimeLogs[item.id] || '(no managed console output)')}</pre>`}
+    </article>`;
+}
+
+function renderManagedCategory(category) {
+  const items = managedItems(category);
+  if (category === 'javascript' && !managedRuntimes?.sandwich_installed) {
+    return `<section class="uly-services-panel"><div class="uly-empty-state"><strong>Sandwich is required</strong><p>The JavaScript runtime menu remains unavailable until the Bun compatibility commands are detected.</p></div></section>`;
+  }
+  const groups = new Map();
+  for (const item of items) {
+    const key = item.capability_group || 'other';
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(item);
+  }
+  return [...groups.entries()].map(([group, rows]) => `
+    <section class="uly-services-panel">
+      <div class="uly-panel-heading"><div><h3>${esc(group === 'other' ? (category === 'docker' ? 'Docker projects' : 'JavaScript tools') : group.replaceAll('-', ' ').replace(/\b\w/g, (letter) => letter.toUpperCase()))}</h3><p>Native project configuration, status, lifecycle, logs, and updates.</p></div></div>
+      <div class="uly-service-grid">${rows.map(managedRuntimeCard).join('')}</div>
+    </section>`).join('') || '<div class="uly-empty-state">No runtimes are configured in this category.</div>';
+}
+
+function renderDocker() {
+  return `
+    <section class="uly-services-panel">
+      <div class="uly-panel-heading"><div><h3>Docker runtimes</h3><p>Each Compose project retains its own file, project directory, and native .env.</p></div></div>
+      <p class="uly-boundary-note">Firecrawl is the Hermes search interface; SearXNG is its search backend. They are shown as one capability chain while remaining independently configurable Compose projects.</p>
+    </section>
+    ${renderManagedCategory('docker')}`;
 }
 
 function renderReadiness() {
@@ -405,6 +518,13 @@ function collectionRow(collection) {
     </tr>`;
 }
 
+function hermesEnvironmentText(server) {
+  const entries = Object.entries(server.environment || {});
+  return entries.length
+    ? entries.map(([key, value]) => `${key}=${value}`).join(' · ')
+    : 'no separate environment values';
+}
+
 function renderHermes() {
   if (!hermes) {
     return '<div class="uly-empty-state">Hermes adoption observation is unavailable.</div>';
@@ -445,7 +565,7 @@ function renderHermes() {
       <div class="uly-panel-heading">
         <div>
           <h3>Hermes MCP registry</h3>
-          <p>Command shape is visible; environment values and credential arguments are always redacted.</p>
+          <p>The authenticated management view shows each configured command and environment value.</p>
         </div>
         <span class="uly-scope-pill scope-hermes_agent">Hermes agent</span>
       </div>
@@ -453,9 +573,37 @@ function renderHermes() {
         ${servers.map((server) => `
           <div>
             <strong>${esc(server.name)} ${statusBadge(server.enabled ? 'ready' : 'stopped')}</strong>
-            <code>${esc([server.command, ...(server.args || [])].join(' '))}</code>
-            <small>${esc(server.transport)} · env keys: ${esc((server.environment_keys || []).join(', ') || 'none')}</small>
+            <code>${esc([server.command, ...(server.configured_args || server.args || [])].join(' '))}</code>
+            <small>${esc(server.transport)} · ${esc(hermesEnvironmentText(server))}</small>
+            <span class="uly-capability-list">
+              <button type="button" data-hermes-mcp-action="test" data-hermes-mcp-name="${esc(server.name)}"${preview.adoption_current ? '' : ' disabled'}>Test</button>
+              <button type="button" data-hermes-mcp-action="remove" data-hermes-mcp-name="${esc(server.name)}"${preview.adoption_current ? '' : ' disabled'}>Remove</button>
+            </span>
           </div>`).join('') || '<div class="uly-empty-state compact">No Hermes MCP servers are registered.</div>'}
+      </div>
+      <div class="uly-runtime-document" style="margin-top:12px;padding:10px;border:1px solid var(--border);border-radius:6px;">
+        <div class="uly-panel-heading">
+          <div><h3>Add stdio MCP to Hermes</h3><p>This writes only to the Hermes registry. Odysseus MCP configuration remains separate.</p></div>
+        </div>
+        <div class="uly-command-grid">
+          <label><strong>Name</strong><input type="text" data-hermes-mcp-name-input placeholder="context-mode" autocomplete="off"></label>
+          <label><strong>Compatibility command</strong>
+            <select data-hermes-mcp-command>
+              <option value="npx">npx</option>
+              <option value="bunx">bunx</option>
+            </select>
+          </label>
+        </div>
+        <label style="display:block;margin-top:8px;"><strong>Arguments — one exact argument per line</strong>
+          <textarea data-hermes-mcp-args spellcheck="false" placeholder="-y&#10;package-name" style="width:100%;min-height:92px;resize:vertical;background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:4px;padding:8px;font:11px/1.45 monospace;"></textarea>
+        </label>
+        <label style="display:block;margin-top:8px;"><strong>Environment — KEY=value, one per line</strong>
+          <textarea data-hermes-mcp-env spellcheck="false" placeholder="CAMOFOX_URL=http://localhost:9377" style="width:100%;min-height:72px;resize:vertical;background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:4px;padding:8px;font:11px/1.45 monospace;"></textarea>
+        </label>
+        <div style="display:flex;align-items:center;gap:8px;margin-top:8px;">
+          <small style="opacity:.68;flex:1;">Values are stored in the Hermes registry and remain visible in this authenticated administration surface.</small>
+          <button type="button" data-hermes-mcp-add${preview.adoption_current ? '' : ' disabled'}>Plan add</button>
+        </div>
       </div>
     </section>
     <section class="uly-services-panel uly-migration-plan">
@@ -590,7 +738,9 @@ function render() {
     renderServices();
     return;
   }
-  root.innerHTML = activeTab === 'javascript'
+  root.innerHTML = activeTab === 'docker'
+    ? renderDocker()
+    : activeTab === 'javascript'
     ? renderJavaScript()
     : activeTab === 'hermes'
       ? renderHermes()
@@ -609,8 +759,57 @@ function render() {
   root.querySelectorAll('[data-hermes-action]').forEach((button) => {
     button.addEventListener('click', () => planHermesAction(button.dataset.hermesAction));
   });
+  root.querySelectorAll('[data-hermes-mcp-action]').forEach((button) => {
+    button.addEventListener('click', () => planHermesMcpAction({
+      action: button.dataset.hermesMcpAction,
+      name: button.dataset.hermesMcpName,
+    }));
+  });
+  root.querySelector('[data-hermes-mcp-add]')?.addEventListener('click', () => {
+    const name = root.querySelector('[data-hermes-mcp-name-input]')?.value?.trim() || '';
+    const command = root.querySelector('[data-hermes-mcp-command]')?.value || 'npx';
+    const args = (root.querySelector('[data-hermes-mcp-args]')?.value || '')
+      .split(/\r?\n/).map((value) => value.trim()).filter(Boolean);
+    const environment = {};
+    for (const line of (root.querySelector('[data-hermes-mcp-env]')?.value || '').split(/\r?\n/)) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      const separator = trimmed.indexOf('=');
+      if (separator < 1) {
+        uiModule.showToast(`Invalid environment line: ${trimmed}`, 7000);
+        return;
+      }
+      environment[trimmed.slice(0, separator).trim()] = trimmed.slice(separator + 1);
+    }
+    planHermesMcpAction({ action: 'add', name, command, args, environment });
+  });
   root.querySelectorAll('[data-view-job-log]').forEach((button) => {
     button.addEventListener('click', () => loadJobLog(button.dataset.viewJobLog));
+  });
+  wireManagedRuntimeEvents(root);
+}
+
+function wireManagedRuntimeEvents(root) {
+  root.querySelectorAll('[data-runtime-action]').forEach((button) => {
+    button.addEventListener('click', () => planManagedRuntime(
+      button.dataset.runtimeId,
+      button.dataset.runtimeAction,
+    ));
+  });
+  root.querySelectorAll('[data-runtime-config]').forEach((button) => {
+    button.addEventListener('click', () => toggleRuntimeConfig(button.dataset.runtimeConfig));
+  });
+  root.querySelectorAll('[data-runtime-reveal]').forEach((button) => {
+    button.addEventListener('click', () => loadRuntimeDocuments(button.dataset.runtimeReveal, true));
+  });
+  root.querySelectorAll('[data-runtime-save]').forEach((button) => {
+    button.addEventListener('click', () => saveRuntimeDocument(
+      button.dataset.runtimeSave,
+      button.dataset.documentId,
+    ));
+  });
+  root.querySelectorAll('[data-runtime-log]').forEach((button) => {
+    button.addEventListener('click', () => loadRuntimeConsole(button.dataset.runtimeLog));
   });
 }
 
@@ -709,10 +908,176 @@ async function planHermesAction(actionId) {
   }
 }
 
+async function planHermesMcpAction({
+  action,
+  name,
+  command = '',
+  args = [],
+  environment = {},
+}) {
+  if (!action || !name) {
+    uiModule.showToast('A Hermes MCP server name is required.', 6000);
+    return;
+  }
+  const verb = action === 'add' ? 'Add' : action === 'remove' ? 'Remove' : 'Test';
+  const wantsPlan = await uiModule.styledConfirm(
+    `${verb} Hermes MCP server “${name}”? Ulysses creates a fixed Hermes CLI plan first; it does not touch the Odysseus MCP registry.`,
+    {
+      title: `${verb} Hermes MCP`,
+      confirmText: 'Create plan',
+      cancelText: 'Cancel',
+      danger: action === 'remove',
+    },
+  );
+  if (!wantsPlan) return;
+  try {
+    const planned = await request('/api/ulysses/hermes/mcp/jobs/plan', {
+      method: 'POST',
+      body: JSON.stringify({ action, name, command, args, environment }),
+    });
+    const job = planned.job || {};
+    const steps = (job.steps || []).map((step, index) => `${index + 1}. ${step.label}`).join('\n');
+    const confirmed = await uiModule.styledConfirm(
+      `${job.summary}\n\n${steps}\n\nThis command changes only the Hermes-owned MCP registry.`,
+      {
+        title: 'Confirm Hermes MCP plan',
+        confirmText: verb,
+        cancelText: 'Keep plan only',
+        danger: action === 'remove',
+      },
+    );
+    if (!confirmed) {
+      await load();
+      return;
+    }
+    await request(`/api/ulysses/jobs/${encodeURIComponent(job.id)}/execute`, {
+      method: 'POST',
+      body: JSON.stringify({
+        confirmation_token: planned.confirmation_token,
+        confirmation_phrase: job.confirmation_phrase,
+      }),
+    });
+    await load();
+  } catch (error) {
+    uiModule.showToast(`Hermes MCP action was not run: ${error?.message || error}`, 9000);
+  }
+}
+
 async function loadJobLog(jobId) {
   try {
     const payload = await request(`/api/ulysses/jobs/${encodeURIComponent(jobId)}/log?max_chars=16000`);
     jobLogs = { ...jobLogs, [jobId]: payload.text || '' };
+    render();
+  } catch (error) {
+    loadError = error?.message || String(error);
+    render();
+  }
+}
+
+async function planManagedRuntime(runtimeId, action) {
+  if (!runtimeId || !action) return;
+  const wantsPlan = await uiModule.styledConfirm(
+    `Create a fixed ${action} plan for ${runtimeId}? The project path, command, and working directory come from the committed Ulysses catalog.`,
+    {
+      title: 'Plan runtime action',
+      confirmText: 'Create plan',
+      cancelText: 'Cancel',
+      danger: ['stop', 'restart', 'update'].includes(action),
+    },
+  );
+  if (!wantsPlan) return;
+  try {
+    const planned = await request('/api/ulysses/runtimes/jobs/plan', {
+      method: 'POST',
+      body: JSON.stringify({ runtime_id: runtimeId, action }),
+    });
+    const job = planned.job || {};
+    const steps = (job.steps || []).map((step, index) => `${index + 1}. ${step.label}`).join('\n');
+    const confirmed = await uiModule.styledConfirm(
+      `${job.summary}\n\n${steps}\n\nThe action runs as a durable argv-only job. Configuration files are not rewritten by lifecycle actions.`,
+      {
+        title: 'Confirm runtime plan',
+        confirmText: action === 'start' ? 'Start' : action === 'sync' ? 'Sync' : 'Run',
+        cancelText: 'Keep plan only',
+        danger: ['stop', 'restart', 'update'].includes(action),
+      },
+    );
+    if (!confirmed) {
+      await load();
+      return;
+    }
+    await request(`/api/ulysses/jobs/${encodeURIComponent(job.id)}/execute`, {
+      method: 'POST',
+      body: JSON.stringify({
+        confirmation_token: planned.confirmation_token,
+        confirmation_phrase: job.confirmation_phrase,
+      }),
+    });
+    await load();
+  } catch (error) {
+    loadError = error?.message || String(error);
+    render();
+  }
+}
+
+async function toggleRuntimeConfig(runtimeId) {
+  if (expandedRuntime === runtimeId) {
+    expandedRuntime = '';
+    render();
+    return;
+  }
+  expandedRuntime = runtimeId;
+  runtimeDocuments = { ...runtimeDocuments, [runtimeId]: null };
+  render();
+  await loadRuntimeDocuments(runtimeId, false);
+}
+
+async function loadRuntimeDocuments(runtimeId, reveal = false) {
+  try {
+    const payload = await request(`/api/ulysses/runtimes/${encodeURIComponent(runtimeId)}/documents?reveal=${reveal ? 'true' : 'false'}`);
+    runtimeDocuments = { ...runtimeDocuments, [runtimeId]: payload };
+    expandedRuntime = runtimeId;
+    render();
+  } catch (error) {
+    loadError = error?.message || String(error);
+    render();
+  }
+}
+
+async function saveRuntimeDocument(runtimeId, documentId) {
+  const card = document.querySelector(`[data-managed-runtime="${CSS.escape(runtimeId)}"]`);
+  const editor = card?.querySelector(`[data-runtime-editor="${CSS.escape(documentId)}"]`);
+  if (!editor) return;
+  const confirmed = await uiModule.styledConfirm(
+    `Validate and save ${documentId} for ${runtimeId}? This changes only the native project file. It does not restart or update the runtime.`,
+    {
+      title: 'Save runtime configuration',
+      confirmText: 'Validate & save',
+      cancelText: 'Cancel',
+      danger: true,
+    },
+  );
+  if (!confirmed) return;
+  try {
+    await request(`/api/ulysses/runtimes/${encodeURIComponent(runtimeId)}/documents/${encodeURIComponent(documentId)}`, {
+      method: 'PUT',
+      body: JSON.stringify({
+        expected_sha256: editor.dataset.runtimeSha || null,
+        content: editor.value,
+        confirmation_phrase: `SAVE ${runtimeId} CONFIG`,
+      }),
+    });
+    uiModule.showToast('Runtime configuration validated and saved.', 5000);
+    await loadRuntimeDocuments(runtimeId, true);
+  } catch (error) {
+    uiModule.showToast(`Configuration was not saved: ${error?.message || error}`, 9000);
+  }
+}
+
+async function loadRuntimeConsole(runtimeId) {
+  try {
+    const payload = await request(`/api/ulysses/runtimes/${encodeURIComponent(runtimeId)}/log?max_chars=30000`);
+    runtimeLogs = { ...runtimeLogs, [runtimeId]: payload.text || '' };
     render();
   } catch (error) {
     loadError = error?.message || String(error);
@@ -725,12 +1090,13 @@ async function load() {
   loading = true;
   loadError = '';
   render();
-  const [topologyResult, chromaResult, hermesResult, jobsResult, readinessResult] = await Promise.allSettled([
+  const [topologyResult, chromaResult, hermesResult, jobsResult, readinessResult, runtimesResult] = await Promise.allSettled([
     request('/api/ulysses/topology'),
     request('/api/ulysses/chroma/persistence'),
     request('/api/ulysses/hermes/adoption'),
     request('/api/ulysses/jobs?limit=50'),
     request('/api/ulysses/readiness'),
+    request('/api/ulysses/runtimes'),
   ]);
   topology = topologyResult.status === 'fulfilled' ? topologyResult.value : null;
   chroma = chromaResult.status === 'fulfilled' ? chromaResult.value : null;
@@ -739,7 +1105,8 @@ async function load() {
     ? jobsResult.value.jobs
     : [];
   readiness = readinessResult.status === 'fulfilled' ? readinessResult.value : null;
-  const errors = [topologyResult, chromaResult, hermesResult, jobsResult, readinessResult]
+  managedRuntimes = runtimesResult.status === 'fulfilled' ? runtimesResult.value : null;
+  const errors = [topologyResult, chromaResult, hermesResult, jobsResult, readinessResult, runtimesResult]
     .filter((result) => result.status === 'rejected')
     .map((result) => result.reason?.message || String(result.reason));
   loadError = errors.join(' · ');
