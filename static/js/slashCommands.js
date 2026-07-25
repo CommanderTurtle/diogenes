@@ -1511,6 +1511,56 @@ async function _cmdTheme(args, ctx) {
   return true;
 }
 
+// ── Background effects ──
+
+function _openThemeBackgroundControls() {
+  const modal = document.getElementById('theme-modal');
+  if (!modal || modal.classList.contains('hidden')) {
+    const opener = document.getElementById('tool-theme-btn')
+      || document.getElementById('rail-theme')
+      || document.getElementById('open-theme-btn');
+    if (opener) opener.click();
+  }
+  window.setTimeout(() => {
+    const customize = document.querySelector('#theme-tabs [data-tab="theme-tab-customize"]');
+    if (customize && !customize.classList.contains('active')) customize.click();
+    const select = document.getElementById('theme-bg-pattern-select');
+    if (select) {
+      select.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      select.focus({ preventScroll: true });
+    }
+  }, 0);
+}
+
+async function _cmdCss(args, ctx) {
+  const tm = themeModule;
+  const patterns = tm && Array.isArray(tm.BACKGROUND_PATTERNS)
+    ? tm.BACKGROUND_PATTERNS
+    : ['none', 'dots', 'synapse', 'rain', 'constellations', 'perlin-flow', 'petals', 'sparkles', 'embers'];
+  const raw = (args[0] || '').trim().toLowerCase();
+
+  if (!raw) {
+    _openThemeBackgroundControls();
+    return true;
+  }
+  if (raw === 'list' || raw === 'ls') {
+    slashReply(`Background effects: ${patterns.join(', ')}`);
+    return true;
+  }
+
+  const name = (raw === 'off' || raw === 'solid') ? 'none' : raw;
+  if (!patterns.includes(name)) {
+    slashReply(`Unknown background effect "${ctx.esc(raw)}". Available: ${patterns.join(', ')}`);
+    return true;
+  }
+  if (!tm || typeof tm.setBackgroundPattern !== 'function' || !tm.setBackgroundPattern(name)) {
+    slashReply('Could not change the background effect.');
+    return true;
+  }
+  await typewriterReply(`Background effect: ${name}`);
+  return true;
+}
+
 // ── Models ──
 
 async function _cmdModels(args, ctx) {
@@ -5972,6 +6022,13 @@ const COMMANDS = {
     help: 'Change color theme',
     handler: _cmdTheme,
     usage: '/theme name'
+  },
+  css: {
+    alias: ['background', 'bg'],
+    category: 'Settings',
+    help: 'Open or change the animated background effect without changing theme colors',
+    handler: _cmdCss,
+    usage: '/css [none|dots|synapse|rain|constellations|perlin-flow|petals|sparkles|embers]'
   },
   settings: {
     alias: ['cfg', 'preferences', 'config'],

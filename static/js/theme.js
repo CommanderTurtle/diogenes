@@ -184,7 +184,7 @@ const ADV_KEYS = [
   { key: 'aiBubbleBg',         css: '--ai-bubble-bg',      label: 'AI Chat Bubble',   group: 'Chat Bubbles' },
   { key: 'bubbleBorder',       css: '--bubble-border',     label: 'Border Chat Bubble', group: 'Chat Bubbles' },
   { key: 'sidebarBg',          css: '--sidebar-bg',        label: 'Sidebar Bg',       group: 'Sidebar' },
-  { key: 'brandColor',         css: '--brand-color',       label: 'Odysseus Logo',    group: 'Sidebar' },
+  { key: 'brandColor',         css: '--brand-color',       label: 'Οδυσσέας Logo',    group: 'Sidebar' },
   { key: 'brandMixTo',         css: '--brand-mix-to',      label: 'Logo Gradient End', group: 'Sidebar' },
   { key: 'hamburgerColor',     css: '--hamburger-color',   label: 'Hamburger Menu',   group: 'Sidebar' },
   { key: 'inputBg',            css: '--input-bg',          label: 'Input Bg',         group: 'Chat Input / Prompt Area' },
@@ -406,6 +406,10 @@ const _BG_CLASSES = ['bg-pattern-dots',
   'bg-pattern-synapse', 'bg-pattern-rain', 'bg-pattern-constellations',
   'bg-pattern-perlin-flow',
   'bg-pattern-petals', 'bg-pattern-sparkles', 'bg-pattern-embers'];
+export const BACKGROUND_PATTERNS = Object.freeze([
+  'none', 'dots', 'synapse', 'rain', 'constellations',
+  'perlin-flow', 'petals', 'sparkles', 'embers',
+]);
 const _CANVAS_PATTERNS = { synapse: _initSynapse, rain: _initRain, constellations: _initConstellations,
   'perlin-flow': _initPerlinFlow,
   petals: _initPetals, sparkles: _initSparkles, embers: _initEmbers };
@@ -471,7 +475,11 @@ export function save(name, colors, opts) {
   if (opts) {
     if (opts.font && opts.font !== DEFAULT_FONT) obj.font = opts.font;
     if (opts.density && opts.density !== DEFAULT_DENSITY) obj.density = opts.density;
-    if (opts.bgPattern && opts.bgPattern !== 'none') obj.bgPattern = opts.bgPattern;
+    // `none` is a meaningful explicit override for presets whose default
+    // includes an effect. Records without bgPattern still inherit defaults.
+    if (Object.prototype.hasOwnProperty.call(opts, 'bgPattern')) {
+      obj.bgPattern = opts.bgPattern || 'none';
+    }
     if (opts.bgEffectColor) obj.bgEffectColor = opts.bgEffectColor;
     if (opts.bgEffectIntensity !== undefined && opts.bgEffectIntensity !== 1) obj.bgEffectIntensity = opts.bgEffectIntensity;
     if (opts.bgEffectSize !== undefined && opts.bgEffectSize !== 1) obj.bgEffectSize = opts.bgEffectSize;
@@ -479,6 +487,39 @@ export function save(name, colors, opts) {
   }
   Storage.setJSON(LS_KEY, obj);
   _syncToServer(obj);
+}
+
+/** Change only the active theme's background effect.
+ *
+ * Shared by the Theme UI and `/css`; palette, typography, sizing, and glass
+ * settings remain untouched.
+ */
+export function setBackgroundPattern(pattern) {
+  const p = String(pattern || '').trim().toLowerCase();
+  if (!BACKGROUND_PATTERNS.includes(p)) return false;
+
+  const current = getSaved() || { name: DEFAULT_THEME, colors: THEMES[DEFAULT_THEME] };
+  const name = current.name || DEFAULT_THEME;
+  const colors = current.colors || THEMES[name] || THEMES[DEFAULT_THEME];
+  const opts = {
+    font: current.font || DEFAULT_FONT,
+    density: current.density || DEFAULT_DENSITY,
+    bgPattern: p,
+    bgEffectColor: current.bgEffectColor || THEME_DEFAULT_EFFECT_COLOR[name] || '',
+    bgEffectIntensity: current.bgEffectIntensity !== undefined
+      ? current.bgEffectIntensity
+      : (THEME_DEFAULT_INTENSITY[name] !== undefined ? THEME_DEFAULT_INTENSITY[name] : 1),
+    bgEffectSize: current.bgEffectSize !== undefined ? current.bgEffectSize : 1,
+    frosted: current.frosted !== undefined
+      ? !!current.frosted
+      : (THEME_DEFAULT_FROSTED[name] === true),
+  };
+
+  applyBgPattern(p);
+  save(name, colors, opts);
+  const select = document.getElementById('theme-bg-pattern-select');
+  if (select) select.value = p;
+  return true;
 }
 
 function _syncToServer(obj) {
