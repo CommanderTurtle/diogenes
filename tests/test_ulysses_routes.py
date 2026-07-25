@@ -47,7 +47,14 @@ class _FakeHermesControl:
         )
 
 
-def _client(monkeypatch, gate, *, chroma_report=None, hermes_report=None):
+def _client(
+    monkeypatch,
+    gate,
+    *,
+    chroma_report=None,
+    hermes_report=None,
+    colibri_report=None,
+):
     monkeypatch.setattr(routes, "require_admin", gate)
     monkeypatch.setattr(
         routes,
@@ -76,6 +83,12 @@ def _client(monkeypatch, gate, *, chroma_report=None, hermes_report=None):
             or {
                 "schema_version": "ulysses.hermes-adoption.v1",
                 "mode": "read_only",
+            },
+            colibri_collector=lambda: colibri_report
+            or {
+                "schema_version": "ulysses.colibri-provider-report.v1",
+                "mode": "read_only",
+                "providers": [],
             },
             hermes_control_factory=_FakeHermesControl,
             readiness_collector=lambda _topology, _chroma, _hermes: {
@@ -162,6 +175,35 @@ def test_admin_receives_read_only_hermes_adoption(monkeypatch):
         lambda _request: None,
         hermes_report=report,
     ).get("/api/ulysses/hermes/adoption")
+
+    assert response.status_code == 200
+    assert response.json() == report
+
+
+def test_colibri_providers_require_admin(monkeypatch):
+    def gate(_request: Request):
+        raise HTTPException(403, "Admin only")
+
+    response = _client(monkeypatch, gate).get(
+        "/api/ulysses/colibri/providers"
+    )
+    assert response.status_code == 403
+
+
+def test_admin_receives_separate_colibri_provider_observations(monkeypatch):
+    report = {
+        "schema_version": "ulysses.colibri-provider-report.v1",
+        "mode": "read_only",
+        "providers": [
+            {"id": "colibri.glm"},
+            {"id": "colibri.hy3"},
+        ],
+    }
+    response = _client(
+        monkeypatch,
+        lambda _request: None,
+        colibri_report=report,
+    ).get("/api/ulysses/colibri/providers")
 
     assert response.status_code == 200
     assert response.json() == report

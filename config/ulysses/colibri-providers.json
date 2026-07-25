@@ -1,0 +1,108 @@
+{
+  "schema_version": "ulysses.colibri-providers.v1",
+  "providers": [
+    {
+      "id": "colibri.glm",
+      "label": "Colibri · GLM-5.2",
+      "family": "glm",
+      "source_url": "https://github.com/JustVugg/colibri.git",
+      "source_branch": "dev",
+      "source_env": "ULYSSES_COLIBRI_GLM_ROOT",
+      "source_default": "Odysseus/colibri",
+      "model_env": "ULYSSES_COLIBRI_GLM_MODEL",
+      "model_default": "colibri-models/mateogrgic--GLM-5.2-colibri-int4-with-int8-mtp",
+      "port_env": "ULYSSES_COLIBRI_GLM_PORT",
+      "default_port": 8642,
+      "model_id": "glm-5.2-colibri",
+      "minimum_commit": "5f167e5964f40a3a62d4cadb911543ce0f15b49b",
+      "minimum_commit_reason": "Merged PR #274: single-GPU decode pipeline and expert-cache reserve fix",
+      "cli_path": "c/coli",
+      "engine_path": "c/colibri",
+      "setup_path": "c/setup.sh",
+      "build_cwd": "c",
+      "build_argv": ["make", "CUDA=1", "CUDA_ARCH=native"],
+      "plan_args": ["plan", "--auto-tier", "--gpu", "0", "--json"],
+      "doctor_args": ["doctor", "--auto-tier", "--gpu", "0", "--json"],
+      "serve_args": [
+        "serve",
+        "--auto-tier",
+        "--gpu",
+        "0",
+        "--host",
+        "127.0.0.1",
+        "--max-queue",
+        "8",
+        "--queue-timeout",
+        "300",
+        "--kv-slots",
+        "1"
+      ],
+      "supports_tools": true,
+      "model_type": "llm",
+      "documentation": {
+        "repository": "https://github.com/JustVugg/colibri",
+        "api": "https://github.com/JustVugg/colibri/blob/dev/docs/api.md",
+        "cuda": "https://github.com/JustVugg/colibri/blob/dev/docs/cuda.md",
+        "optimization": "https://github.com/JustVugg/colibri/issues/273"
+      }
+    },
+    {
+      "id": "colibri.hy3",
+      "label": "Colibri · Hy3",
+      "family": "hy3",
+      "source_url": "https://github.com/ErikTromp/colibri-hy3.git",
+      "source_branch": "main",
+      "source_env": "ULYSSES_COLIBRI_HY3_ROOT",
+      "source_default": "Odysseus/colibri-hy3",
+      "model_env": "ULYSSES_COLIBRI_HY3_MODEL",
+      "model_default": "colibri-models/UnderstandLing--Hy3-colibri-int4",
+      "port_env": "ULYSSES_COLIBRI_HY3_PORT",
+      "default_port": 8643,
+      "model_id": "hy3-colibri",
+      "minimum_commit": null,
+      "minimum_commit_reason": "Use the observed official source revision and record it in the build manifest",
+      "cli_path": "c/coli",
+      "engine_path": "c/hy3",
+      "setup_path": "c/setup.sh",
+      "build_cwd": "c",
+      "build_argv": ["make", "hy3", "CUDA=1", "IOURING=1"],
+      "plan_args": [
+        "plan",
+        "--ram",
+        "56",
+        "--gpu",
+        "0",
+        "--vram",
+        "16",
+        "--json"
+      ],
+      "doctor_args": [
+        "doctor",
+        "--ram",
+        "56",
+        "--gpu",
+        "0",
+        "--vram",
+        "16",
+        "--json"
+      ],
+      "serve_args": [
+        "serve",
+        "--ram",
+        "56",
+        "--gpu",
+        "0",
+        "--vram",
+        "16",
+        "--host",
+        "127.0.0.1"
+      ],
+      "supports_tools": null,
+      "model_type": "llm",
+      "documentation": {
+        "repository": "https://github.com/ErikTromp/colibri-hy3",
+        "weights": "https://huggingface.co/UnderstandLing/Hy3-colibri-int4"
+      }
+    }
+  ]
+}

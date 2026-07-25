@@ -11,6 +11,7 @@ from starlette.concurrency import run_in_threadpool
 from core.middleware import require_admin
 from src.sandwich_runtime import observe_sandwich_installation
 from src.ulysses_chroma import collect_chroma_persistence
+from src.ulysses_colibri import collect_colibri_providers
 from src.ulysses_catalog import default_runtime_registry
 from src.ulysses_discovery import HostDiscoverySnapshot, collect_host_discovery
 from src.ulysses_hermes import collect_hermes_adoption
@@ -52,6 +53,7 @@ def setup_ulysses_routes(
     collector: Callable[[], HostDiscoverySnapshot] = collect_host_discovery,
     chroma_collector: Callable[[], dict] = collect_chroma_persistence,
     hermes_collector: Callable[[], dict] = collect_hermes_adoption,
+    colibri_collector: Callable[[], dict] = collect_colibri_providers,
     hermes_control_factory: Callable[[], HermesControl] = HermesControl,
     readiness_collector: Callable[
         [dict, dict, dict], dict
@@ -77,6 +79,11 @@ def setup_ulysses_routes(
         require_admin(request)
         report = await run_in_threadpool(hermes_collector)
         return hermes_control_factory().decorate_report(report)
+
+    @router.get("/colibri/providers")
+    async def get_colibri_providers(request: Request) -> dict:
+        require_admin(request)
+        return await run_in_threadpool(colibri_collector)
 
     @router.post("/hermes/adoption/apply")
     async def apply_hermes_adoption(
