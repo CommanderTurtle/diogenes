@@ -188,9 +188,24 @@ def test_model_completeness_requires_the_pinned_layout(tmp_path: Path) -> None:
     assert incomplete["missing_shards"] == 1
 
     (model_root / "out-mtp-00000.safetensors").write_bytes(b"cc")
+    stale_lock = (
+        model_root
+        / ".cache"
+        / "huggingface"
+        / "download"
+        / "out-mtp-00000.safetensors.lock"
+    )
+    stale_lock.write_bytes(b"")
     complete = colibri._model(provider)
     assert complete["present"] is True
     assert complete["layout_complete"] is True
+    assert complete["download_markers"] == 0
+    assert complete["download_locks"] == 1
+
+    (stale_lock.parent / "out-mtp-00000.safetensors.incomplete").write_bytes(b"")
+    active_download = colibri._model(provider)
+    assert active_download["present"] is False
+    assert active_download["download_markers"] == 1
 
 
 def test_build_manifest_requires_current_hashes(tmp_path: Path) -> None:

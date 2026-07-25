@@ -490,7 +490,11 @@ def _model(provider: ColibriProvider) -> dict[str, Any]:
     )
     incomplete = (
         list((root / ".cache").rglob("*.incomplete"))
-        + list((root / ".cache").rglob("*.lock"))
+        if root.is_dir()
+        else []
+    )
+    download_locks = (
+        list((root / ".cache").rglob("*.lock"))
         if root.is_dir()
         else []
     )
@@ -557,6 +561,7 @@ def _model(provider: ColibriProvider) -> dict[str, Any]:
         "mtp_shards": len(mtp_shards),
         "bytes": total_bytes,
         "download_markers": len(incomplete),
+        "download_locks": len(download_locks),
         "download_revision": revision,
         "revision_matches": revision_matches,
         "layout_complete": layout_complete,
