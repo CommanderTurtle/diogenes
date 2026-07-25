@@ -6,7 +6,7 @@ Captured on 2026-07-25 without installing Node.
 
 - Installed Bun: `1.3.14` (`0d9b296a`)
 - Sandwich compatibility suite: 35 passed
-- Ulysses Sandwich/catalog/discovery contract suite: 27 passed
+- Ulysses Sandwich/catalog/discovery/topology contract suite: 32 passed
 - Detected installation: `/home/alienl/Hermes/sandwich`
 - Ulysses full isolated test suite using the upstream Bun fix build:
   4,761 passed, 3 skipped

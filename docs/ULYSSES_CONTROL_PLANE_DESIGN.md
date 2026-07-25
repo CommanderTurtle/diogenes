@@ -16,6 +16,24 @@ Arcane-inspired in workflow, but manages more than Docker:
 It is intentionally not a scheduler, Kubernetes replacement, or arbitrary
 browser shell.
 
+## Agent and MCP boundaries
+
+Odysseus and Hermes remain separate agents:
+
+- the existing Odysseus MCP configuration UI controls only MCPs registered to
+  the Odysseus agent;
+- Hermes profiles and watchdogs control only MCPs registered to Hermes;
+- the Ulysses Services UI may observe and operate either registry, but it
+  never copies, merges, or implicitly registers configuration between them;
+- shared host services such as Camofox, Firecrawl, SearXNG, Chroma, and model
+  endpoints remain host-scoped dependencies that either agent may reference
+  explicitly.
+
+Every runtime definition therefore carries a scope: `host`,
+`odysseus_agent`, or `hermes_agent`. A future context-mode archival bridge may
+use a narrow Chroma storage/retrieval contract, but that does not connect the
+Odysseus and Hermes agent loops.
+
 ## The service contract
 
 Every service definition records:

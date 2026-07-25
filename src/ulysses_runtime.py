@@ -28,6 +28,12 @@ class OwnershipState(str, Enum):
     MANAGED = "managed"
 
 
+class RuntimeScope(str, Enum):
+    HOST = "host"
+    ODYSSEUS_AGENT = "odysseus_agent"
+    HERMES_AGENT = "hermes_agent"
+
+
 class RuntimeStatus(str, Enum):
     UNKNOWN = "unknown"
     STOPPED = "stopped"
@@ -79,6 +85,7 @@ class RuntimeDefinition:
     adapter: RuntimeAdapter
     execution: ExecutionSpec | None = None
     ownership: OwnershipState = OwnershipState.EXTERNAL
+    scope: RuntimeScope = RuntimeScope.HOST
     source_root: Path | None = None
     data_roots: tuple[Path, ...] = ()
     ports: tuple[PortBinding, ...] = ()

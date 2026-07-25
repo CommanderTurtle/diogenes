@@ -502,7 +502,7 @@ corresponding rollback has been tested.
 3. [x] Implement control-plane data contracts and a read-only registry.
 4. Add discovery-only adapters for Docker, systemd, processes/ports, Git,
    NVIDIA, and Chroma.
-5. Render the first read-only topology/status API.
+5. [x] Render the first read-only topology/status API.
 6. [x] Integrate Sandwich as the first optional runtime.
 7. Adopt and validate the existing microservices, persistence, configuration,
    Camofox browser capability, and lifecycle views.

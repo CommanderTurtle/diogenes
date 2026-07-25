@@ -779,6 +779,9 @@ app.include_router(setup_shell_routes())
 from routes.cookbook_routes import setup_cookbook_routes
 app.include_router(setup_cookbook_routes())
 
+from routes.ulysses_routes import setup_ulysses_routes
+app.include_router(setup_ulysses_routes())
+
 from routes.workspace_routes import setup_workspace_routes
 app.include_router(setup_workspace_routes())
 

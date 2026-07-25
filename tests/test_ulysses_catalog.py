@@ -36,6 +36,9 @@ def test_default_catalog_resolves_portable_roots_and_sandwich(tmp_path):
         "hermes.gateway",
         "sandwich.runtime",
     )
+    assert registry.get("camofox.mcp").scope.value == "hermes_agent"
+    assert registry.get("context.mode.mcp").scope.value == "hermes_agent"
+    assert registry.get("firecrawl.api").scope.value == "host"
 
 
 def test_catalog_rejects_relative_microservices_root(tmp_path):

@@ -1,0 +1,61 @@
+import pytest
+
+
+fastapi = pytest.importorskip("fastapi")
+pytest.importorskip("starlette.testclient")
+
+from fastapi import FastAPI, HTTPException, Request
+from starlette.testclient import TestClient
+
+from src.ulysses_discovery import HostDiscoverySnapshot
+
+routes = pytest.importorskip("routes.ulysses_routes")
+
+
+def _client(monkeypatch, gate):
+    monkeypatch.setattr(routes, "require_admin", gate)
+    monkeypatch.setattr(
+        routes,
+        "default_runtime_registry",
+        lambda: __import__(
+            "src.ulysses_catalog", fromlist=["default_runtime_registry"]
+        ).default_runtime_registry(),
+    )
+    snapshot = HostDiscoverySnapshot(
+        observed_at=1.0,
+        compose_containers=(),
+        tmux_sessions=(),
+        systemd_user_units=(),
+        listening_sockets=(),
+    )
+    app = FastAPI()
+    app.include_router(routes.setup_ulysses_routes(collector=lambda: snapshot))
+    return TestClient(app, raise_server_exceptions=False)
+
+
+def test_topology_requires_authentication(monkeypatch):
+    def gate(_request: Request):
+        raise HTTPException(401, "Not authenticated")
+
+    response = _client(monkeypatch, gate).get("/api/ulysses/topology")
+    assert response.status_code == 401
+
+
+def test_topology_requires_admin(monkeypatch):
+    def gate(_request: Request):
+        raise HTTPException(403, "Admin only")
+
+    response = _client(monkeypatch, gate).get("/api/ulysses/topology")
+    assert response.status_code == 403
+
+
+def test_admin_receives_read_only_topology(monkeypatch):
+    response = _client(monkeypatch, lambda _request: None).get(
+        "/api/ulysses/topology"
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["schema_version"] == "ulysses.topology.v1"
+    assert payload["javascript_runtime"]["id"] == "sandwich"
+    assert "runtimes" in payload

@@ -9,6 +9,7 @@ from src.ulysses_runtime import (
     RuntimeAdapter,
     RuntimeDefinition,
     RuntimeRegistry,
+    RuntimeScope,
 )
 
 
@@ -31,6 +32,7 @@ def test_external_and_sanitized_are_safe_defaults():
     runtime = _runtime()
 
     assert runtime.ownership is OwnershipState.EXTERNAL
+    assert runtime.scope is RuntimeScope.HOST
     assert runtime.execution is not None
     assert runtime.execution.inherit_host_environment is False
 

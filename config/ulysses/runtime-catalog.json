@@ -33,6 +33,7 @@
       "label": "Hermes gateway",
       "adapter": "systemd_user",
       "ownership": "external",
+      "scope": "hermes_agent",
       "source_root": "${HOME}/.hermes/hermes-agent",
       "dependencies": ["sandwich.runtime"],
       "capabilities": ["agent-runtime", "gateway", "mcp-host"]
@@ -90,6 +91,7 @@
       "label": "Context Mode MCP",
       "adapter": "mcp_stdio",
       "ownership": "external",
+      "scope": "hermes_agent",
       "source_root": "${ULYSSES_MICROSERVICES_ROOT}/context-mode",
       "dependencies": ["hermes.gateway", "sandwich.runtime"],
       "capabilities": ["mcp", "context-archive"]
@@ -99,6 +101,7 @@
       "label": "Camofox MCP",
       "adapter": "mcp_stdio",
       "ownership": "external",
+      "scope": "hermes_agent",
       "source_root": "${ULYSSES_MICROSERVICES_ROOT}/camofox-mcp",
       "dependencies": ["camofox.browser", "hermes.gateway", "sandwich.runtime"],
       "capabilities": ["mcp", "browser"]

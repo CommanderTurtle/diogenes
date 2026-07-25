@@ -14,6 +14,7 @@ from src.ulysses_runtime import (
     RuntimeAdapter,
     RuntimeDefinition,
     RuntimeRegistry,
+    RuntimeScope,
 )
 
 
@@ -86,6 +87,7 @@ def load_runtime_catalog(
         try:
             adapter = RuntimeAdapter(raw["adapter"])
             ownership = OwnershipState(raw.get("ownership", "external"))
+            scope = RuntimeScope(raw.get("scope", "host"))
         except (KeyError, ValueError) as exc:
             raise RuntimeCatalogError("runtime adapter or ownership is invalid") from exc
         source_root = (
@@ -121,6 +123,7 @@ def load_runtime_catalog(
                 label=raw["label"],
                 adapter=adapter,
                 ownership=ownership,
+                scope=scope,
                 source_root=source_root,
                 ports=ports,
                 dependencies=tuple(dependencies),
