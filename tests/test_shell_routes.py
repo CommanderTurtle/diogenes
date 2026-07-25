@@ -415,7 +415,7 @@ class TestPackageProbeStatus:
         assert contract["mode"] == "uv-lock"
         assert contract["exact"] is True
         assert contract["versions"]["torch"] == "2.11.0"
-        assert contract["python"] == str(python.resolve())
+        assert contract["python"] == str(python.absolute())
         assert contract["venv"] == str(venv.resolve())
         assert _ulysses_vllm_lock_contract(remote_host="gpu@example") is None
 

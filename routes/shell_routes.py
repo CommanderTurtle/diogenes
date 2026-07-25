@@ -104,7 +104,10 @@ def _ulysses_vllm_lock_contract(*, remote_host: str | None = None) -> dict | Non
     # the inner environment from which the app is currently running.
     if sys.prefix == sys.base_prefix:
         return None
-    python_path = Path(sys.executable).resolve()
+    # Preserve the venv executable path. uv-created environments commonly make
+    # ``.venv/bin/python`` a symlink into uv's managed interpreter store; resolving
+    # that symlink would make the install target look like the base runtime.
+    python_path = Path(sys.executable).absolute()
     venv_path = Path(sys.prefix).resolve()
     if not python_path.is_file() or not (venv_path / "pyvenv.cfg").is_file():
         return None
