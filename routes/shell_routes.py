@@ -77,6 +77,67 @@ def _reject_cross_site(request: Request):
 
 _SSH_PORT_RE = re.compile(r"^\d{1,5}$")
 _SAFE_VENV_RE = re.compile(r"^[A-Za-z0-9_./~-]+$")
+_LOCKED_REQUIREMENT_RE = re.compile(
+    r"^([A-Za-z0-9][A-Za-z0-9._-]*)==([^\s;\\]+)(?:\s*;.*)?$"
+)
+_ULYSSES_VLLM_LOCK_PACKAGES = (
+    "vllm",
+    "torch",
+    "torchaudio",
+    "torchvision",
+    "triton",
+)
+
+
+def _ulysses_vllm_lock_contract(*, remote_host: str | None = None) -> dict | None:
+    """Describe the configured, exact Ulysses vLLM environment contract.
+
+    The lock belongs to this Ulysses host.  A selected SSH target keeps the
+    upstream generic package flow because a local absolute path has no meaning
+    on another machine.
+    """
+    if (remote_host or "").strip():
+        return None
+    import sys
+
+    # A managed lock must never target the base interpreter. Ulysses owns only
+    # the inner environment from which the app is currently running.
+    if sys.prefix == sys.base_prefix:
+        return None
+    python_path = Path(sys.executable).resolve()
+    venv_path = Path(sys.prefix).resolve()
+    if not python_path.is_file() or not (venv_path / "pyvenv.cfg").is_file():
+        return None
+    configured = os.getenv("ULYSSES_VLLM_LOCK", "").strip()
+    if not configured:
+        return None
+    lock_path = Path(configured).expanduser()
+    if not lock_path.is_absolute() or not lock_path.is_file():
+        return None
+
+    versions: dict[str, str] = {}
+    try:
+        for raw_line in lock_path.read_text(encoding="utf-8").splitlines():
+            match = _LOCKED_REQUIREMENT_RE.fullmatch(raw_line.strip())
+            if match:
+                versions[match.group(1).lower().replace("_", "-")] = match.group(2)
+    except OSError:
+        return None
+
+    required = {
+        name: versions.get(name)
+        for name in _ULYSSES_VLLM_LOCK_PACKAGES
+    }
+    if any(version is None for version in required.values()):
+        return None
+    return {
+        "mode": "uv-lock",
+        "lock_path": str(lock_path.resolve()),
+        "python": str(python_path),
+        "venv": str(venv_path),
+        "versions": required,
+        "exact": True,
+    }
 
 
 def _ssh_base_argv(host: str, ssh_port: str | None) -> list[str]:
@@ -312,6 +373,24 @@ def _package_pip_update_status(
         return PackageUpdateStatus(
             False,
             "",  # Note is empty because IT DOES allow for updates outside of PIP.
+        )
+
+    managed_install = pkg.get("managed_install")
+    if (
+        pkg.get("name") == "vllm"
+        and isinstance(managed_install, dict)
+        and managed_install.get("mode") == "uv-lock"
+    ):
+        versions = managed_install.get("versions") or {}
+        pinned = versions.get("vllm")
+        return PackageUpdateStatus(
+            False,
+            (
+                f"Managed by the Ulysses uv lock (vLLM {pinned}); "
+                "Reconcile reapplies the verified CUDA stack without upgrading to latest."
+                if pinned
+                else "Managed by the Ulysses uv lock; generic pip upgrades are disabled."
+            ),
         )
 
     if pkg.get("kind") == "system" or not pkg.get("pip"):
@@ -1307,7 +1386,7 @@ def setup_shell_routes() -> APIRouter:
             {
                 "name": "vllm",
                 "pip": "vllm",
-                "desc": "Great for high-throughput multi-GPU inference",
+                "desc": "Great for high-throughput GPU inference",
                 "category": "LLM",
                 "target": "remote",
             },
@@ -1579,7 +1658,15 @@ def setup_shell_routes() -> APIRouter:
         if not target_os_id and platform_l in {"darwin", "macos", "mac"}:
             target_os_id = "macos"
 
+        managed_vllm = _ulysses_vllm_lock_contract(remote_host=host)
         for pkg in packages:
+            if pkg["name"] == "vllm" and managed_vllm:
+                pkg["managed_install"] = managed_vllm
+                versions = managed_vllm["versions"]
+                pkg["desc"] = (
+                    f"Verified CUDA stack: vLLM {versions['vllm']}, "
+                    f"Torch {versions['torch']}, Triton {versions['triton']}"
+                )
             if pkg.get("name") in {"mflux", "boogu_image_mlx", "mlx_vlm", "mlx_lama_swift", "mlx_ddcolor_swift"}:
                 is_apple_target = target_os_id == "macos" or (
                     not host and IS_APPLE_SILICON
@@ -1824,6 +1911,17 @@ def setup_shell_routes() -> APIRouter:
         }
         if pip_name not in known:
             return {"ok": False, "error": f"Unknown package: {pip_name}"}
+        if pip_name == "vllm":
+            managed_vllm = _ulysses_vllm_lock_contract()
+            if managed_vllm:
+                return {
+                    "ok": False,
+                    "error": (
+                        "vLLM is managed by the configured Ulysses uv lock. "
+                        "Use the asynchronous Install/Reconcile action in Cookbook."
+                    ),
+                    "managed_install": managed_vllm,
+                }
         cmd = [_sys.executable, "-m", "pip", "install", pip_name]
         proc = await asyncio.create_subprocess_exec(
             *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE

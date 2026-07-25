@@ -20,6 +20,7 @@ from routes.shell_routes import (
     _docker_row_status,
     _package_installed_from_probe,
     _package_pip_update_status,
+    _ulysses_vllm_lock_contract,
     _package_probe_script,
     _package_status_note,
     _prepend_user_install_bins_to_path,
@@ -368,6 +369,55 @@ class TestPackageProbeStatus:
         assert _package_installed_from_probe("vllm", probe) is True
         assert status.available is False
         assert "outside Odysseus" in status.note
+
+    def test_vllm_uv_lock_disables_generic_latest_update(self):
+        managed = {
+            "mode": "uv-lock",
+            "lock_path": "/srv/locks/vllm.lock",
+            "versions": {"vllm": "0.23.0"},
+        }
+        status = _package_pip_update_status(
+            {"name": "vllm", "pip": "vllm", "managed_install": managed},
+            {"binaries": {"vllm": "/srv/.venv/bin/vllm"}, "dists": {"vllm": "0.23.0"}},
+        )
+
+        assert status.available is False
+        assert "vLLM 0.23.0" in status.note
+        assert "without upgrading to latest" in status.note
+
+    def test_vllm_uv_lock_contract_requires_complete_exact_lock(self, tmp_path, monkeypatch):
+        lock = tmp_path / "vllm.lock"
+        lock.write_text(
+            "\n".join(
+                [
+                    "vllm==0.23.0",
+                    "torch==2.11.0",
+                    "torchaudio==2.11.0",
+                    "torchvision==0.26.0",
+                    "triton==3.6.0",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        monkeypatch.setenv("ULYSSES_VLLM_LOCK", str(lock))
+        venv = tmp_path / ".venv"
+        python = venv / "bin" / "python"
+        python.parent.mkdir(parents=True)
+        python.write_text("", encoding="utf-8")
+        (venv / "pyvenv.cfg").write_text("uv = 0.11.31\n", encoding="utf-8")
+        monkeypatch.setattr(sys, "prefix", str(venv))
+        monkeypatch.setattr(sys, "base_prefix", "/usr")
+        monkeypatch.setattr(sys, "executable", str(python))
+
+        contract = _ulysses_vllm_lock_contract()
+
+        assert contract is not None
+        assert contract["mode"] == "uv-lock"
+        assert contract["exact"] is True
+        assert contract["versions"]["torch"] == "2.11.0"
+        assert contract["python"] == str(python.resolve())
+        assert contract["venv"] == str(venv.resolve())
+        assert _ulysses_vllm_lock_contract(remote_host="gpu@example") is None
 
     def test_llama_cpp_is_installed_when_native_llama_server_exists(self):
         probe = {

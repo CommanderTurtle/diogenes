@@ -875,6 +875,12 @@ def test_pip_install_no_cache_injects_flag():
         "python -m pip install --no-cache-dir vllm"
     assert _pip_install_no_cache("pip install -q huggingface-hub") == \
         "pip install --no-cache-dir -q huggingface-hub"
+    assert _pip_install_no_cache(
+        "uv pip install --python /srv/Ulysses/.venv/bin/python -r /srv/vllm.lock"
+    ) == (
+        "uv pip install --no-cache --python /srv/Ulysses/.venv/bin/python "
+        "-r /srv/vllm.lock"
+    )
 
 
 def test_pip_install_no_cache_is_idempotent_and_scoped():
@@ -885,6 +891,18 @@ def test_pip_install_no_cache_is_idempotent_and_scoped():
     # not a pip install -> unchanged
     assert _pip_install_no_cache("vllm serve --model x") == "vllm serve --model x"
     assert _pip_install_no_cache("") == ""
+    uv_already = "uv pip install --no-cache --python /tmp/.venv/bin/python -r /tmp/vllm.lock"
+    assert _pip_install_no_cache(uv_already) == uv_already
+
+
+def test_validate_serve_cmd_accepts_only_uv_pip_install():
+    cmd = (
+        "uv pip install --python /srv/Ulysses/.venv/bin/python "
+        "-r /srv/Ulysses-state/locks/vllm.lock --strict"
+    )
+    assert _validate_serve_cmd(cmd) == cmd
+    with pytest.raises(HTTPException, match="only for a direct"):
+        _validate_serve_cmd("uv run arbitrary.py")
 
 
 def test_cached_model_scan_runs_additional_hf_cache(tmp_path):

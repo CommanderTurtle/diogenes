@@ -1277,7 +1277,13 @@ async function _fetchDependencies() {
       // so the user can watch the pip install in the Running tab.
       let _rebuildBtn = '';
       if (pkg.name === 'vllm' && pkg.installed) {
-        _rebuildBtn = `<button type="button" class="cookbook-dep-tag cookbook-dep-rebuild cookbook-dep-reinstall" data-reinstall-pkg="vllm" title="Force-reinstall vLLM (pulls a matching torch). Runs as a tmux task in the Running tab.">Reinstall</button>`;
+        const managed = pkg.managed_install?.mode === 'uv-lock';
+        const managedData = managed
+          ? ` data-managed-install-mode="uv-lock" data-managed-lock="${esc(pkg.managed_install.lock_path || '')}" data-managed-python="${esc(pkg.managed_install.python || '')}" data-managed-venv="${esc(pkg.managed_install.venv || '')}"`
+          : '';
+        _rebuildBtn = managed
+          ? `<button type="button" class="cookbook-dep-tag cookbook-dep-rebuild cookbook-dep-reinstall" data-reinstall-pkg="vllm"${managedData} title="Reconcile the exact uv-locked CUDA/vLLM stack in Ulysses' inner .venv.">Reconcile</button>`
+          : `<button type="button" class="cookbook-dep-tag cookbook-dep-rebuild cookbook-dep-reinstall" data-reinstall-pkg="vllm" title="Force-reinstall vLLM (pulls a matching torch). Runs as a tmux task in the Running tab.">Reinstall</button>`;
       } else if (pkg.name === 'sglang' && pkg.installed) {
         _rebuildBtn = `<button type="button" class="cookbook-dep-tag cookbook-dep-rebuild cookbook-dep-reinstall" data-reinstall-pkg="sglang" title="Force-reinstall SGLang (pulls a matching torch). Runs as a tmux task in the Running tab.">Reinstall</button>`;
       }
@@ -1312,7 +1318,8 @@ async function _fetchDependencies() {
           + `<button type="button" class="cookbook-dep-tag cookbook-dep-cmd-copy" data-dep-cmd-copy="${esc(_gpuWheelCmd)}" title="Copy command to clipboard">Copy command</button>`
           + `</div>`
         : '';
-      return `<div class="cookbook-dep-row${winBlocked ? ' cookbook-dep-blocked' : ''}" data-pkg-name="${esc(pkg.name)}" data-dep-pip="${esc(pkg.pip || '')}" data-dep-target="${isLocal ? 'local' : 'remote'}" data-dep-kind="${esc(pkg.kind || 'python')}">`
+      const managed = pkg.managed_install || {};
+      return `<div class="cookbook-dep-row${winBlocked ? ' cookbook-dep-blocked' : ''}" data-pkg-name="${esc(pkg.name)}" data-dep-pip="${esc(pkg.pip || '')}" data-dep-target="${isLocal ? 'local' : 'remote'}" data-dep-kind="${esc(pkg.kind || 'python')}" data-managed-install-mode="${esc(managed.mode || '')}" data-managed-lock="${esc(managed.lock_path || '')}" data-managed-python="${esc(managed.python || '')}" data-managed-venv="${esc(managed.venv || '')}">`
         + `<div class="cookbook-dep-info">`
         + `<div class="memory-item-title">${_depGlyphHtml(pkg.name)}${esc(pkg.name)}</div>`
         + `<div class="memory-item-meta" style="font-size:10px;opacity:0.5;margin-top:2px;">${esc(pkg.desc)}</div>`
@@ -1624,7 +1631,7 @@ async function _fetchDependencies() {
     // Shared install/update routine — used by the Install button and the
     // "Update" item in an installed package's ⋮ menu. `upgrade` adds pip -U;
     // `statusEl`, when given, shows "Installing…/Updating…" and is disabled.
-    async function _installDep(pipName, pkgName, isLocalOnly, upgrade, statusEl) {
+    async function _installDep(pipName, pkgName, isLocalOnly, upgrade, statusEl, managedInstall = null) {
       let targetServer = null;
       if (isLocalOnly) {
         _envState.remoteHost = '';
@@ -1639,7 +1646,17 @@ async function _fetchDependencies() {
       }
       const targetHost = isLocalOnly ? 'this server' : ((targetServer?.host || _envState.remoteHost) || 'local');
       let targetEnv = isLocalOnly ? 'none' : (targetServer?.env || _envState.env || 'none');
-      const targetEnvPath = isLocalOnly ? '' : (targetServer?.envPath || _envState.envPath || '');
+      let targetEnvPath = isLocalOnly ? '' : (targetServer?.envPath || _envState.envPath || '');
+      const _managedVllm = (
+        pipName === 'vllm'
+        && managedInstall?.mode === 'uv-lock'
+        && !targetServer?.host
+        && !_envState.remoteHost
+      );
+      if (_managedVllm) {
+        targetEnv = 'venv';
+        targetEnvPath = managedInstall.venv || targetEnvPath;
+      }
       if (!isLocalOnly && targetEnvPath && (!targetEnv || targetEnv === 'none')) {
         targetEnv = /(?:^|\/)(?:\.?venv|env)(?:\/|$)|\/bin\/activate$/i.test(targetEnvPath) ? 'venv' : targetEnv;
       }
@@ -1673,7 +1690,10 @@ async function _fetchDependencies() {
         .map(_shellQuote)
         .join(' ');
       const depTaskId = String(pkgName || pipName || 'dependency').trim().replace(/\s+/g, '_');
-      const cmd = `${_py} -m pip install${upgrade ? ' -U' : ''}${_pipFlags} ${pipArgs}`;
+      if (_managedVllm && managedInstall.python) _py = managedInstall.python;
+      const cmd = _managedVllm
+        ? `uv pip install --python ${_shellQuote(_py)} -r ${_shellQuote(managedInstall.lock)} --strict`
+        : `${_shellQuote(_py)} -m pip install${upgrade ? ' -U' : ''}${_pipFlags} ${pipArgs}`;
       let envPrefix = '';
       if (_isWindows()) {
         if (targetEnv === 'venv' && targetEnvPath) {
@@ -1722,8 +1742,9 @@ async function _fetchDependencies() {
         // model) so the running-task card doesn't offer a "Serve →" button.
         const payload = { repo_id: depTaskId, _cmd: cmd, remote_host: targetRemoteHost || '', _dep: true, env_path: targetEnvPath || '', platform: targetPlatform || '' };
         _addTask(data.session_id, 'pip ' + pkgName, 'download', payload);
-        if (statusEl) { statusEl.textContent = upgrade ? 'Updating...' : 'Installing...'; statusEl.disabled = true; }
-        uiModule.showToast(`${upgrade ? 'Updating' : 'Installing'} ${pkgName} on ${targetHost}...`);
+        const verb = _managedVllm ? 'Reconciling' : (upgrade ? 'Updating' : 'Installing');
+        if (statusEl) { statusEl.textContent = `${verb}...`; statusEl.disabled = true; }
+        uiModule.showToast(`${verb} ${pkgName} on ${targetHost}...`);
       } catch (err) {
         uiModule.showToast('Install failed: ' + err.message, {
           duration: 20000,
@@ -1738,8 +1759,17 @@ async function _fetchDependencies() {
       btn.addEventListener('click', async (e) => {
         e.stopPropagation();
         const pipName = btn.dataset.depPip;
-        const pkgName = btn.closest('.cookbook-dep-row')?.querySelector('.memory-item-title')?.textContent || pipName;
-        await _installDep(pipName, pkgName, btn.dataset.depTarget === 'local', !!btn.dataset.upgrade, btn);
+        const row = btn.closest('.cookbook-dep-row');
+        const pkgName = row?.querySelector('.memory-item-title')?.textContent || pipName;
+        const managedInstall = row?.dataset.managedInstallMode === 'uv-lock'
+          ? {
+              mode: 'uv-lock',
+              lock: row.dataset.managedLock || '',
+              python: row.dataset.managedPython || '',
+              venv: row.dataset.managedVenv || '',
+            }
+          : null;
+        await _installDep(pipName, pkgName, btn.dataset.depTarget === 'local', !!btn.dataset.upgrade, btn, managedInstall);
       });
     });
 
@@ -2075,7 +2105,15 @@ async function _fetchDependencies() {
       it.addEventListener('click', async (e) => {
         e.stopPropagation();
         close();
-        await _installDep(pipName, pkgName, isLocalOnly, true, null);
+        const managedInstall = row.dataset.managedInstallMode === 'uv-lock'
+          ? {
+              mode: 'uv-lock',
+              lock: row.dataset.managedLock || '',
+              python: row.dataset.managedPython || '',
+              venv: row.dataset.managedVenv || '',
+            }
+          : null;
+        await _installDep(pipName, pkgName, isLocalOnly, true, null, managedInstall);
       });
       dropdown.appendChild(it);
       if (rowPkgName === 'llama_cpp') {
@@ -2459,6 +2497,25 @@ function _wireTabEvents(body) {
       if (sel) _applyServerSelection(sel.value);
       const host = _envState.remoteHost || '';
       const where = host || 'this server';
+      const managed = btn.dataset.managedInstallMode === 'uv-lock';
+      if (managed) {
+        const lock = btn.dataset.managedLock || '';
+        const python = btn.dataset.managedPython || '';
+        const venv = btn.dataset.managedVenv || '';
+        if (!lock || !python || !venv || host) {
+          uiModule.showToast('Managed vLLM reconcile is available only for this Ulysses host and its configured inner .venv.', 9000);
+          return;
+        }
+        if (!confirm(`Reconcile the verified vLLM/CUDA stack in ${venv}?\n\nThis uses uv and the configured exact lock. It will not upgrade to latest.`)) return;
+        _envState.env = 'venv';
+        _envState.envPath = venv;
+        _launchServeTask(
+          'reconcile-vllm',
+          'uv-lock-reconcile',
+          `uv pip install --python ${_shellQuote(python)} -r ${_shellQuote(lock)} --strict`,
+        );
+        return;
+      }
       if (!confirm(`Reinstall ${pkg} on ${where}?\n\nRuns "pip install --force-reinstall --no-deps ${pkg}" as a tmux task. Watch progress in the Running tab.`)) return;
       const _venvPy = (_envState.env === 'venv' && _envState.envPath)
         ? `${_envState.envPath.replace(/\/+$/, '')}/bin/python3`

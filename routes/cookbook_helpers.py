@@ -189,7 +189,13 @@ def _pip_install_no_cache(cmd: str) -> str:
     Disabling the cache for these one-off installs keeps them off the home disk
     (the maintainer's suggested ``PIP_CACHE_DIR=`` workaround, made the default).
     Idempotent; leaves non-pip-install commands untouched."""
-    if not cmd or "pip install" not in cmd or "--no-cache-dir" in cmd:
+    if not cmd or "pip install" not in cmd:
+        return cmd
+    if re.search(r"(?:^|\s)uv\s+pip\s+install(?:\s|$)", cmd):
+        if "--no-cache" in cmd:
+            return cmd
+        return cmd.replace("pip install", "pip install --no-cache", 1)
+    if "--no-cache-dir" in cmd:
         return cmd
     return cmd.replace("pip install", "pip install --no-cache-dir", 1)
 
@@ -611,7 +617,7 @@ _SERVE_CMD_ALLOWLIST = {
     "vllm", "llama-server", "llama-server.exe", "llama_server", "llama.cpp", "ollama",
     "python", "python3",
     "sglang", "lmdeploy",
-    "node", "npx",
+    "node", "npx", "uv",
 }
 
 
@@ -732,6 +738,13 @@ def _check_serve_binary(seg: str) -> None:
             f"cmd binary '{base or '(empty)'}' is not allowed. Must start with one of: "
             f"{', '.join(sorted(_SERVE_CMD_ALLOWLIST))}",
         )
+    if base == "uv":
+        uv_index = tokens.index(first)
+        if tokens[uv_index + 1:uv_index + 3] != ["pip", "install"]:
+            raise HTTPException(
+                400,
+                "uv is allowed here only for a direct 'uv pip install' dependency task.",
+            )
 
 
 def _is_safe_serve_subshell(subshell: str) -> bool:
