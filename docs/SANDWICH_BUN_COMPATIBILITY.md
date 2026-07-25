@@ -5,17 +5,19 @@ Captured on 2026-07-25 without installing Node.
 ## Current runtime
 
 - Installed Bun: `1.3.14` (`0d9b296a`)
-- Sandwich compatibility suite: 35 passed
-- Ulysses Sandwich/catalog/discovery/topology contract suite: 32 passed
+- Sandwich component: `0.2.0`
+- Sandwich compatibility suite: 36 passed
+- Ulysses runtime-management and identity contract suite: 103 passed
 - Detected installation: `/home/alienl/Hermes/sandwich`
-- Ulysses full isolated test suite using the upstream Bun fix build:
-  4,761 passed, 3 skipped
+- Latest full isolated Ulysses run under the installed Bun: 4,864 passed,
+  3 skipped, with two stale Ulysses contract pins subsequently corrected.
 
 Sandwich now handles:
 
 - Node-compatible version output;
 - eval, print, stdin, ESM/CommonJS `--input-type`;
 - `node --test` to `bun test`;
+- generated base64 JavaScript data modules within Bun's resolver limit;
 - `npm run`, `npm run --prefix`, and frozen-lock `npm ci`;
 - `npx` through Bun;
 - fail-loud ambiguous workspace installs.
@@ -50,15 +52,16 @@ longer than roughly 6,144 bytes as `NameTooLong`.
 - Upstream issue: <https://github.com/oven-sh/bun/issues/20374>
 - Open upstream fix: <https://github.com/oven-sh/bun/pull/33598>
 
-The official PR test build `1.4.0-canary.1+225bd671b` resolved all 20 affected
-Ulysses JavaScript failures. The PR binary and aliases were removed after the
-test; the installed Bun 1.3.14 binary was never replaced.
+The bundled `node` compatibility preload resolves ordinary base64 JavaScript
+data modules without Node. Oversized generated modules are still rejected
+before Bun invokes plugin resolution, so the Ulysses test harnesses now write
+their generated source to temporary `.mjs` files. That is valid in both Bun and
+Node and exercises the same browser source without a canary runtime.
 
-Sandwich should detect this capability directly rather than comparing version
-strings. Until a stable Bun release includes the fix:
+Until a stable Bun release includes the upstream fix:
 
 - report the runtime as compatible with a known long-data-module limitation;
 - do not install Node as an invisible fallback;
 - do not carry a permanent canary binary;
-- allow an explicitly selected, checksum-recorded candidate Bun for validation;
+- use ordinary temporary module files for oversized generated source;
 - keep production runtime selection human-controlled.
