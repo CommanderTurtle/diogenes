@@ -25,3 +25,6 @@ docker/entrypoint.sh text eol=lf
 *.ico  binary
 *.woff binary
 *.woff2 binary
+
+# Embedded patch payloads preserve the reviewed source diff verbatim.
+*.patch -whitespace

@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+
+source "$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")/../lib/common.sh"
+
+case "${1:-}" in
+    --version|-v)
+        printf '%s\n' "$SANDWICH_PNPM_VERSION"
+        exit 0
+        ;;
+    install|i)
+        shift
+        exec "$SANDWICH_ROOT/bin/npm" install "$@"
+        ;;
+    add)
+        shift
+        exec "$SANDWICH_BIN" add "$@"
+        ;;
+    remove|rm|uninstall)
+        shift
+        exec "$SANDWICH_BIN" remove "$@"
+        ;;
+    update|up)
+        shift
+        exec "$SANDWICH_BIN" update "$@"
+        ;;
+    run)
+        shift
+        exec "$SANDWICH_BIN" run --bun "$@"
+        ;;
+    test|start)
+        command_name="$1"
+        shift
+        exec "$SANDWICH_BIN" run --bun "$command_name" "$@"
+        ;;
+    exec|dlx)
+        shift
+        exec "$SANDWICH_BIN" x --bun "$@"
+        ;;
+    list|ls)
+        shift
+        exec "$SANDWICH_BIN" pm ls "$@"
+        ;;
+    why)
+        shift
+        exec "$SANDWICH_BIN" pm why "$@"
+        ;;
+    audit)
+        shift
+        exec "$SANDWICH_BIN" audit "$@"
+        ;;
+    --help|-h|'')
+        bs_print_help
+        ;;
+    *)
+        bs_die "unsupported pnpm command '$1'; use Bun directly"
+        ;;
+esac

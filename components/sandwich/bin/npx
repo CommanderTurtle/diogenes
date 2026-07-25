@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+
+source "$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")/../lib/common.sh"
+
+case "${1:-}" in
+    --version|-v)
+        printf '%s\n' "$SANDWICH_NPM_VERSION"
+        exit 0
+        ;;
+    --help|-h|'')
+        exec "$SANDWICH_BIN" x --help
+        ;;
+esac
+
+translated=()
+while (($#)); do
+    case "$1" in
+        -y|--yes)
+            shift
+            ;;
+        --no)
+            translated+=(--no-install)
+            shift
+            ;;
+        -c|--call|--call=*|--shell|--shell=*|--npm|--npm=*)
+            bs_die "npx option '$1' has no safe bunx equivalent"
+            ;;
+        *)
+            translated+=("$1")
+            shift
+            ;;
+    esac
+done
+
+exec "$SANDWICH_BIN" x --bun "${translated[@]}"

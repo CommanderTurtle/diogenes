@@ -1,0 +1,57 @@
+{
+  "schema_version": "sandwich.component.v1",
+  "id": "sandwich",
+  "version": "0.1.0",
+  "runtime": "bun",
+  "install_scope": "user",
+  "entrypoints": {
+    "sandwich": "bin/sandwich",
+    "node": "bin/node",
+    "npm": "bin/npm",
+    "npx": "bin/npx",
+    "pnpm": "bin/pnpm",
+    "yarn": "bin/yarn"
+  },
+  "operations": {
+    "doctor": {
+      "argv": ["bin/sandwich", "doctor"],
+      "mutating": false,
+      "human_confirmation": false
+    },
+    "install_preview": {
+      "argv": ["scripts/install-user.sh", "--check"],
+      "mutating": false,
+      "human_confirmation": false
+    },
+    "install": {
+      "argv": ["scripts/install-user.sh", "--apply"],
+      "mutating": true,
+      "human_confirmation": true
+    },
+    "hermes_check": {
+      "argv": ["scripts/apply-hermes-maintenance.sh", "--check"],
+      "mutating": false,
+      "human_confirmation": false
+    },
+    "hermes_apply": {
+      "argv": ["scripts/apply-hermes-maintenance.sh", "--apply"],
+      "mutating": true,
+      "human_confirmation": true,
+      "maintenance_window": true
+    },
+    "hermes_refresh": {
+      "argv": ["scripts/refresh-hermes-artifacts.sh"],
+      "mutating": true,
+      "human_confirmation": true,
+      "maintenance_window": true
+    }
+  },
+  "integrations": {
+    "hermes": {
+      "patch": "patches/hermes-sandwich.patch",
+      "base_revision_file": "patches/hermes-base.sha",
+      "lockfile": "config/hermes.bun.lock",
+      "bunfig": "config/hermes.bunfig.toml"
+    }
+  }
+}

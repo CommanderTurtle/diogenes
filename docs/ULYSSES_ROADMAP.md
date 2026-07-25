@@ -191,17 +191,21 @@ still contributing health, logs, ports, and capabilities to the dashboard.
 Turn the current Bun-first work into an optional JavaScript and Python runtime
 layer:
 
-- [ ] Rename/productize the source as Sandwich.
-- [ ] Detect install prefix, shell, Bun location, and user bin directory.
-- [ ] Keep `node`, `npm`, `npx`, `pnpm`, and `yarn` compatibility explicit and
+- [x] Rename/productize the source as Sandwich.
+- [x] Detect the component, Bun install, user bin, state, and Bash paths
+  without inheriting Ulysses's Python environment.
+- [x] Keep `node`, `npm`, `npx`, `pnpm`, and `yarn` compatibility explicit and
   fail-loud.
 - [ ] Provide preview/install/doctor/update/rollback/uninstall operations.
-- [ ] Store manifests and rollback metadata under Ulysses data paths.
-- [ ] Avoid unconditional `.bashrc`/`.zshrc` modification.
-- [ ] Support Bash first; add other shells only with tested managed blocks.
+- [x] Store a validated, versioned component and operation manifest; retain
+  timestamped install and Hermes maintenance backups under the configurable
+  Sandwich state root.
+- [x] Avoid unconditional `.bashrc`/`.zshrc` modification.
+- [x] Support Bash first; add other shells only with tested managed blocks.
 - [ ] Represent global Bun packages and project lock status in the control
   plane.
-- [ ] Keep Hermes-specific maintenance as an optional integration module.
+- [x] Keep the version-pinned Hermes updater repair as an optional,
+  maintenance-window-gated integration module.
 - [ ] Detect uv, uv-managed Python installations, virtual environments, Python
   versions, package manifests, lockfiles, and active service consumers.
 - [ ] Use absolute environment executables for services; shell activation is a

@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+
+source "$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")/../lib/common.sh"
+
+case "${1:-}" in
+    --version|-v)
+        exec "$SANDWICH_BIN" -e 'process.stdout.write(process.version + "\n")'
+        ;;
+    --help|-h)
+        exec "$SANDWICH_BIN" --help
+        ;;
+esac
+
+declare -a translated_args=()
+input_type=""
+
+while (($#)); do
+    case "$1" in
+        --input-type=module|--input-type=commonjs)
+            input_type="${1#*=}"
+            shift
+            ;;
+        --input-type)
+            if (($# < 2)) || [[ "$2" != "module" && "$2" != "commonjs" ]]; then
+                printf 'node: --input-type must be "module" or "commonjs"\n' >&2
+                exit 9
+            fi
+            input_type="$2"
+            shift 2
+            ;;
+        --input-type=*)
+            printf 'node: invalid --input-type value: %s\n' "${1#*=}" >&2
+            exit 9
+            ;;
+        *)
+            translated_args+=("$1")
+            shift
+            ;;
+    esac
+done
+
+if ((${#translated_args[@]} == 0)); then
+    if [[ -t 0 ]]; then
+        if [[ -n "$input_type" ]]; then
+            printf 'node: --input-type can only be used with string input via --eval, --print, or STDIN\n' >&2
+            exit 9
+        fi
+        exec "$SANDWICH_BIN" repl
+    fi
+    exec "$SANDWICH_BIN" -
+fi
+
+if [[ "${translated_args[0]}" == "--test" ]]; then
+    translated_args[0]="test"
+fi
+
+# Bun already evaluates stdin, --eval, and --print as JavaScript/TypeScript
+# modules with both ESM and CommonJS compatibility. Node's --input-type flag
+# is therefore a semantic no-op after validation and must not be forwarded:
+# Bun treats the unknown flag as a request for top-level CLI help.
+exec "$SANDWICH_BIN" "${translated_args[@]}"

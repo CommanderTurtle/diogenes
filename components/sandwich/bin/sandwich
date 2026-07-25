@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+
+source "$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")/../lib/common.sh"
+
+doctor() {
+    local failures=0
+    local command_path
+
+    printf 'Sandwich\n'
+    printf '  bun:       %s (%s, %s)\n' \
+        "$SANDWICH_BIN" \
+        "$("$SANDWICH_BIN" --version)" \
+        "$("$SANDWICH_BIN" --revision)"
+    printf '  node API:  %s\n' \
+        "$("$SANDWICH_BIN" -e 'process.stdout.write(process.version + " / Bun " + Bun.version)')"
+    printf '  global:    %s\n' "$BUN_INSTALL_GLOBAL_DIR"
+    printf '  globalbin: %s\n' "$BUN_INSTALL_BIN"
+    printf '  telemetry: DO_NOT_TRACK=%s\n' "${DO_NOT_TRACK:-unset}"
+
+    for name in sandwich bun-sovereign node npm npx pnpm yarn; do
+        command_path="$(command -v "$name" 2>/dev/null || true)"
+        printf '  %-14s %s\n' "$name:" "${command_path:-missing}"
+        if [[ -z "$command_path" || "$(readlink -f -- "$command_path")" != "$SANDWICH_ROOT/bin/$name" ]]; then
+            failures=$((failures + 1))
+        fi
+    done
+
+    if [[ -f "$HOME/package.json" ]]; then
+        printf '  warning:   %s is a package root (likely accidental non-global installs)\n' "$HOME/package.json"
+    fi
+    if [[ -e "$HOME/.bunfig.toml" ]]; then
+        printf '  bunfig:    %s\n' "$HOME/.bunfig.toml"
+    fi
+
+    if ((failures)); then
+        printf '  result:    FAIL (%d command resolution issue(s))\n' "$failures"
+        return 1
+    fi
+    printf '  result:    OK\n'
+}
+
+case "${1:-doctor}" in
+    doctor|status)
+        doctor
+        ;;
+    version|--version|-v)
+        printf '%s\n' '0.1.0'
+        ;;
+    help|--help|-h)
+        printf '%s\n' 'usage: sandwich [doctor|version|help]'
+        ;;
+    *)
+        bs_die "usage: sandwich [doctor|version|help]"
+        ;;
+esac

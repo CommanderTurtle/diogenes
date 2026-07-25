@@ -1,0 +1,277 @@
+#!/usr/bin/env bash
+
+source "$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")/../lib/common.sh"
+
+translate_install_args() {
+    translated=()
+    local value
+    while (($#)); do
+        case "$1" in
+            --include=dev|--include-dev|--fund=false|--no-fund|--audit=false|--no-audit)
+                shift
+                ;;
+            --include)
+                [[ "${2:-}" == "dev" ]] || bs_die "unsupported npm install option: --include ${2:-}"
+                shift 2
+                ;;
+            --progress=false)
+                translated+=(--no-progress)
+                shift
+                ;;
+            --progress=true)
+                shift
+                ;;
+            --workspace=*)
+                value="${1#*=}"
+                translated+=(--filter "$(bs_workspace_filter "$value")")
+                shift
+                ;;
+            --workspace|-w)
+                (($# >= 2)) || bs_die "$1 requires a workspace"
+                translated+=(--filter "$(bs_workspace_filter "$2")")
+                shift 2
+                ;;
+            --workspaces=false|--no-workspaces)
+                bs_die "npm root-only workspace install is ambiguous in Bun; use an explicit bun --filter"
+                ;;
+            --workspaces=true|--workspaces|--ws)
+                shift
+                ;;
+            --save-dev|-D)
+                translated+=(--dev)
+                shift
+                ;;
+            --save-exact|-E)
+                translated+=(--exact)
+                shift
+                ;;
+            --save-optional|-O)
+                translated+=(--optional)
+                shift
+                ;;
+            --save-peer)
+                translated+=(--peer)
+                shift
+                ;;
+            --package-lock-only)
+                translated+=(--lockfile-only)
+                shift
+                ;;
+            --global|-g|--no-save|--dry-run|--force|--ignore-scripts|--production|--silent|--verbose)
+                translated+=("$1")
+                shift
+                ;;
+            --omit=dev|--omit=optional|--omit=peer|--registry=*|--cache=*)
+                translated+=("$1")
+                shift
+                ;;
+            --omit|--registry|--cache)
+                (($# >= 2)) || bs_die "$1 requires a value"
+                translated+=("$1" "$2")
+                shift 2
+                ;;
+            --legacy-peer-deps|--strict-peer-deps|--install-links|--install-strategy=*)
+                bs_die "npm install option '$1' changes dependency semantics and has no transparent Bun equivalent"
+                ;;
+            *)
+                translated+=("$1")
+                shift
+                ;;
+        esac
+    done
+}
+
+run_script() {
+    local translated_run=()
+    local run_cwd=""
+    local value
+    while (($#)); do
+        case "$1" in
+            --prefix=*)
+                value="${1#*=}"
+                [[ -d "$value" ]] || bs_die "npm run --prefix directory does not exist: $value"
+                run_cwd="$(cd -- "$value" && pwd -P)"
+                shift
+                ;;
+            --prefix)
+                (($# >= 2)) || bs_die "--prefix requires a directory"
+                [[ -d "$2" ]] || bs_die "npm run --prefix directory does not exist: $2"
+                run_cwd="$(cd -- "$2" && pwd -P)"
+                shift 2
+                ;;
+            --workspace=*)
+                value="${1#*=}"
+                translated_run+=(--filter "$(bs_workspace_filter "$value")")
+                shift
+                ;;
+            --workspace|-w)
+                (($# >= 2)) || bs_die "$1 requires a workspace"
+                translated_run+=(--filter "$(bs_workspace_filter "$2")")
+                shift 2
+                ;;
+            --workspaces|--ws)
+                translated_run+=(--workspaces)
+                shift
+                ;;
+            --if-present)
+                translated_run+=(--if-present)
+                shift
+                ;;
+            *)
+                translated_run+=("$1")
+                shift
+                ;;
+        esac
+    done
+    if [[ -n "$run_cwd" ]]; then
+        exec "$SANDWICH_BIN" run --cwd "$run_cwd" --bun "${translated_run[@]}"
+    fi
+    exec "$SANDWICH_BIN" run --bun "${translated_run[@]}"
+}
+
+case "${1:-}" in
+    --version|-v)
+        printf '%s\n' "$SANDWICH_NPM_VERSION"
+        exit 0
+        ;;
+    --help|-h|'')
+        bs_print_help
+        exit 0
+        ;;
+esac
+
+command_name="$1"
+shift
+
+case "$command_name" in
+    install|i)
+        translate_install_args "$@"
+        exec "$SANDWICH_BIN" install "${translated[@]}"
+        ;;
+    ci|clean-install|ic)
+        [[ -f bun.lock ]] || bs_die "npm ci requires an existing bun.lock in Sandwich mode"
+        translate_install_args "$@"
+        exec "$SANDWICH_BIN" install --frozen-lockfile "${translated[@]}"
+        ;;
+    run|run-script)
+        run_script "$@"
+        ;;
+    test|start|stop|restart)
+        exec "$SANDWICH_BIN" run --bun "$command_name" "$@"
+        ;;
+    exec|x)
+        exec "$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")/npx" "$@"
+        ;;
+    audit)
+        [[ "${1:-}" != "fix" ]] || bs_die "Bun audit does not provide npm audit fix semantics"
+        audit_args=()
+        while (($#)); do
+            case "$1" in
+                --workspaces=false|--workspaces|--no-fund) shift ;;
+                *) audit_args+=("$1"); shift ;;
+            esac
+        done
+        exec "$SANDWICH_BIN" audit "${audit_args[@]}"
+        ;;
+    outdated)
+        exec "$SANDWICH_BIN" outdated "$@"
+        ;;
+    update|upgrade|up)
+        exec "$SANDWICH_BIN" update "$@"
+        ;;
+    add)
+        exec "$SANDWICH_BIN" add "$@"
+        ;;
+    uninstall|remove|rm|un)
+        exec "$SANDWICH_BIN" remove "$@"
+        ;;
+    list|ls|la|ll)
+        exec "$SANDWICH_BIN" pm ls "$@"
+        ;;
+    why|explain)
+        exec "$SANDWICH_BIN" pm why "$@"
+        ;;
+    view|info|show)
+        exec "$SANDWICH_BIN" pm view "$@"
+        ;;
+    pack)
+        exec "$SANDWICH_BIN" pm pack "$@"
+        ;;
+    publish)
+        exec "$SANDWICH_BIN" publish "$@"
+        ;;
+    version)
+        if (($#)); then
+            exec "$SANDWICH_BIN" pm version "$@"
+        fi
+        exec "$SANDWICH_BIN" -e \
+            "console.log(JSON.stringify({node:process.versions.node,npm:'$SANDWICH_NPM_VERSION',bun:Bun.version},null,2))"
+        ;;
+    pkg)
+        exec "$SANDWICH_BIN" pm pkg "$@"
+        ;;
+    root)
+        if [[ "${1:-}" == "-g" || "${1:-}" == "--global" ]]; then
+            printf '%s\n' "$BUN_INSTALL_GLOBAL_DIR/node_modules"
+        else
+            printf '%s\n' "$(bs_project_root)/node_modules"
+        fi
+        ;;
+    prefix)
+        if [[ "${1:-}" == "-g" || "${1:-}" == "--global" ]]; then
+            printf '%s\n' "$BUN_INSTALL"
+        else
+            bs_project_root
+        fi
+        ;;
+    bin)
+        exec "$SANDWICH_BIN" pm bin "$@"
+        ;;
+    cache)
+        case "${1:-}" in
+            clean)
+                shift
+                [[ "${1:-}" == "--force" ]] && shift
+                (($# == 0)) || bs_die "unsupported npm cache clean options: $*"
+                exec "$SANDWICH_BIN" pm cache rm
+                ;;
+            verify|'')
+                printf 'Bun cache: '
+                exec "$SANDWICH_BIN" pm cache
+                ;;
+            *)
+                bs_die "unsupported npm cache command: $*"
+                ;;
+        esac
+        ;;
+    config)
+        [[ "${1:-}" == "get" ]] || bs_die "only read-only 'npm config get' is supported"
+        case "${2:-}" in
+            registry) printf '%s\n' 'https://registry.npmjs.org/' ;;
+            prefix) printf '%s\n' "$BUN_INSTALL" ;;
+            cache) exec "$SANDWICH_BIN" pm cache ;;
+            user-agent)
+                printf 'npm/%s node/%s bun/%s linux x64\n' \
+                    "$SANDWICH_NPM_VERSION" \
+                    "$("$SANDWICH_BIN" -e 'process.stdout.write(process.versions.node)')" \
+                    "$("$SANDWICH_BIN" --version)"
+                ;;
+            *) bs_die "unsupported npm config key: ${2:-}" ;;
+        esac
+        ;;
+    fund)
+        printf '%s\n' 'Bun does not maintain npm funding metadata output.'
+        ;;
+    doctor)
+        exec "$SANDWICH_ROOT/bin/sandwich" doctor
+        ;;
+    init)
+        exec "$SANDWICH_BIN" init "$@"
+        ;;
+    create)
+        exec "$SANDWICH_BIN" create "$@"
+        ;;
+    *)
+        bs_die "unsupported npm command '$command_name'; use Bun directly or add a tested translation"
+        ;;
+esac

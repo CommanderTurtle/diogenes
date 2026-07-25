@@ -1,0 +1,13 @@
+telemetry = false
+
+[install]
+globalDir = "~/.bun/install/global"
+globalBinDir = "~/.bun/bin"
+saveTextLockfile = true
+dev = true
+optional = true
+peer = true
+production = false
+
+[install.lockfile]
+save = true

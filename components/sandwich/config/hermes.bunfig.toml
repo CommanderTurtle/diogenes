@@ -1,0 +1,19 @@
+telemetry = false
+
+[run]
+# Force Node-shebang CLIs through Bun. Hermes' own nested workspace scripts
+# use native `bun run --cwd`; the compatibility wrappers cover third-party
+# npm/npx commands executed outside Bun's package-script special casing.
+bun = true
+shell = "system"
+
+[install]
+saveTextLockfile = true
+dev = true
+optional = true
+peer = true
+production = false
+linker = "isolated"
+
+[install.lockfile]
+save = true
