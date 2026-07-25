@@ -12,7 +12,7 @@ commit:     d8a2059df8e53bc7275c45339849d14c8651e73c
 
 Development checkout: `~/Odysseus/Ulysses`
 
-Development branch: `ulysses/dev`
+Development branch: `dev`, tracking `upstream/dev`
 
 Original Odysseus remote: `upstream` with pushing disabled
 
@@ -121,7 +121,7 @@ can prove ownership and rollback.
 - [x] Fresh-clone upstream Odysseus `dev`.
 - [x] Rename its remote to `upstream`.
 - [x] Disable pushes to `upstream`.
-- [x] Create `ulysses/dev`.
+- [x] Keep the local `dev` branch tracking `upstream/dev`.
 - [x] Add Ulysses provenance, architecture, and threat-model documentation.
 - [x] Run the upstream test baseline in an isolated environment.
 - [x] Record upstream failures separately from Ulysses changes.
