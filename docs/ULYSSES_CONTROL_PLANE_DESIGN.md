@@ -176,7 +176,7 @@ required safety contract.
 
 | Runtime | Adapter | Initial state |
 | --- | --- | --- |
-| Production Odysseus API | native/tmux observation | external |
+| Ulysses API | native observation | managed |
 | vLLM 0.23.0 / Agents A1 | native model endpoint | external |
 | Chroma | Docker Compose/container | external; persistence repair required |
 | Hermes gateway | systemd user/native | external |

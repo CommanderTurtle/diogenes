@@ -2,13 +2,13 @@
   "schema_version": "ulysses.runtime-catalog.v1",
   "runtimes": [
     {
-      "runtime_id": "odysseus.api",
-      "label": "Production Odysseus API",
+      "runtime_id": "ulysses.api",
+      "label": "Ulysses API",
       "adapter": "native",
-      "ownership": "external",
-      "source_root": "${HOME}/Odysseus/odysseus",
+      "ownership": "managed",
+      "source_root": "${ULYSSES_REPOSITORY_ROOT}",
       "ports": [{"port": 7000, "host": "0.0.0.0"}],
-      "capabilities": ["workspace", "chat", "control-plane-source"]
+      "capabilities": ["workspace", "chat", "control-plane"]
     },
     {
       "runtime_id": "vllm.server",
