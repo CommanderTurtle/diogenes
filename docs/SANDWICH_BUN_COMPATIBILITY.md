@@ -9,8 +9,8 @@ Captured on 2026-07-25 without installing Node.
 - Sandwich compatibility suite: 36 passed
 - Ulysses runtime-management and identity contract suite: 103 passed
 - Detected installation: `/home/alienl/Hermes/sandwich`
-- Latest full isolated Ulysses run under the installed Bun: 4,864 passed,
-  3 skipped, with two stale Ulysses contract pins subsequently corrected.
+- Latest full isolated Ulysses run under the installed Bun: 4,866 passed,
+  3 skipped, 0 failed.
 
 Sandwich now handles:
 
