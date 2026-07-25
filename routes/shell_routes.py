@@ -1145,6 +1145,9 @@ def setup_shell_routes() -> APIRouter:
         "make":            {"debian": ["make"], "arch": ["make"], "fedora": ["make"], "alpine": ["make"], "suse": ["make"], "macos": []},
         "git":             {"debian": ["git"], "arch": ["git"], "fedora": ["git"], "alpine": ["git"], "suse": ["git"], "macos": ["git"]},
         "tmux":            {"debian": ["tmux"], "arch": ["tmux"], "fedora": ["tmux"], "alpine": ["tmux"], "suse": ["tmux"], "macos": ["tmux"]},
+        # Development package names differ by distro. Presence is probed by
+        # the header, not `command -v`, because this package installs no CLI.
+        "liburing-dev":    {"debian": ["liburing-dev"], "arch": ["liburing"], "fedora": ["liburing-devel"], "alpine": ["liburing-dev"], "suse": ["liburing-devel"], "macos": []},
     }
     _BACKEND_EXTRAS = {
         "cuda":   {"debian": ["nvidia-cuda-toolkit"], "arch": ["cuda"], "fedora": ["cuda-toolkit"], "alpine": [], "suse": ["cuda"], "macos": []},
@@ -1255,6 +1258,16 @@ def setup_shell_routes() -> APIRouter:
                 "target": "remote",
                 "kind": "system",
                 "install_hint": "Install Docker on the selected server and allow this user to run docker.",
+            },
+            {
+                "name": "liburing-dev",
+                "pip": "",
+                "desc": "Native io_uring headers required by the Colibri Hy3 CUDA build",
+                "category": "System",
+                "target": "remote",
+                "kind": "system",
+                "probe_path": "/usr/include/liburing.h",
+                "install_hint": "Install the liburing development headers on the selected Linux server. Debian/Ubuntu: sudo apt install -y liburing-dev.",
             },
             # Note: cmake / gcc / git are not separate dependency rows —
             # they're declared as `system_prereqs` on llama_cpp (and any
@@ -1515,9 +1528,16 @@ def setup_shell_routes() -> APIRouter:
                 checks = []
                 for name in all_system_names:
                     qn = shlex.quote(name)
-                    checks.append(
-                        f"PATH=\"$HOME/.local/bin:$HOME/bin:/opt/homebrew/bin:/usr/local/bin:$PATH\"; if command -v {qn} >/dev/null 2>&1; then echo {qn}=1; else echo {qn}=0; fi"
-                    )
+                    package = next((p for p in packages if p.get("name") == name), None)
+                    probe_path = str((package or {}).get("probe_path") or "")
+                    if probe_path:
+                        checks.append(
+                            f"if [ -f {shlex.quote(probe_path)} ]; then echo {qn}=1; else echo {qn}=0; fi"
+                        )
+                    else:
+                        checks.append(
+                            f"PATH=\"$HOME/.local/bin:$HOME/bin:/opt/homebrew/bin:/usr/local/bin:$PATH\"; if command -v {qn} >/dev/null 2>&1; then echo {qn}=1; else echo {qn}=0; fi"
+                        )
                 checks.append("echo '---OSREL---'; cat /etc/os-release 2>/dev/null || { [ \"$(uname -s 2>/dev/null)\" = \"Darwin\" ] && echo ID=macos; } || true")
                 inner = " ; ".join(checks)
                 argv = _ssh_base_argv(host, ssh_port) + [inner]
@@ -1572,6 +1592,11 @@ def setup_shell_routes() -> APIRouter:
                     pkg["installed"] = None
                     pkg["status_note"] = "Only relevant for Apple Silicon / MLX image serving."
                     continue
+            if pkg["name"] == "liburing-dev" and target_os_id == "macos":
+                pkg["applicable"] = False
+                pkg["installed"] = None
+                pkg["status_note"] = "Linux-only native build dependency for Colibri Hy3."
+                continue
             on_remote = bool(host and pkg.get("target") == "remote")
             probe = None
             if on_remote:
@@ -1596,6 +1621,8 @@ def setup_shell_routes() -> APIRouter:
                         if IS_APPLE_SILICON
                         else "Requires a native Apple Silicon Mac with Apple Foundational Models support."
                     )
+                elif pkg.get("probe_path"):
+                    pkg["installed"] = Path(str(pkg["probe_path"])).is_file()
                 else:
                     pkg["installed"] = shutil.which(pkg["name"]) is not None
             elif pkg["name"] == "llama_cpp" and shutil.which("llama-server"):
@@ -1808,7 +1835,7 @@ def setup_shell_routes() -> APIRouter:
 
     @router.post("/api/cookbook/install-system-deps")
     async def install_system_deps(request: Request):
-        """Install OS-level system packages (cmake/build-essential/git/tmux)
+        """Install allowlisted OS-level system packages
         on a remote target or in the local container. Admin only.
 
         Bounded by a per-package allowlist — anything outside the catalog
@@ -1824,7 +1851,7 @@ def setup_shell_routes() -> APIRouter:
         ssh_port = body.get("ssh_port")
         # Names users can request — must match canonical names used in the
         # deps catalog's `system_prereqs` field and on the System rows.
-        ALLOWED = {"cmake", "build-essential", "g++", "gcc", "git", "tmux", "make"}
+        ALLOWED = {"cmake", "build-essential", "g++", "gcc", "git", "tmux", "make", "liburing-dev"}
         pkgs = [str(p).strip() for p in raw if str(p).strip() in ALLOWED]
         if not pkgs:
             return {"ok": False, "error": "no installable packages requested (allowlist: " + ", ".join(sorted(ALLOWED)) + ")"}
@@ -1832,12 +1859,18 @@ def setup_shell_routes() -> APIRouter:
         # as-is; pacman has base-devel for build-essential, etc.
         def _apt(names): return list(names)
         def _pacman(names):
-            return ["base-devel" if n == "build-essential" else n for n in names]
+            return [
+                "base-devel" if n == "build-essential"
+                else "liburing" if n == "liburing-dev"
+                else n
+                for n in names
+            ]
         def _dnf(names):
             out = []
             for n in names:
                 if n == "build-essential": out += ["gcc", "gcc-c++", "make"]
                 elif n == "g++": out += ["gcc-c++"]
+                elif n == "liburing-dev": out += ["liburing-devel"]
                 else: out.append(n)
             return out
         def _apk(names):
@@ -1851,10 +1884,11 @@ def setup_shell_routes() -> APIRouter:
             for n in names:
                 if n == "build-essential": out += ["gcc-c++", "make"]
                 elif n == "g++": out.append("gcc-c++")
+                elif n == "liburing-dev": out.append("liburing-devel")
                 else: out.append(n)
             return out
         def _brew(names):
-            return [n for n in names if n not in ("build-essential", "g++", "gcc", "make")]
+            return [n for n in names if n not in ("build-essential", "g++", "gcc", "make", "liburing-dev")]
         # Build a single shell snippet that detects the package manager and
         # runs the right install. Non-interactive sudo (-n) only — if sudo
         # asks for a password the script reports it instead of hanging.

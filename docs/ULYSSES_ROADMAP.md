@@ -608,3 +608,11 @@ corresponding rollback has been tested.
 8. [x] Implement Colibri GLM and Colibri Hy3 as separate final provider
    integrations. Source build, model load, generation, and 5090 benchmarks
    remain human-gated because vLLM and production downloads are active.
+9. [x] Separate the PR-ready `Ulysses` checkout, disposable `Ulysses-build`
+   runtime, and external `Ulysses-state`; add a previewable, SQLite-safe
+   production-state capture and canonical uv environment workflow.
+10. [x] Surface `liburing-dev` as a first-class native Cookbook dependency for
+    the Colibri Hy3 `IOURING=1` build.
+11. [ ] During the maintenance window, capture final production state, create
+    the candidate venv, validate CUDA/ONNX and Colibri, then benchmark before
+    any port cutover.

@@ -24,12 +24,38 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "_lib"))
 from cli import quiet_logs, emit, fail, common_parser, run, REPO_ROOT as _REPO_ROOT
 quiet_logs()
 
-import argparse, json, logging, os, shutil, sqlite3, subprocess, sys, tarfile, tempfile
+import argparse, json, logging, os, re, shutil, sqlite3, subprocess, sys, tarfile, tempfile
 from datetime import datetime
 from pathlib import Path, PurePosixPath
 
-_DATA_DIR = _REPO_ROOT / "data"
+def _configured_data_dir() -> Path:
+    """Resolve the same external data root used by native app launches.
+
+    Keep this CLI standard-library-only: read the single path setting from
+    ``.env`` when it was not already exported. Values are treated as data,
+    never evaluated as shell source.
+    """
+    value = os.environ.get("ODYSSEUS_DATA_DIR", "").strip()
+    if not value:
+        env_path = _REPO_ROOT / ".env"
+        if env_path.is_file():
+            for line in env_path.read_text(encoding="utf-8-sig").splitlines():
+                match = re.match(r"^\s*ODYSSEUS_DATA_DIR\s*=\s*(.*?)\s*$", line)
+                if not match:
+                    continue
+                value = match.group(1)
+                if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+                    value = value[1:-1]
+                break
+    if not value:
+        return _REPO_ROOT / "data"
+    expanded = Path(os.path.expandvars(os.path.expanduser(value)))
+    return expanded if expanded.is_absolute() else (_REPO_ROOT / expanded)
+
+
+_DATA_DIR = _configured_data_dir()
 _BACKUP_DIR = _REPO_ROOT / "backups"
+_SQLITE_SUFFIXES = {".db", ".sqlite", ".sqlite3"}
 
 # Stuff inside data/ that we explicitly skip — anything we can re-derive
 # from the SQLite DB + JSON state. Keeps the tarball small.
@@ -81,7 +107,11 @@ def cmd_snapshot(args):
     _reject_output_inside_data(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
-    sqlite_dbs = [p for p in _DATA_DIR.rglob("*.db") if p.is_file() and not p.is_symlink()]
+    sqlite_dbs = [
+        p
+        for p in _DATA_DIR.rglob("*")
+        if p.is_file() and not p.is_symlink() and p.suffix in _SQLITE_SUFFIXES
+    ]
     files_added = 0
     total_bytes = 0
 

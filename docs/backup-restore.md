@@ -17,7 +17,10 @@ write can't corrupt the snapshot.
 
 ## Quick start
 
-Run the tool from the repository root:
+Run the tool from the repository root. If `ODYSSEUS_DATA_DIR` is exported or
+set in the checkout's `.env`, the tool snapshots that external data directory
+instead of assuming `./data`. It reads the path as configuration text and never
+sources `.env` as shell code.
 
 ```bash
 # Create a snapshot → backups/odysseus-backup-<YYYYMMDD-HHMMSS>.tar.gz

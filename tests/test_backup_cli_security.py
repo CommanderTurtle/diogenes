@@ -76,6 +76,49 @@ def test_snapshot_rejects_output_inside_data_dir(tmp_path, monkeypatch):
         backup._reject_output_inside_data(data / "self.tar.gz")
 
 
+def test_configured_data_dir_reads_external_path_without_sourcing_shell(tmp_path, monkeypatch):
+    backup = _load_backup_cli()
+    repo = tmp_path / "repo"
+    external = tmp_path / "private-state" / "data"
+    repo.mkdir()
+    (repo / ".env").write_text(
+        f"IGNORED=$(touch {tmp_path / 'pwned'})\n"
+        f"ODYSSEUS_DATA_DIR='{external}'\n",
+        encoding="utf-8",
+    )
+    monkeypatch.delenv("ODYSSEUS_DATA_DIR", raising=False)
+    monkeypatch.setattr(backup, "_REPO_ROOT", repo)
+
+    assert backup._configured_data_dir() == external
+    assert not (tmp_path / "pwned").exists()
+
+
+def test_snapshot_recognizes_sqlite3_files(tmp_path, monkeypatch):
+    backup = _load_backup_cli()
+    repo = tmp_path / "repo"
+    data = repo / "data"
+    data.mkdir(parents=True)
+    _patch_repo(backup, monkeypatch, repo)
+    database = data / "chroma.sqlite3"
+    connection = __import__("sqlite3").connect(database)
+    connection.execute("create table values_table (value text)")
+    connection.execute("insert into values_table values ('safe')")
+    connection.commit()
+    connection.close()
+    out = tmp_path / "snapshot.tar.gz"
+    monkeypatch.setattr(backup, "emit", lambda *_args, **_kwargs: None)
+
+    backup.cmd_snapshot(SimpleNamespace(
+        out=str(out),
+        include_research=False,
+        include_attachments=False,
+        pretty=False,
+    ))
+
+    with tarfile.open(out, "r:gz") as archive:
+        assert "data/chroma.sqlite3" in archive.getnames()
+
+
 def test_restore_rejects_symlink_escape(tmp_path, monkeypatch):
     backup = _load_backup_cli()
     repo = tmp_path / "repo"

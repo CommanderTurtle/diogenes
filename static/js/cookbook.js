@@ -1216,7 +1216,7 @@ async function _fetchDependencies() {
     const pkgs = data.packages || [];
     if (!pkgs.length) { list.innerHTML = '<div class="hwfit-loading">No packages found</div>'; return; }
     const _winUnsupported = new Set(['hf_transfer', 'vllm', 'rembg', 'gfpgan']);
-    const _systemInstallable = new Set(['tmux']);
+    const _systemInstallable = new Set(['tmux', 'liburing-dev']);
 
     const _statusTag = (pkg, isLocal, isSystemDep, winBlocked) => {
       if (winBlocked) return `<span class="cookbook-dep-tag cookbook-dep-na">N/A</span>`;
@@ -1475,7 +1475,7 @@ async function _fetchDependencies() {
         : '';
     };
     const _pkgOrder = {
-      System: ['tmux', 'docker'],
+      System: ['tmux', 'docker', 'liburing-dev'],
       Tools: ['hf_transfer'],
       LLM: ['llama_cpp', 'sglang', 'vllm', 'mlx_lm'],
       Image: ['diffusers', 'krea_diffusers', 'transformers', 'sam_mask', 'mflux', 'boogu_image_mlx', 'mlx_vlm'],
