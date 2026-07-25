@@ -76,18 +76,76 @@ _BUILTIN_SERVERS = {
     "email":      ("mcp_servers/email_server.py",      "Built-in: Email"),
 }
 
-# NPX-based built-in servers (run via npx, not Python)
-_BUILTIN_NPX_SERVERS = {
-    "builtin_browser": {
-        "name": "Built-in: Browser",
-        "command": "npx",
-        "args": ["-y", "@playwright/mcp@latest", "--headless", "--caps", "vision"],
-    }
+# Browser MCP providers. Both use the canonical npx command, which may resolve
+# through Sandwich/Bun on a Node-free host. Camofox MCP is only the stdio MCP
+# adapter; its independent camofox-browser service must also be reachable.
+_PLAYWRIGHT_BROWSER_SERVER = {
+    "name": "Built-in: Browser (Playwright)",
+    "command": "npx",
+    "args": ["-y", "@playwright/mcp@latest", "--headless", "--caps", "vision"],
+    "provider": "playwright",
+}
+_CAMOFOX_BROWSER_SERVER = {
+    "name": "Built-in: Browser (Camofox)",
+    "command": "npx",
+    "args": ["-y", "camofox-mcp@latest"],
+    "provider": "camofox",
 }
 
 # Global flag to disable MCP if there are compatibility issues
 MCP_DISABLED = os.environ.get("ODYSSEUS_DISABLE_MCP", "").lower() in ("1", "true", "yes")
 BROWSER_MCP_REQUIRE_CACHE = os.environ.get("ODYSSEUS_BROWSER_MCP_REQUIRE_CACHE", "").lower() in ("1", "true", "yes")
+_BROWSER_MCP_PROVIDERS = {"playwright", "camofox", "disabled", "auto"}
+
+
+def browser_mcp_provider() -> str:
+    """Resolve the explicitly selected browser MCP provider.
+
+    ``playwright`` preserves the upstream default. ``auto`` chooses Camofox
+    only when CAMOFOX_URL is explicitly configured; it never guesses from a
+    cached npm package. ``disabled`` suppresses browser MCP registration while
+    leaving packages and browser services untouched.
+    """
+    configured = os.environ.get("ODYSSEUS_BROWSER_MCP_PROVIDER", "playwright")
+    provider = configured.strip().lower()
+    if provider not in _BROWSER_MCP_PROVIDERS:
+        logger.warning(
+            "Invalid ODYSSEUS_BROWSER_MCP_PROVIDER=%r; browser MCP is disabled",
+            configured,
+        )
+        return "disabled"
+    if provider == "auto":
+        return "camofox" if os.environ.get("CAMOFOX_URL", "").strip() else "playwright"
+    return provider
+
+
+def _browser_server_config() -> dict | None:
+    provider = browser_mcp_provider()
+    if provider == "disabled":
+        return None
+    source = _CAMOFOX_BROWSER_SERVER if provider == "camofox" else _PLAYWRIGHT_BROWSER_SERVER
+    return {
+        **source,
+        "args": list(source["args"]),
+    }
+
+
+def _camofox_mcp_env() -> dict[str, str]:
+    """Pass only the documented Camofox MCP settings into its subprocess."""
+    env = {
+        "CAMOFOX_URL": os.environ.get("CAMOFOX_URL", "http://127.0.0.1:9377").strip()
+        or "http://127.0.0.1:9377",
+    }
+    for name in (
+        "CAMOFOX_API_KEY",
+        "CAMOFOX_PROFILES_DIR",
+        "CAMOFOX_VIEWPORT",
+        "CAMOFOX_DEFAULT_USER_ID",
+    ):
+        value = os.environ.get(name)
+        if value is not None:
+            env[name] = value
+    return env
 
 
 # Strong references to the fire-and-forget startup tasks scheduled below.
@@ -196,18 +254,26 @@ async def register_builtin_servers(mcp_manager):
             continue
         _spawn_bg(_connect_python_server(server_id, script_path, name))
 
-    # Register NPX-based servers in the background (they take longer to start)
+    # Register the selected browser MCP in the background (it takes longer to
+    # start than the Python servers). A cached Playwright package never wins
+    # over an explicit Camofox/disabled selection.
+    browser_server = _browser_server_config()
+    if browser_server is None:
+        logger.info(
+            "Built-in browser MCP disabled via ODYSSEUS_BROWSER_MCP_PROVIDER"
+        )
+        return
     npx_path = _find_npx()
     logger.info(f"NPX binary resolved to: {npx_path}")
 
     async def _start_npx_servers():
         await asyncio.sleep(3)  # let Python servers finish first
-        for server_id, cfg in _BUILTIN_NPX_SERVERS.items():
-            # Browser automation is a shipped built-in, so the default path
-            # lets `npx -y` install @playwright/mcp on first start. Locked-down
-            # installs can opt back into the old no-network startup behavior
-            # with ODYSSEUS_BROWSER_MCP_REQUIRE_CACHE=1.
-            args = _browser_mcp_args(cfg["args"]) if server_id == "builtin_browser" else list(cfg["args"])
+        for server_id, cfg in {"builtin_browser": browser_server}.items():
+            args = (
+                _browser_mcp_args(cfg["args"])
+                if cfg["provider"] == "playwright"
+                else list(cfg["args"])
+            )
             pkg_spec = _npx_package_from_args(args)
             if BROWSER_MCP_REQUIRE_CACHE and pkg_spec and not await _is_npx_package_cached(npx_path, pkg_spec):
                 logger.warning(
@@ -224,7 +290,7 @@ async def register_builtin_servers(mcp_manager):
             logger.info(f"Starting NPX server: {cfg['name']} ({npx_path} {' '.join(args)})")
             try:
                 env = None
-                if server_id == "builtin_browser":
+                if cfg["provider"] == "playwright":
                     cache_home = os.environ.get(
                         "ODYSSEUS_BROWSER_MCP_CACHE",
                         os.path.join(base_dir, "data", "local", "playwright-mcp-cache"),
@@ -234,6 +300,8 @@ async def register_builtin_servers(mcp_manager):
                         "XDG_CACHE_HOME": cache_home,
                         "PLAYWRIGHT_BROWSERS_PATH": os.path.join(cache_home, "browsers"),
                     }
+                elif cfg["provider"] == "camofox":
+                    env = _camofox_mcp_env()
                 ok = await mcp_manager.connect_server(
                     server_id=server_id,
                     name=cfg["name"],

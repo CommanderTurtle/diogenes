@@ -50,6 +50,106 @@ def test_browser_mcp_cache_requirement_can_be_enabled(monkeypatch):
     assert builtin_mcp.BROWSER_MCP_REQUIRE_CACHE is True
 
 
+def test_browser_provider_defaults_to_playwright_for_compatibility(monkeypatch):
+    monkeypatch.delenv("ODYSSEUS_BROWSER_MCP_PROVIDER", raising=False)
+    monkeypatch.delenv("CAMOFOX_URL", raising=False)
+    builtin_mcp = _load_builtin_mcp(monkeypatch)
+
+    assert builtin_mcp.browser_mcp_provider() == "playwright"
+    assert builtin_mcp._browser_server_config()["provider"] == "playwright"
+
+
+def test_browser_provider_can_select_camofox_without_playwright_args(monkeypatch):
+    monkeypatch.setenv("ODYSSEUS_BROWSER_MCP_PROVIDER", "camofox")
+    monkeypatch.setenv("CAMOFOX_URL", "http://127.0.0.1:9377")
+    builtin_mcp = _load_builtin_mcp(monkeypatch)
+
+    config = builtin_mcp._browser_server_config()
+    assert config["provider"] == "camofox"
+    assert config["args"] == ["-y", "camofox-mcp@latest"]
+    assert "@playwright/mcp" not in " ".join(config["args"])
+    assert builtin_mcp._camofox_mcp_env() == {
+        "CAMOFOX_URL": "http://127.0.0.1:9377"
+    }
+
+
+def test_browser_provider_can_be_disabled_without_uninstalling(monkeypatch):
+    monkeypatch.setenv("ODYSSEUS_BROWSER_MCP_PROVIDER", "disabled")
+    builtin_mcp = _load_builtin_mcp(monkeypatch)
+
+    assert builtin_mcp._browser_server_config() is None
+
+
+def test_browser_provider_auto_requires_explicit_camofox_url(monkeypatch):
+    monkeypatch.setenv("ODYSSEUS_BROWSER_MCP_PROVIDER", "auto")
+    monkeypatch.delenv("CAMOFOX_URL", raising=False)
+    builtin_mcp = _load_builtin_mcp(monkeypatch)
+    assert builtin_mcp.browser_mcp_provider() == "playwright"
+
+    monkeypatch.setenv("CAMOFOX_URL", "http://localhost:9377")
+    assert builtin_mcp.browser_mcp_provider() == "camofox"
+
+
+def test_invalid_browser_provider_fails_closed(monkeypatch):
+    monkeypatch.setenv("ODYSSEUS_BROWSER_MCP_PROVIDER", "mystery")
+    builtin_mcp = _load_builtin_mcp(monkeypatch)
+
+    assert builtin_mcp.browser_mcp_provider() == "disabled"
+    assert builtin_mcp._browser_server_config() is None
+
+
+def test_register_builtin_browser_uses_camofox_command_and_env(monkeypatch):
+    monkeypatch.setenv("ODYSSEUS_BROWSER_MCP_PROVIDER", "camofox")
+    monkeypatch.setenv("CAMOFOX_URL", "http://127.0.0.1:9377")
+    monkeypatch.delenv("ODYSSEUS_BROWSER_MCP_REQUIRE_CACHE", raising=False)
+    builtin_mcp = _load_builtin_mcp(monkeypatch)
+    scheduled = []
+    calls = []
+
+    class Manager:
+        async def connect_server(self, **kwargs):
+            calls.append(kwargs)
+            return True
+
+    async def no_sleep(_seconds):
+        return None
+
+    monkeypatch.setattr(builtin_mcp, "_BUILTIN_SERVERS", {})
+    monkeypatch.setattr(builtin_mcp, "_find_npx", lambda: "/sandwich/bin/npx")
+    monkeypatch.setattr(builtin_mcp, "_spawn_bg", scheduled.append)
+    monkeypatch.setattr(builtin_mcp.asyncio, "sleep", no_sleep)
+
+    async def run():
+        await builtin_mcp.register_builtin_servers(Manager())
+        assert len(scheduled) == 1
+        await scheduled[0]
+
+    asyncio.run(run())
+
+    assert calls == [{
+        "server_id": "builtin_browser",
+        "name": "Built-in: Browser (Camofox)",
+        "transport": "stdio",
+        "command": "/sandwich/bin/npx",
+        "args": ["-y", "camofox-mcp@latest"],
+        "env": {"CAMOFOX_URL": "http://127.0.0.1:9377"},
+    }]
+    assert "@playwright/mcp" not in repr(calls)
+
+
+def test_register_builtin_browser_disabled_schedules_no_npx(monkeypatch):
+    monkeypatch.setenv("ODYSSEUS_BROWSER_MCP_PROVIDER", "disabled")
+    builtin_mcp = _load_builtin_mcp(monkeypatch)
+    scheduled = []
+
+    monkeypatch.setattr(builtin_mcp, "_BUILTIN_SERVERS", {})
+    monkeypatch.setattr(builtin_mcp, "_spawn_bg", scheduled.append)
+
+    asyncio.run(builtin_mcp.register_builtin_servers(object()))
+
+    assert scheduled == []
+
+
 def test_browser_mcp_args_use_configured_browser_executable(monkeypatch):
     monkeypatch.setenv("ODYSSEUS_BROWSER_EXECUTABLE", "/usr/bin/chromium")
     builtin_mcp = _load_builtin_mcp(monkeypatch)

@@ -15,6 +15,23 @@ The runtime checkout never receives the production checkout's `.venv`,
 `Ulysses-state/ulysses.env`; that file sets `ODYSSEUS_DATA_DIR` to the external
 state tree. A runtime rebuild therefore cannot delete user data.
 
+## Browser MCP selection
+
+Browser automation is an explicit deployment choice, independent of any
+package left in an npx cache:
+
+```dotenv
+ODYSSEUS_BROWSER_MCP_PROVIDER=camofox
+CAMOFOX_URL=http://127.0.0.1:9377
+```
+
+This registers `camofox-mcp` as the Odysseus agent's built-in browser adapter.
+The separately managed `camofox-browser` service must be reachable at
+`CAMOFOX_URL`. A cached Playwright MCP cannot override `camofox`; use
+`ODYSSEUS_BROWSER_MCP_PROVIDER=disabled` to register no browser MCP at all.
+The upstream-compatible default remains `playwright` for installations that do
+not set the variable.
+
 ## Inspect without changing anything
 
 From the clean source checkout:

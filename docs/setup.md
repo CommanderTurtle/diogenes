@@ -517,17 +517,45 @@ Key settings:
 
 All upload-limit vars are validated (must be a positive integer) and optional; an invalid value fails fast at startup.
 
-### Built-in MCP servers (optional setup)
+### Built-in MCP servers and browser provider
 
-Odysseus auto-registers a few built-in MCP servers at startup. The npx-based ones (currently the browser server, `@playwright/mcp`) only start when their npm package is already in the local npx cache. If a package isn't cached, that server is skipped with a startup log message explaining what to do, so a fresh install does not block on a multi-minute npm download or hang if Playwright system deps are missing.
+Odysseus auto-registers its Python built-in MCP servers at startup. Browser
+automation is a separately selectable npx-based MCP provider:
 
-To enable the browser MCP (page navigation, screenshots, vision), run once:
+```dotenv
+# Backward-compatible upstream default
+ODYSSEUS_BROWSER_MCP_PROVIDER=playwright
+
+# Existing external camofox-browser service
+# ODYSSEUS_BROWSER_MCP_PROVIDER=camofox
+# CAMOFOX_URL=http://127.0.0.1:9377
+
+# No built-in browser MCP (does not uninstall either package)
+# ODYSSEUS_BROWSER_MCP_PROVIDER=disabled
+```
+
+`auto` selects Camofox only when `CAMOFOX_URL` is explicitly configured;
+otherwise it selects Playwright. A cached Playwright package never overrides an
+explicit `camofox` or `disabled` selection.
+
+To install the Playwright MCP package once:
 
 ```bash
 npx -y @playwright/mcp@latest --version
 ```
 
-That installs `@playwright/mcp` plus Playwright (~300MB total). Restart Odysseus and the server will register at startup.
+To install Camofox MCP and start its required independent browser service:
+
+```bash
+npx -y camofox-mcp@latest --version
+npx camofox-browser@latest
+```
+
+Camofox MCP uses stdio for Odysseus while calling the browser service at
+`CAMOFOX_URL` (default `http://127.0.0.1:9377`). Set `CAMOFOX_API_KEY` when that
+service requires authentication. Set `ODYSSEUS_BROWSER_MCP_REQUIRE_CACHE=1` to
+forbid npx package downloads during Odysseus startup; a missing selected package
+is then reported and skipped.
 
 ## Architecture
 ```

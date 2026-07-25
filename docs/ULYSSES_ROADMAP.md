@@ -51,7 +51,10 @@ design skeleton:
   digest and retain one atomic rollback binary;
 - Hermes remains a separately installed agent. Its host runtime, updater
   integration, and MCP registry are managed without merging it with the
-  Odysseus agent MCP registry.
+  Odysseus agent MCP registry;
+- the Odysseus agent's built-in browser MCP is now an explicit provider
+  selection. This host selects Camofox and a cached Playwright package cannot
+  override it.
 
 Remaining transition gates are deliberately hardware/stateful: build both
 Colibri source trees on the 5090, validate the completed model downloads, run
@@ -486,8 +489,9 @@ Service-specific caution:
   Playwright or Playwright's Chromium.
 - keep Firecrawl's browser automation encapsulated inside its own containers;
   it does not satisfy or create a general host-browser dependency.
-- an existing optional Odysseus Playwright MCP may be reported and disabled,
-  but never removed or replaced without an explicit adoption plan.
+- report an existing optional Odysseus Playwright MCP separately from the
+  selected provider. Its package and browser caches are removable only through
+  an explicit maintenance action.
 
 ### 8. Native Services UI
 
@@ -613,6 +617,8 @@ corresponding rollback has been tested.
    production-state capture and canonical uv environment workflow.
 10. [x] Surface `liburing-dev` as a first-class native Cookbook dependency for
     the Colibri Hy3 `IOURING=1` build.
-11. [ ] During the maintenance window, capture final production state, create
+11. [x] Make the built-in browser MCP provider explicit and configure the
+    candidate for the existing Camofox backend without Playwright fallback.
+12. [ ] During the maintenance window, capture final production state, create
     the candidate venv, validate CUDA/ONNX and Colibri, then benchmark before
     any port cutover.
