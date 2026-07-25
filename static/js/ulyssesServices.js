@@ -189,14 +189,14 @@ function renderAgentBoundary() {
       <div class="uly-agent-boundary">
         <article>
           <span class="uly-scope-pill scope-odysseus_agent">Odysseus agent</span>
-          <strong>Settings → Integrations</strong>
-          <p>MCP Tool Server entries here are launched for the Odysseus agent only.</p>
+          <strong>Built-ins and Settings → Integrations</strong>
+          <p>The selected built-in browser MCP and MCP Tool Server entries here are launched for the Odysseus agent only.</p>
         </article>
         <div class="uly-boundary-line" aria-hidden="true"></div>
         <article>
           <span class="uly-scope-pill scope-hermes_agent">Hermes agent</span>
           <strong>Hermes profiles and watchdogs</strong>
-          <p>Context Mode MCP and Camofox MCP remain registered to Hermes only.</p>
+          <p>Context Mode MCP and Hermes's separate Camofox MCP registration remain Hermes-only.</p>
         </article>
       </div>
       <p class="uly-boundary-note">Shared services such as Camofox, Firecrawl, SearXNG, Chroma, and model endpoints are host scoped. Ulysses observes both registries but never copies or merges them.</p>

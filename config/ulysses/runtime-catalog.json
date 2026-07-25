@@ -78,6 +78,16 @@
       "capabilities": ["browser", "web-automation"]
     },
     {
+      "runtime_id": "camofox.odysseus.mcp",
+      "label": "Camofox MCP (Odysseus)",
+      "adapter": "mcp_stdio",
+      "ownership": "managed",
+      "scope": "odysseus_agent",
+      "source_root": "${ULYSSES_REPOSITORY_ROOT}",
+      "dependencies": ["camofox.browser", "sandwich.runtime"],
+      "capabilities": ["mcp", "browser", "agent-tools"]
+    },
+    {
       "runtime_id": "signal.cli",
       "label": "signal-cli",
       "adapter": "native",

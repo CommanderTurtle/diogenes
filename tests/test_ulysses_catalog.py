@@ -23,7 +23,7 @@ def test_default_catalog_resolves_portable_roots_and_sandwich(tmp_path):
         microservices_root=microservices,
     )
 
-    assert len(registry.definitions()) == 13
+    assert len(registry.definitions()) == 14
     assert registry.get("sandwich.runtime").source_root == (
         REPOSITORY_ROOT / "components" / "sandwich"
     ).resolve()
@@ -40,6 +40,12 @@ def test_default_catalog_resolves_portable_roots_and_sandwich(tmp_path):
         "sandwich.runtime",
     )
     assert registry.get("camofox.mcp").scope.value == "hermes_agent"
+    assert registry.get("camofox.odysseus.mcp").dependencies == (
+        "camofox.browser",
+        "sandwich.runtime",
+    )
+    assert registry.get("camofox.odysseus.mcp").scope.value == "odysseus_agent"
+    assert registry.get("camofox.odysseus.mcp").ownership.value == "managed"
     assert registry.get("context.mode.mcp").scope.value == "hermes_agent"
     assert registry.get("firecrawl.api").scope.value == "host"
 
