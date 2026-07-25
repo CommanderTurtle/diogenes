@@ -256,6 +256,7 @@ def collect_managed_runtimes() -> dict[str, Any]:
                 "git": git,
                 "package": _package(item),
                 "package_spec": item.get("package_spec"),
+                "update_blocked_reason": item.get("update_blocked_reason"),
                 "compose": compose,
                 "tmux": {
                     "session": session or None,
@@ -300,6 +301,7 @@ def collect_managed_runtimes() -> dict[str, Any]:
                             item["category"] == "docker"
                             and compose_ready
                             and not port_collision
+                            and not item.get("update_blocked_reason")
                         )
                         or (
                             item["category"] == "javascript"
@@ -500,6 +502,8 @@ class ManagedRuntimeControl:
 
     def _steps(self, item: dict[str, Any], action: str) -> list[dict[str, Any]]:
         root: Path = item["root"]
+        if action == "update" and item.get("update_blocked_reason"):
+            raise RuntimeJobError(str(item["update_blocked_reason"]))
         if action == "sync":
             git = _git(root)
             if not item.get("git_update") or not git["present"] or git["dirty"]:

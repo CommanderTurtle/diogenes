@@ -232,6 +232,70 @@ def test_native_update_plan_stops_installs_and_restarts_managed_session(
     assert plan["steps"][2]["argv"][-2:] == ["bash", "runconfig.sh"]
 
 
+def test_protected_docker_update_is_hidden_and_rejected(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    runtime = tmp_path / "chroma"
+    runtime.mkdir()
+    compose_path = runtime / "compose.yml"
+    compose_path.write_text(
+        "services:\n  chromadb:\n    image: chromadb/chroma\n",
+        encoding="utf-8",
+    )
+    reason = "Create and verify a durable Chroma snapshot before updating."
+    item = {
+        "id": "chroma.vector",
+        "label": "Chroma",
+        "category": "docker",
+        "root": runtime,
+        "documents": (),
+        "compose": compose_path,
+        "compose_services": ["chromadb"],
+        "ports": [8100],
+        "update_blocked_reason": reason,
+    }
+    monkeypatch.setattr(manager, "load_runtime_management", lambda: (item,))
+    monkeypatch.setattr(
+        manager,
+        "_compose",
+        lambda _item: {
+            "valid": True,
+            "containers": [
+                {"service": "chromadb", "state": "running"},
+            ],
+        },
+    )
+    monkeypatch.setattr(
+        manager,
+        "_git",
+        lambda _root: {
+            "present": False,
+            "dirty": False,
+            "branch": None,
+            "commit": None,
+            "origin": None,
+        },
+    )
+    monkeypatch.setattr(manager, "_port_open", lambda _port: True)
+    monkeypatch.setattr(manager, "_tmux_alive", lambda _name: False)
+    monkeypatch.setattr(
+        manager,
+        "observe_sandwich_installation",
+        lambda: SimpleNamespace(installed=True),
+    )
+
+    observed = manager.collect_managed_runtimes()["runtimes"][0]
+
+    assert observed["actions"]["update"] is False
+    assert observed["update_blocked_reason"] == reason
+    with pytest.raises(manager.RuntimeJobError, match="durable Chroma snapshot"):
+        manager.ManagedRuntimeControl(tmp_path / "state").create_plan(
+            runtime_id="chroma.vector",
+            action="update",
+        )
+
+
 def test_stopped_compose_with_occupied_port_disables_start_and_update(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

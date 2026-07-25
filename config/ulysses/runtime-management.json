@@ -38,6 +38,7 @@
       "compose_services": ["chromadb"],
       "git_update": false,
       "build_on_update": false,
+      "update_blocked_reason": "Chroma image updates are disabled until the active /data store has a verified durable snapshot and mount.",
       "ports": [8100]
     },
     {
