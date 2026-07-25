@@ -422,9 +422,17 @@ databases, and model endpoints.
 
 Admin UI:
 
+- [x] Add a native draggable/minimizable Services window to the existing
+  Odysseus sidebar and icon rail.
+- [x] Add read-only Overview, Services, JavaScript, and Chroma views backed by
+  the sanitized Ulysses APIs.
+- [x] Label `host`, `odysseus_agent`, and `hermes_agent` ownership explicitly;
+  the Odysseus MCP integration form and Hermes MCP registry remain separate.
 - infrastructure overview and dependency graph;
-- a Services screen listing status, adapter, working directory, ports, health,
-  configuration readiness, ownership/adoption state, and resource impact;
+- [x] A Services screen listing status, adapter, source/working root, ports,
+  scope, ownership, dependencies, and capabilities.
+- [ ] Add adapter-specific health, configuration readiness, adoption detail,
+  and resource impact to each service view;
 - Up, Down, Restart, Update, and terminal/log actions backed by typed adapter
   methods rather than arbitrary shell text;
 - existing-host discovery roots remain filesystem sources of truth, and

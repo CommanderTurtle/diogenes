@@ -38,6 +38,7 @@ import themeModule from './js/theme.js';
 // _envState objects), which broke server selection. Keep all cookbook imports
 // unversioned so this can't recur.
 import cookbookModule from './js/cookbook.js';
+import ulyssesServicesModule from './js/ulyssesServices.js';
 import groupModule from './js/group.js';
 import * as researchPanelModule from './js/research/panel.js?v=20260630researchthumb';
 import ttsModule from './js/tts-ai.js';
@@ -52,6 +53,7 @@ window.sessionModule = sessionModule;
 window.uiModule = uiModule;
 window.adminModule = adminModule;
 window.cookbookModule = cookbookModule;
+window.ulyssesServicesModule = ulyssesServicesModule;
 
 function _isMobileChatInput() {
   return window.innerWidth <= 768;
@@ -170,6 +172,7 @@ function initRailHoverLabels() {
     'rail-archive': 'Library',
     'rail-memory': 'Brain',
     'rail-notes': 'Notes',
+    'rail-services': 'Services',
     'rail-tasks': 'Tasks',
     'rail-theme': 'Theme',
     'rail-settings': 'Settings',
@@ -1178,6 +1181,7 @@ function initializeEventListeners() {
     },
     '/calendar': () => calendarModule && calendarModule.openCalendar(),
     '/cookbook': () => document.getElementById('tool-cookbook-btn')?.click(),
+    '/services': () => document.getElementById('tool-services-btn')?.click(),
     '/email':    () => {
       // Collapse the wide sidebar → icon rail (48px) so the user keeps
       // navigation visible alongside the fullscreen email view.
@@ -2728,6 +2732,7 @@ function initializeEventListeners() {
     'tool-library':        '#tool-library-btn',
     'tool-memory':         '#tool-memory-btn',
     'tool-notes':          '#tool-notes-btn',
+    'tool-services':       '#tool-services-btn',
     'tool-tasks':          '#tool-tasks-btn',
     'tool-theme':          '#tool-theme-btn',
     'user-bar':            '#user-bar-profile',
@@ -3751,6 +3756,7 @@ function startOdysseusApp() {
   if (searchChatModule) {
     searchChatModule.init(API_BASE);
   }
+  ulyssesServicesModule.init(API_BASE);
 
   // Search buttons — icon rail + sidebar
   const railSearchBtn = el('rail-search-btn');

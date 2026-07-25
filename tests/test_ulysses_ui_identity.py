@@ -52,3 +52,32 @@ def test_explicit_background_choice_is_used_on_login() -> None:
     assert "PATTERNS[Math.floor(Math.random() * PATTERNS.length)]" in login
     assert "Object.prototype.hasOwnProperty.call(opts, 'bgPattern')" in theme
     assert "obj.bgPattern = opts.bgPattern || 'none';" in theme
+
+
+def test_services_window_preserves_agent_and_mcp_boundaries() -> None:
+    services = _read("static/js/ulyssesServices.js")
+    index = _read("static/index.html")
+    app = _read("static/app.js")
+
+    assert 'id="tool-services-btn"' in index
+    assert 'id="rail-services"' in index
+    assert "ulyssesServicesModule.init(API_BASE);" in app
+    assert "'/services': () =>" in app
+
+    assert "Odysseus agent" in services
+    assert "Hermes agent" in services
+    assert "Settings → Integrations" in services
+    assert "never copies or merges" in services
+    assert "/api/ulysses/topology" in services
+    assert "/api/ulysses/chroma/persistence" in services
+
+
+def test_services_window_is_read_only_until_adoption_exists() -> None:
+    services = _read("static/js/ulyssesServices.js")
+
+    assert "This first UI stage intentionally exposes no lifecycle actions." in services
+    assert "read-only" in services
+    assert "Apply unavailable — maintenance window required" in services
+    assert "method: 'POST'" not in services
+    assert "method: 'PUT'" not in services
+    assert "method: 'DELETE'" not in services

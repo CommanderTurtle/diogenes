@@ -139,6 +139,14 @@ The overview does not concatenate every terminal into one unreadable stream.
 It shows compact status/port/resource cards; selecting a service opens its own
 bounded logs and, where registered, its tmux console.
 
+The first implemented UI slice is read-only and uses the existing Odysseus
+window manager, icon rail, sidebar, theme variables, resizing, docking, and
+minimize behavior. Its Overview, Services, JavaScript, and Chroma views consume
+only `GET /api/ulysses/topology` and
+`GET /api/ulysses/chroma/persistence`. No lifecycle button is rendered until
+the corresponding runtime has an adoption record, typed action plan, durable
+job runner, and rollback contract.
+
 ## Browser and search capabilities
 
 - Camofox/Camofox MCP is the preferred general browser provider.
