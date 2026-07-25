@@ -57,6 +57,7 @@ class ColibriProvider:
     setup_path: Path
     build_cwd: Path
     build_argv: tuple[str, ...]
+    build_compatibility: dict[str, str] | None
     validation_steps: tuple[dict[str, Any], ...]
     plan_args: tuple[str, ...]
     doctor_args: tuple[str, ...]
@@ -145,6 +146,51 @@ def load_colibri_catalog(
             isinstance(item, str) and item for item in build_argv
         ):
             raise ColibriCatalogError("Colibri build argv is invalid")
+        build_compatibility = raw.get("build_compatibility")
+        normalized_compatibility: dict[str, str] | None = None
+        if build_compatibility is not None:
+            if not isinstance(build_compatibility, dict):
+                raise ColibriCatalogError(
+                    "Colibri build compatibility must be an object"
+                )
+            compatibility_id = str(build_compatibility.get("id") or "")
+            compatibility_commit = str(
+                build_compatibility.get("source_commit") or ""
+            )
+            compatibility_path = str(build_compatibility.get("path") or "")
+            compatibility_before = str(build_compatibility.get("before") or "")
+            compatibility_after = str(build_compatibility.get("after") or "")
+            if not re.fullmatch(
+                r"[a-z0-9][a-z0-9.-]*", compatibility_id
+            ):
+                raise ColibriCatalogError(
+                    "Colibri build compatibility id is invalid"
+                )
+            if not re.fullmatch(r"[0-9a-f]{40}", compatibility_commit):
+                raise ColibriCatalogError(
+                    "Colibri build compatibility commit must be pinned"
+                )
+            _safe_relative(
+                source_root,
+                compatibility_path,
+                "build_compatibility.path",
+            )
+            if (
+                not compatibility_before
+                or not compatibility_after
+                or compatibility_before == compatibility_after
+            ):
+                raise ColibriCatalogError(
+                    "Colibri build compatibility replacement is invalid"
+                )
+            normalized_compatibility = {
+                "id": compatibility_id,
+                "source_commit": compatibility_commit,
+                "path": compatibility_path,
+                "before": compatibility_before,
+                "after": compatibility_after,
+                "reason": str(build_compatibility.get("reason") or ""),
+            }
         model_variants = raw.get("model_variants")
         if not isinstance(model_variants, list) or not model_variants:
             raise ColibriCatalogError("Colibri model variants are required")
@@ -284,6 +330,7 @@ def load_colibri_catalog(
                     source_root, raw["build_cwd"], "build_cwd"
                 ),
                 build_argv=tuple(build_argv),
+                build_compatibility=normalized_compatibility,
                 validation_steps=tuple(normalized_validation),
                 plan_args=tuple(str(item) for item in raw.get("plan_args") or []),
                 doctor_args=tuple(
@@ -337,6 +384,9 @@ def _git(provider: ColibriProvider) -> dict[str, Any]:
             "commit": None,
             "origin": None,
             "dirty": False,
+            "dirty_paths": [],
+            "unexpected_dirty": False,
+            "unexpected_dirty_paths": [],
             "minimum_commit_present": False,
             "upstream_commit": None,
             "ahead": 0,
@@ -371,17 +421,43 @@ def _git(provider: ColibriProvider) -> dict[str, Any]:
         ).split()
         if len(counts) == 2 and all(item.isdigit() for item in counts):
             ahead, behind = (int(item) for item in counts)
-    dirty = bool(
-        _run(
+    try:
+        status_result = subprocess.run(
             [
                 "git",
                 "-C",
                 str(root),
                 "status",
-                "--porcelain",
+                "--porcelain=v1",
                 "--untracked-files=all",
-            ]
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=8,
         )
+        status = (
+            status_result.stdout if status_result.returncode == 0 else ""
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        status = ""
+    dirty_paths = []
+    for line in status.splitlines():
+        value = line[3:] if len(line) > 3 else ""
+        if " -> " in value:
+            value = value.rsplit(" -> ", 1)[-1]
+        if value:
+            dirty_paths.append(value.strip('"'))
+    expected_dirty_paths = {
+        str(provider.engine_path.relative_to(provider.source_root)),
+        str(
+            (provider.build_cwd / ".ulysses-build.json").relative_to(
+                provider.source_root
+            )
+        ),
+    }
+    unexpected_dirty_paths = sorted(
+        set(dirty_paths) - expected_dirty_paths
     )
     minimum_present = True
     if provider.minimum_commit:
@@ -410,7 +486,10 @@ def _git(provider: ColibriProvider) -> dict[str, Any]:
         "branch": branch or None,
         "commit": commit or None,
         "origin": origin or None,
-        "dirty": dirty,
+        "dirty": bool(dirty_paths),
+        "dirty_paths": sorted(set(dirty_paths)),
+        "unexpected_dirty": bool(unexpected_dirty_paths),
+        "unexpected_dirty_paths": unexpected_dirty_paths,
         "minimum_commit_present": minimum_present,
         "upstream_commit": upstream_commit or None,
         "ahead": ahead,
@@ -651,6 +730,8 @@ def _validate_build_manifest(
     source_commit: str | None,
     build_config: str,
 ) -> tuple[bool, list[str]]:
+    from src.ulysses_colibri_build import compatibility_manifest
+
     if not isinstance(manifest, dict):
         return False, ["build manifest is missing or unreadable"]
     expected = {
@@ -660,6 +741,7 @@ def _validate_build_manifest(
         "source_branch": provider.source_branch,
         "source_commit": source_commit,
         "build_argv": list(provider.build_argv),
+        "build_compatibility": compatibility_manifest(provider),
         "validation_steps": list(provider.validation_steps),
         "build_config": build_config or None,
         "engine_path": str(provider.engine_path),
@@ -742,13 +824,26 @@ def observe_colibri_provider(provider: ColibriProvider) -> dict[str, Any]:
     source_ready = provenance_ready and bool(git["current"])
     built = provider.engine_path.is_file()
     cuda_built = built and ("CUDA=1" in build_config or "CUDA=ON" in build_config)
+    required_build_flags = [
+        item
+        for item in provider.build_argv
+        if item in {"CUDA=1", "CUDA=ON", "IOURING=1"}
+    ]
+    missing_build_flags = [
+        item for item in required_build_flags if item not in build_config
+    ]
     manifest_valid, manifest_reasons = _validate_build_manifest(
         provider,
         build_manifest,
         source_commit=git.get("commit"),
         build_config=build_config,
     )
-    build_ready = built and cuda_built and manifest_valid
+    build_ready = (
+        built
+        and cuda_built
+        and not missing_build_flags
+        and manifest_valid
+    )
     prerequisites = _build_prerequisites(provider)
     running = health is not None and provider.model_id in served_ids
     collision = port_open and health is None
@@ -774,13 +869,24 @@ def observe_colibri_provider(provider: ColibriProvider) -> dict[str, Any]:
                 ),
             }
         )
-    if git.get("dirty"):
+    if git.get("unexpected_dirty"):
         findings.append(
             {
                 "code": f"{provider.provider_id}.source_dirty",
                 "severity": "warning",
                 "summary": "Colibri source contains local changes.",
-                "evidence": str(provider.source_root),
+                "evidence": ", ".join(
+                    git.get("unexpected_dirty_paths") or [str(provider.source_root)]
+                ),
+            }
+        )
+    elif git.get("dirty"):
+        findings.append(
+            {
+                "code": f"{provider.provider_id}.build_output_modified",
+                "severity": "info",
+                "summary": "Tracked upstream engine contains the local CUDA build.",
+                "evidence": ", ".join(git.get("dirty_paths") or []),
             }
         )
     if git["present"] and (git.get("ahead") or git.get("behind")):
@@ -826,6 +932,15 @@ def observe_colibri_provider(provider: ColibriProvider) -> dict[str, Any]:
                 "evidence": "; ".join(manifest_reasons),
             }
         )
+    if built and missing_build_flags:
+        findings.append(
+            {
+                "code": f"{provider.provider_id}.build_flags_missing",
+                "severity": "error",
+                "summary": "Colibri build is missing required native features.",
+                "evidence": ", ".join(missing_build_flags),
+            }
+        )
     if not prerequisites["ready"]:
         findings.append(
             {
@@ -865,6 +980,8 @@ def observe_colibri_provider(provider: ColibriProvider) -> dict[str, Any]:
             "cuda_built": cuda_built,
             "ready": build_ready,
             "build_config": build_config or None,
+            "required_flags": required_build_flags,
+            "missing_flags": missing_build_flags,
             "cwd": str(provider.build_cwd),
             "argv": list(provider.build_argv),
             "manifest_path": str(manifest_path),

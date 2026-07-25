@@ -177,6 +177,14 @@
       "setup_path": "c/setup.sh",
       "build_cwd": "c",
       "build_argv": ["make", "hy3", "CUDA=1", "IOURING=1"],
+      "build_compatibility": {
+        "id": "hy3-cuda-matmul-group-size",
+        "source_commit": "08f8439ebfe1994b607aed6adf857c80e8894c4c",
+        "path": "c/hy3.c",
+        "before": "coli_cuda_matmul(&w->cuda,y,x,weights,w->s,w->fmt,S,w->I,w->O,w->cuda_device))",
+        "after": "coli_cuda_matmul(&w->cuda,y,x,weights,w->s,w->fmt,S,w->I,w->O,w->cuda_device,0))",
+        "reason": "The official Hy3 merge adopted the grouped CUDA backend signature but left the non-grouped Hy3 call site one argument behind."
+      },
       "validation_steps": [
         {
           "label": "Run upstream Colibri-Hy3 tests",
@@ -198,31 +206,40 @@
       "plan_args": [
         "plan",
         "--ram",
-        "56",
+        "0",
+        "--auto-tier",
         "--gpu",
         "0",
         "--vram",
-        "16",
+        "0",
+        "--policy",
+        "balanced",
         "--json"
       ],
       "doctor_args": [
         "doctor",
         "--ram",
-        "56",
+        "0",
+        "--auto-tier",
         "--gpu",
         "0",
         "--vram",
-        "16",
+        "0",
+        "--policy",
+        "balanced",
         "--json"
       ],
       "serve_args": [
         "serve",
         "--ram",
-        "56",
+        "0",
+        "--auto-tier",
         "--gpu",
         "0",
         "--vram",
-        "16",
+        "0",
+        "--policy",
+        "balanced",
         "--host",
         "127.0.0.1"
       ],
@@ -232,8 +249,8 @@
       "profiles": {
         "rtx5090-high-ram": {
           "label": "RTX 5090 · high RAM",
-          "description": "5090 profile using the upstream auto-tier to fill measured free VRAM while reserving dense/KV headroom, with the documented direct-I/O and io_uring pipeline options.",
-          "ram": "56",
+          "description": "5090 profile using the upstream auto-tier to size both RAM and free VRAM at launch, with direct I/O, io_uring, and the planner-recommended single-GPU CUDA pipeline.",
+          "ram": "0",
           "auto_tier": true,
           "ctx": "4096",
           "gpu": "0",
@@ -243,6 +260,7 @@
           "env": {
             "COLI_CUDA": "1",
             "CUDA_ATTN": "1",
+            "COLI_CUDA_PIPE": "1",
             "DIRECT": "1",
             "PIPE": "2",
             "PIPE_WORKERS": "8",

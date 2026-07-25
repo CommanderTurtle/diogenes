@@ -71,11 +71,29 @@ class ColibriControl:
                 raise RuntimeJobError("Colibri origin does not match the catalog")
             if source.get("branch") != provider.source_branch:
                 raise RuntimeJobError("Colibri branch does not match the catalog")
-            if source.get("dirty"):
+            if source.get("unexpected_dirty", source.get("dirty")):
                 raise RuntimeJobError(
                     "Colibri source has local changes; preserve or commit them before sync"
                 )
+            steps: list[dict[str, Any]] = []
+            if source.get("dirty"):
+                steps.append(
+                    {
+                        "label": "Restore tracked Colibri build output",
+                        "argv": [
+                            "git",
+                            "-C",
+                            str(provider.source_root),
+                            "restore",
+                            "--source=HEAD",
+                            "--",
+                            str(provider.engine_path.relative_to(provider.source_root)),
+                        ],
+                        "timeout": 30,
+                    }
+                )
             return [
+                *steps,
                 {
                     "label": "Fetch official Colibri source",
                     "argv": [
@@ -136,7 +154,7 @@ class ColibriControl:
         endpoint = observed.get("endpoint") or {}
         if not source.get("ready"):
             raise RuntimeJobError("Colibri source preflight is not ready")
-        if source.get("dirty"):
+        if source.get("unexpected_dirty", source.get("dirty")):
             raise RuntimeJobError(
                 "Colibri source has local changes; preserve or commit them before build"
             )
@@ -158,6 +176,14 @@ class ColibriControl:
             }
             for step in provider.validation_steps
         ]
+        application_root = Path(__file__).resolve().parents[1]
+        build_argv = [
+            sys.executable,
+            "-m",
+            "src.ulysses_colibri_build",
+            "--provider",
+            provider.provider_id,
+        ]
         return [
             {
                 "label": "Verify GNU Make",
@@ -171,15 +197,15 @@ class ColibriControl:
             },
             {
                 "label": "Build native Colibri CUDA runtime",
-                "argv": list(provider.build_argv),
-                "cwd": str(provider.build_cwd),
+                "argv": build_argv,
+                "cwd": str(application_root),
                 "timeout": 3600,
             },
             *validation_steps,
             {
                 "label": "Reassert canonical Colibri build configuration",
-                "argv": list(provider.build_argv),
-                "cwd": str(provider.build_cwd),
+                "argv": build_argv,
+                "cwd": str(application_root),
                 "timeout": 3600,
             },
             {

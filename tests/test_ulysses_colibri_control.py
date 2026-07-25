@@ -56,7 +56,7 @@ def test_sync_refuses_dirty_source(tmp_path: Path) -> None:
         )
 
 
-def test_build_plan_uses_catalog_argv_and_manifest(tmp_path: Path) -> None:
+def test_build_plan_uses_guarded_builder_and_manifest(tmp_path: Path) -> None:
     plan, _token = ColibriControl(tmp_path).create_plan(
         _report(),
         provider_id="colibri.glm",
@@ -66,12 +66,8 @@ def test_build_plan_uses_catalog_argv_and_manifest(tmp_path: Path) -> None:
     build = next(
         step for step in plan["steps"] if step["label"].startswith("Build native")
     )
-    assert build["argv"] == [
-        "make",
-        "colibri",
-        "CUDA=1",
-        "CUDA_ARCH=native",
-    ]
+    assert build["argv"][1:3] == ["-m", "src.ulysses_colibri_build"]
+    assert build["argv"][-2:] == ["--provider", "colibri.glm"]
     verify_cuda = next(
         step for step in plan["steps"] if step["label"] == "Verify CUDA compiler"
     )
@@ -90,6 +86,22 @@ def test_build_plan_uses_catalog_argv_and_manifest(tmp_path: Path) -> None:
     assert plan["steps"][-2]["argv"] == build["argv"]
     assert plan["steps"][-2]["label"].startswith("Reassert canonical")
     assert plan["steps"][-1]["argv"][-2:] == ["--provider", "colibri.glm"]
+
+
+def test_build_allows_only_the_tracked_engine_output(tmp_path: Path) -> None:
+    report = _report(dirty=True)
+    report["providers"][0]["source"]["unexpected_dirty"] = False
+
+    plan, _token = ColibriControl(tmp_path).create_plan(
+        report,
+        provider_id="colibri.glm",
+        action="build",
+    )
+
+    assert any(
+        step["label"].startswith("Build native")
+        for step in plan["steps"]
+    )
 
 
 def test_build_refuses_active_provider(tmp_path: Path) -> None:

@@ -48,6 +48,10 @@ def test_catalog_defines_official_distinct_providers(tmp_path: Path) -> None:
     assert by_id["colibri.hy3"].port == 8643
     assert by_id["colibri.hy3"].model_id == "hy3-colibri"
     assert by_id["colibri.hy3"].supports_tools is True
+    assert (
+        by_id["colibri.hy3"].build_compatibility["id"]
+        == "hy3-cuda-matmul-group-size"
+    )
 
 
 def test_catalog_rejects_relative_model_paths(tmp_path: Path) -> None:
@@ -225,6 +229,7 @@ def test_build_manifest_requires_current_hashes(tmp_path: Path) -> None:
         "source_branch": provider.source_branch,
         "source_commit": "a" * 40,
         "build_argv": list(provider.build_argv),
+        "build_compatibility": None,
         "validation_steps": list(provider.validation_steps),
         "build_config": build_config,
         "engine_path": str(provider.engine_path),
