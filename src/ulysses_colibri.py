@@ -959,12 +959,21 @@ def observe_colibri_provider(provider: ColibriProvider) -> dict[str, Any]:
                 "evidence": f"127.0.0.1:{provider.port}",
             }
         )
+    actionable_findings = [
+        finding
+        for finding in findings
+        if finding.get("severity") in {"warning", "error"}
+    ]
     return {
         "id": provider.provider_id,
         "label": provider.label,
         "family": provider.family,
         "scope": "host",
-        "status": "running" if running else ("degraded" if findings else "stopped"),
+        "status": (
+            "running"
+            if running
+            else ("degraded" if actionable_findings else "stopped")
+        ),
         "source": {
             "url": provider.source_url,
             "branch": provider.source_branch,
@@ -1034,11 +1043,13 @@ def observe_colibri_provider(provider: ColibriProvider) -> dict[str, Any]:
         "documentation": provider.documentation,
         "findings": findings,
         "actions": {
-            "sync_available": not running and not git.get("dirty", False),
+            "sync_available": (
+                not running and not git.get("unexpected_dirty", False)
+            ),
             "build_available": (
                 source_ready
                 and prerequisites["ready"]
-                and not git.get("dirty", False)
+                and not git.get("unexpected_dirty", False)
                 and not running
             ),
             "doctor_available": (
