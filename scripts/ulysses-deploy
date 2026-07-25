@@ -183,8 +183,21 @@ def source_contract(source_root: Path) -> dict:
 
 
 def _active_production_pids(production_root: Path) -> list[int]:
-    """Find this user's processes whose cwd or command references production."""
+    """Find application processes that can mutate production state.
+
+    An authenticated shell may remain parked in the production directory after
+    the server stops. Its cwd alone is not a writer and must not block cutover.
+    Match known Odysseus launch/child-process markers as well as the checkout
+    path so Uvicorn and bundled MCP children remain a hard gate.
+    """
     root = str(production_root.resolve())
+    app_markers = (
+        "uvicorn",
+        "gunicorn",
+        "launcher.py",
+        "app.py",
+        "mcp_servers/",
+    )
     found: set[int] = set()
     proc_root = Path("/proc")
     if not proc_root.is_dir():
@@ -200,7 +213,8 @@ def _active_production_pids(production_root: Path) -> list[int]:
             )
         except (FileNotFoundError, PermissionError, ProcessLookupError, OSError):
             continue
-        if cwd == root or cwd.startswith(root + os.sep) or root in cmdline:
+        references_root = cwd == root or cwd.startswith(root + os.sep) or root in cmdline
+        if references_root and any(marker in cmdline for marker in app_markers):
             found.add(pid)
     return sorted(found)
 

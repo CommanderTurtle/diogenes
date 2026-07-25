@@ -133,6 +133,34 @@ def test_capture_refuses_running_production_by_default(tmp_path, monkeypatch):
         )
 
 
+def test_active_process_probe_ignores_shell_parked_in_production(tmp_path, monkeypatch):
+    deploy = _load()
+    production = tmp_path / "odysseus"
+    production.mkdir()
+    proc = tmp_path / "proc"
+    shell = proc / "100"
+    server = proc / "101"
+    shell.mkdir(parents=True)
+    server.mkdir(parents=True)
+    os.symlink(production, shell / "cwd")
+    os.symlink(production, server / "cwd")
+    (shell / "cmdline").write_bytes(b"-bash\0")
+    (server / "cmdline").write_bytes(b"python\0-m\0uvicorn\0app:app\0")
+
+    original_path = deploy.Path
+
+    # Keep the production path real while redirecting only the module's /proc
+    # lookup through a narrow wrapper.
+    class PathProxy:
+        def __new__(cls, value):
+            if value == "/proc":
+                return proc
+            return original_path(value)
+
+    monkeypatch.setattr(deploy, "Path", PathProxy)
+    assert deploy._active_production_pids(production) == [101]
+
+
 def test_prepare_is_clean_disposable_clone_and_attaches_state(tmp_path):
     deploy = _load()
     source = tmp_path / "Ulysses"
