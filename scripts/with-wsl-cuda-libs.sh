@@ -7,7 +7,7 @@ venv_root="${ULYSSES_VENV:-$repo_root/.venv}"
 python_bin="$venv_root/bin/python"
 
 if [[ ! -x "$python_bin" ]]; then
-    printf 'Ulysses CUDA launcher: Python is unavailable at %s\n' "$python_bin" >&2
+    printf 'Diogenes CUDA launcher: Python is unavailable at %s\n' "$python_bin" >&2
     exit 66
 fi
 
@@ -49,7 +49,7 @@ provider="$site_packages/onnxruntime/capi/libonnxruntime_providers_cuda.so"
 if [[ -f "$provider" ]]; then
     missing="$(ldd "$provider" 2>&1 | awk '/not found/{print $1}' | sort -u)"
     if [[ -n "$missing" ]]; then
-        printf 'Ulysses CUDA launcher: unresolved ONNX libraries after environment setup:\n%s\n' "$missing" >&2
+        printf 'Diogenes CUDA launcher: unresolved ONNX libraries after environment setup:\n%s\n' "$missing" >&2
         exit 67
     fi
 fi

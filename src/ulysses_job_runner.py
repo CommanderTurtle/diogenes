@@ -1,4 +1,4 @@
-"""Detached entry point for a persisted Ulysses runtime job."""
+"""Detached entry point for a persisted Diogenes runtime job."""
 
 from __future__ import annotations
 

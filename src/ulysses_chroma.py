@@ -2,7 +2,7 @@
 
 This module deliberately has no apply operation.  It observes the live
 container, storage mounts, health, and collections, then returns a bounded
-human-gated migration plan when persistence is unsafe.
+operator-confirmed migration plan when persistence is unsafe.
 """
 
 from __future__ import annotations

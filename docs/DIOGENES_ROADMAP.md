@@ -1,4 +1,4 @@
-# Ulysses
+# Diogenes
 
 An extended Odysseus distribution for operating a private AI workstation.
 
@@ -10,13 +10,13 @@ branch:     dev
 commit:     d8a2059df8e53bc7275c45339849d14c8651e73c
 ```
 
-Development checkout: `~/Odysseus/Ulysses`
+Development checkout: `~/Odysseus/Diogenes`
 
 Development branch: `dev`, tracking `upstream/dev`
 
 Original Odysseus remote: `upstream` with pushing disabled
 
-Future Ulysses repository remote: reserved as `origin`
+Future Diogenes repository remote: reserved as `origin`
 
 ## Implementation checkpoint — 2026-07-25
 
@@ -44,7 +44,7 @@ design skeleton:
 - runtime sources are pinned to their official Git origin and branch, dirty
   trees and non-fast-forward updates fail closed, dependency order is enforced,
   and update actions preserve the prior stopped/running state;
-- native and JavaScript tmux services explicitly discard Ulysses's
+- native and JavaScript tmux services explicitly discard Diogenes's
   `VIRTUAL_ENV`, `PYTHONHOME`, and `PYTHONPATH` while retaining the declared
   host/runtime environment;
 - signal-cli release updates require GitHub's official asset size and SHA-256
@@ -64,12 +64,12 @@ Remaining transition gates are deliberately hardware/stateful: build both
 Colibri source trees on the 5090, validate the completed model downloads, run
 one provider at a time while vLLM is down, benchmark and tune the profiles,
 repair and snapshot Chroma in a maintenance window, validate the separate
-ONNX Runtime GPU lane, and perform the model/rollback drills. The Ulysses web
+ONNX Runtime GPU lane, and perform the model/rollback drills. The Diogenes web
 control plane is active; no GPU model engine has been launched.
 
 ## Product definition
 
-Ulysses keeps Odysseus's browser-based AI workspace and adds a secure host
+Diogenes keeps Odysseus's browser-based AI workspace and adds a secure host
 control plane for the complete local AI stack.
 
 Optional managed runtimes:
@@ -84,7 +84,7 @@ Optional managed runtimes:
 - Existing services: Firecrawl, SearXNG, Bifrost, Camofox, signal-cli, vLLM,
   Odysseus, and their Docker Compose projects.
 
-Ulysses is broader than a Docker dashboard. It observes and manages Docker
+Diogenes is broader than a Docker dashboard. It observes and manages Docker
 Compose, systemd user services, native processes, tmux compatibility sessions,
 ports, Git checkouts, package runtimes, GPUs, model endpoints, and vector
 stores through one typed service model.
@@ -93,7 +93,7 @@ stores through one typed service model.
 
 The current host is production.
 
-Ulysses initially treats every existing project and service as externally
+Diogenes initially treats every existing project and service as externally
 managed:
 
 1. discover;
@@ -115,12 +115,12 @@ Adoption must not:
 - update a dependency;
 - stop or restart a service.
 
-Each of those becomes a separate, previewable maintenance action after Ulysses
+Each of those becomes a separate, previewable maintenance action after Diogenes
 can prove ownership and rollback.
 
 ## Source policy
 
-- Ulysses starts only from the fresh upstream Odysseus clone.
+- Diogenes starts only from the fresh upstream Odysseus clone.
 - `~/Odysseus/odysseus-colibri` is reference-only and never copied wholesale.
 - Useful behavior from that experiment must be re-derived, security-reviewed,
   and covered by new tests.
@@ -138,9 +138,9 @@ can prove ownership and rollback.
 - [x] Rename its remote to `upstream`.
 - [x] Disable pushes to `upstream`.
 - [x] Keep the local `dev` branch tracking `upstream/dev`.
-- [x] Add Ulysses provenance, architecture, and threat-model documentation.
+- [x] Add Diogenes provenance, architecture, and threat-model documentation.
 - [x] Run the upstream test baseline in an isolated environment.
-- [x] Record upstream failures separately from Ulysses changes.
+- [x] Record upstream failures separately from Diogenes changes.
 - [x] Establish small conventional commits by concern.
 
 Exit gate: the new checkout is reproducible, clean, tested, and contains no
@@ -203,14 +203,14 @@ Each discovered runtime receives an explicit execution contract:
 - runtime owner and installation root;
 - executable/interpreter path;
 - ordered environment-file references and non-secret overrides;
-- secret references without copying values into Ulysses;
+- secret references without copying values into Diogenes;
 - ports, dependencies, health checks, logs, and restart policy;
 - isolation policy (`native`, `venv`, `container`, or `Sandwich`);
-- whether a tmux pane is observational or Ulysses-managed.
+- whether a tmux pane is observational or Diogenes-managed.
 
 Managed commands are launched from a sanitized host environment and then given
-only their declared environment. They must not accidentally inherit Ulysses's
-`.venv`, even when Ulysses itself is running inside that environment.
+only their declared environment. They must not accidentally inherit Diogenes's
+`.venv`, even when Diogenes itself is running inside that environment.
 
 Initial discovered installations:
 
@@ -227,11 +227,11 @@ Initial discovered installations:
 - vLLM on 8000;
 - Chroma on 8100.
 
-Exit gate: Ulysses can report the entire current topology without changing a
+Exit gate: Diogenes can report the entire current topology without changing a
 file, process, container, or remote ref.
 
 `ULYSSES_MICROSERVICES_ROOT` is a discovery/adoption root, not an ownership
-claim. Ulysses resolves and constrains it once at startup, then registers
+claim. Diogenes resolves and constrains it once at startup, then registers
 individual runtimes below it. A runtime can remain externally managed while
 still contributing health, logs, ports, and capabilities to the dashboard.
 
@@ -242,7 +242,7 @@ layer:
 
 - [x] Rename/productize the source as Sandwich.
 - [x] Detect the component, Bun install, user bin, state, and Bash paths
-  without inheriting Ulysses's Python environment.
+  without inheriting Diogenes's Python environment.
 - [x] Keep `node`, `npm`, `npx`, `pnpm`, and `yarn` compatibility explicit and
   fail-loud.
 - [x] Provide confirmation-gated preview/install/doctor operations without
@@ -294,11 +294,11 @@ service, and roll back without mutating the adopted environment.
 Source/build:
 
 - pin the official origin, branch, fetched tip, and minimum reviewed commit;
-- clone into a Ulysses-managed source/cache root;
+- clone into a Diogenes-managed source/cache root;
 - build GLM with `make colibri CUDA=1 CUDA_ARCH=native`;
 - build Hy3 separately with `make hy3 CUDA=1 IOURING=1`;
 - record source SHA, toolchain, flags, binary hash, and self-test result;
-- never vendor a floating 16 MB source tree inside Ulysses.
+- never vendor a floating 16 MB source tree inside Diogenes.
 
 Exact model contracts:
 
@@ -428,11 +428,11 @@ generic symlink loop or modify `.bashrc` simply because WSL was detected.
 Current production evidence:
 
 - The captured compatibility oracle is documented in
-  `docs/ULYSSES_GOLDEN_RUNTIME_PROFILE.md`.
+  `docs/DIOGENES_GOLDEN_RUNTIME_PROFILE.md`.
 - The live imported stack is Python 3.13.12, vLLM 0.23.0, Torch
   2.11.0+cu130, Transformers 5.12.1, Triton 3.6.0, and cuDNN 9.19.
 - WSL currently reports CUDA 13.3 for its driver/toolkit while Torch is built
-  for CUDA 13.0; Ulysses must keep those layers distinct.
+  for CUDA 13.0; Diogenes must keep those layers distinct.
 - ONNX Runtime 1.27 requests CUDA 13 and cuDNN 9.
 - `libcudnn.so.9` exists under the production venv's NVIDIA site packages.
 - adding the venv's discovered `site-packages/nvidia/*/lib` directories to a
@@ -466,7 +466,7 @@ For each service:
 
 Configuration adoption:
 
-- Ulysses may consolidate service configuration into its managed environment
+- Diogenes may consolidate service configuration into its managed environment
   layout, but first records the existing source and produces a value-redacted
   diff.
 - Existing `.env` files remain authoritative until an explicit apply step.
@@ -483,12 +483,12 @@ Service-specific caution:
 - preserve Hermes profiles, sessions, pairing, MCPs, and systemd state;
 - preserve Firecrawl's seven local source changes;
 - do not recreate Chroma before persistence repair;
-- use the Ulysses signal-cli updater: accept only the official release asset,
+- use the Diogenes signal-cli updater: accept only the official release asset,
   verify declared size and SHA-256 digest, install atomically, and retain one
   prior binary for rollback;
 - pin Bifrost/SearXNG/Chroma instead of updating on restart.
 - model capabilities separately from implementations: this host's browser
-  capability is provided by Camofox/Camofox MCP, so Ulysses must not auto-install
+  capability is provided by Camofox/Camofox MCP, so Diogenes must not auto-install
   Playwright or Playwright's Chromium.
 - keep Firecrawl's browser automation encapsulated inside its own containers;
   it does not satisfy or create a general host-browser dependency.
@@ -500,7 +500,7 @@ Service-specific caution:
 
 A Docker-management dashboard was evaluated only as a methodology reference
 for filesystem-backed discovery, environment status, bounded activities, live
-logs/stats, and guarded lifecycle actions. Ulysses uses the existing Odysseus
+logs/stats, and guarded lifecycle actions. Diogenes uses the existing Odysseus
 window/sidebar/Cookbook design and one common service model spanning Compose,
 native/tmux processes, systemd, MCPs, databases, and model endpoints.
 
@@ -509,7 +509,7 @@ Admin UI:
 - [x] Add a native draggable/minimizable Services window to the existing
   Odysseus sidebar and icon rail.
 - [x] Add read-only Overview, Services, JavaScript, and Chroma views backed by
-  the sanitized Ulysses APIs.
+  the sanitized Diogenes APIs.
 - [x] Label `host`, `odysseus_agent`, and `hermes_agent` ownership explicitly;
   the Odysseus MCP integration form and Hermes MCP registry remain separate.
 - [x] Add infrastructure overview and dependency relationships.
@@ -551,7 +551,7 @@ Admin UI:
 
 The production-safety default is read-only. Candidate/model launch actions show
 predicted GPU, RAM, ports, containers/processes, and conflicting live runtimes,
-then require a human apply step. Ulysses never starts a second model server or
+then require a human apply step. Diogenes never starts a second model server or
 parallel stack merely because it detected an update.
 
 Exit gate: the UI is fully useful in read-only mode, reflects actual host
@@ -562,7 +562,7 @@ unregistered resources.
 
 - detect and adopt an existing install;
 - keep Hermes as a native host installation with its own upstream-supported
-  home and virtual environment, never inside Ulysses's `.venv`;
+  home and virtual environment, never inside Diogenes's `.venv`;
 - install a new isolated Hermes profile/home when requested;
 - manage gateway status and updates;
 - preserve quick/full backup semantics;
@@ -575,13 +575,13 @@ unregistered resources.
   runtimes with their own source roots, containers/venvs, commands, and health
   checks;
 - centralize their configuration references and console views without merging
-  their filesystems or Python dependencies into Ulysses;
+  their filesystems or Python dependencies into Diogenes;
 - expose approved Chroma retrieval through a narrow service/MCP contract;
 - stage migration from the existing Hermes install only after a restore drill.
 
 ### 10. Validation and production transition
 
-- upstream baseline and Ulysses test suites;
+- upstream baseline and Diogenes test suites;
 - authorization and path/command confinement;
 - adapter contract tests;
 - browser visual verification and screenshots;
@@ -609,19 +609,19 @@ corresponding rollback has been tested.
 5. [x] Render the first read-only topology/status API.
 6. [x] Integrate Sandwich as the first optional runtime.
 7. [x] Adopt and validate the existing microservices, persistence, configuration,
-   Camofox browser capability, and lifecycle views. Chroma production migration
-   remains human-gated; its candidate definition and read-only readiness report
-   are complete.
+   Camofox browser capability, and lifecycle views. Chroma data migration remains
+   operator-controlled; its storage safeguards and management views are complete.
 8. [x] Implement Colibri GLM and Colibri Hy3 as separate final provider
-   integrations. Source build, model load, generation, and 5090 benchmarks
-   remain human-gated because vLLM and production downloads are active.
-9. [x] Separate the PR-ready `Ulysses` checkout, disposable `Ulysses-build`
-   runtime, and external `Ulysses-state`; add a previewable, SQLite-safe
-   production-state capture and canonical uv environment workflow.
+   integrations. Both official source trees, CUDA builds, manifests, and local
+   model layouts are ready; model launch and benchmark runs remain
+   operator-controlled.
+9. [x] Keep the PR-ready `Diogenes` checkout and a self-contained
+   `Diogenes-prod` runtime clone; add the canonical native `.env` and uv
+   environment workflow without a hidden external state tree.
 10. [x] Surface `liburing-dev` as a first-class native Cookbook dependency for
     the Colibri Hy3 `IOURING=1` build.
 11. [x] Make the built-in browser MCP provider explicit and configure the
     candidate for the existing Camofox backend without Playwright fallback.
-12. [ ] During the maintenance window, capture final production state, create
-    the candidate venv, validate CUDA/ONNX and Colibri, then benchmark before
-    any port cutover.
+12. Operator deployment gate (not a source-code blocker): during the maintenance
+    window, capture final production state, build the runtime copy, validate
+    CUDA/ONNX and Colibri, and benchmark before any port cutover.

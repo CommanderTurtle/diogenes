@@ -1,4 +1,4 @@
-"""Safely materialize Ulysses's bundled Sandwich component for one user."""
+"""Safely materialize Diogenes's bundled Sandwich component for one user."""
 
 from __future__ import annotations
 
@@ -107,7 +107,7 @@ def stage_bundled_sandwich(
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Materialize Ulysses's bundled Sandwich component."
+        description="Materialize Diogenes's bundled Sandwich component."
     )
     parser.add_argument(
         "--stage",

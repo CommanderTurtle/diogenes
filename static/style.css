@@ -41130,7 +41130,7 @@ body.theme-frosted .modal {
   .compare-grid[data-cols] { grid-template-columns: 1fr !important; overflow-y: auto; }
   .compare-pane { min-height: 60dvh; }
 }
-/* ── Ulysses Services control plane ── */
+/* ── Diogenes Services control plane ── */
 .uly-services-window {
   width: min(1040px, 94vw);
   height: min(820px, 92vh);
@@ -41902,6 +41902,22 @@ body.theme-frosted .modal {
 
   .uly-runtime-facts {
     grid-template-columns: 1fr;
+  }
+
+  .uly-runtime-file-browser {
+    grid-template-columns: 1fr !important;
+  }
+
+  .uly-runtime-file-browser nav {
+    display: flex;
+    gap: 4px;
+    max-height: 140px !important;
+    overflow: auto;
+  }
+
+  .uly-runtime-file-browser nav button {
+    width: auto !important;
+    min-width: max-content;
   }
 
   .uly-services-refresh span {

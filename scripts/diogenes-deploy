@@ -1,0 +1,250 @@
+#!/usr/bin/env python3
+"""Prepare a self-contained Diogenes-prod checkout without starting it."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import subprocess
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+
+SOURCE_ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_RUNTIME_ROOT = SOURCE_ROOT.parent / "Diogenes-prod"
+
+
+class DeployError(RuntimeError):
+    """An actionable deployment-contract failure."""
+
+
+def _run(
+    argv: list[str],
+    *,
+    cwd: Path | None = None,
+    check: bool = True,
+) -> subprocess.CompletedProcess[str]:
+    result = subprocess.run(
+        argv,
+        cwd=str(cwd) if cwd else None,
+        check=False,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    if check and result.returncode:
+        detail = (result.stderr or result.stdout).strip()
+        raise DeployError(
+            f"{' '.join(argv)} failed ({result.returncode}): {detail}"
+        )
+    return result
+
+
+def _git(root: Path, *args: str, check: bool = True) -> str:
+    return _run(
+        ["git", "-C", str(root), *args],
+        check=check,
+    ).stdout.strip()
+
+
+def source_contract(source_root: Path) -> dict:
+    """Return source provenance, refusing a dirty or non-dev checkout."""
+    if not (source_root / ".git").is_dir():
+        raise DeployError(f"source is not a Git checkout: {source_root}")
+    dirty = _git(
+        source_root,
+        "status",
+        "--porcelain",
+        "--untracked-files=all",
+    )
+    if dirty:
+        raise DeployError(
+            "source checkout is dirty; commit or remove every change before "
+            "preparing Diogenes-prod"
+        )
+    branch = _git(source_root, "branch", "--show-current")
+    if branch != "dev":
+        raise DeployError(
+            f"source branch must be dev, found {branch or 'detached HEAD'}"
+        )
+    head = _git(source_root, "rev-parse", "HEAD")
+    upstream = _git(
+        source_root,
+        "rev-parse",
+        "--verify",
+        "upstream/dev",
+        check=False,
+    )
+    if upstream:
+        ancestor = (
+            _run(
+                [
+                    "git",
+                    "-C",
+                    str(source_root),
+                    "merge-base",
+                    "--is-ancestor",
+                    upstream,
+                    head,
+                ],
+                check=False,
+            ).returncode
+            == 0
+        )
+        if not ancestor:
+            raise DeployError("upstream/dev is not an ancestor of source HEAD")
+    return {
+        "root": str(source_root.resolve()),
+        "branch": branch,
+        "head": head,
+        "upstream_dev": upstream or None,
+        "ahead": (
+            int(_git(source_root, "rev-list", "--count", f"{upstream}..{head}"))
+            if upstream
+            else None
+        ),
+        "clean": True,
+    }
+
+
+def runtime_contract(runtime_root: Path) -> dict:
+    present = runtime_root.is_dir()
+    git_present = (runtime_root / ".git").is_dir()
+    return {
+        "root": str(runtime_root),
+        "present": present,
+        "git_present": git_present,
+        "head": (
+            _git(runtime_root, "rev-parse", "HEAD", check=False) or None
+            if git_present
+            else None
+        ),
+        "env_present": (runtime_root / ".env").is_file(),
+        "venv_present": (runtime_root / ".venv" / "pyvenv.cfg").is_file(),
+        "data_present": (runtime_root / "data").is_dir(),
+        "uvsetup_present": (runtime_root / "uvsetup.sh").is_file(),
+        "self_contained": (
+            present
+            and not (runtime_root / ".env").is_symlink()
+            and not (runtime_root / "data").is_symlink()
+        ),
+    }
+
+
+def prepare_runtime(source_root: Path, runtime_root: Path) -> dict:
+    provenance = source_contract(source_root)
+    if runtime_root.exists():
+        raise DeployError(
+            f"runtime target already exists: {runtime_root}; move or remove "
+            "that exact tree deliberately before preparing another copy"
+        )
+    if runtime_root.resolve() == source_root.resolve():
+        raise DeployError("runtime target cannot be the development checkout")
+    runtime_root.parent.mkdir(parents=True, exist_ok=True)
+    _run(
+        [
+            "git",
+            "clone",
+            "--local",
+            "--no-hardlinks",
+            "--branch",
+            "dev",
+            str(source_root.resolve()),
+            str(runtime_root.resolve()),
+        ]
+    )
+    try:
+        _git(runtime_root, "remote", "rename", "origin", "source")
+        _git(runtime_root, "remote", "set-url", "--push", "source", "DISABLED")
+        upstream_url = _git(
+            source_root,
+            "config",
+            "--get",
+            "remote.upstream.url",
+            check=False,
+        )
+        if upstream_url:
+            _git(runtime_root, "remote", "add", "upstream", upstream_url)
+            _git(
+                runtime_root,
+                "remote",
+                "set-url",
+                "--push",
+                "upstream",
+                "DISABLED",
+            )
+        manifest = {
+            "schema": 2,
+            "prepared_at": datetime.now(timezone.utc).isoformat(),
+            "source": provenance,
+            "runtime_root": str(runtime_root.resolve()),
+            "self_contained": True,
+        }
+        (runtime_root / ".ulysses-runtime.json").write_text(
+            json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+    except Exception:
+        # The clone remains inspectable if post-clone metadata fails; never
+        # erase an unexpected path as part of recovery.
+        raise
+    return {
+        "ok": True,
+        "runtime": runtime_contract(runtime_root),
+        "source": provenance,
+        "ports_started": [],
+        "next": (
+            f"cd {runtime_root.resolve()} && ./uvsetup.sh"
+        ),
+    }
+
+
+def _parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="diogenes-deploy")
+    parser.add_argument("--pretty", action="store_true")
+    parser.add_argument("--source-root", type=Path, default=SOURCE_ROOT)
+    parser.add_argument(
+        "--runtime-root",
+        type=Path,
+        default=DEFAULT_RUNTIME_ROOT,
+    )
+    parser.add_argument("command", choices=("inspect", "prepare"))
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = _parser().parse_args(argv)
+    source_root = args.source_root.expanduser().resolve()
+    runtime_root = args.runtime_root.expanduser().resolve()
+    try:
+        payload = (
+            {
+                "ok": True,
+                "source": source_contract(source_root),
+                "runtime": runtime_contract(runtime_root),
+            }
+            if args.command == "inspect"
+            else prepare_runtime(source_root, runtime_root)
+        )
+        print(
+            json.dumps(
+                payload,
+                indent=2 if args.pretty else None,
+                sort_keys=True,
+            )
+        )
+        return 0
+    except DeployError as exc:
+        print(
+            json.dumps(
+                {"ok": False, "error": str(exc)},
+                indent=2 if args.pretty else None,
+                sort_keys=True,
+            )
+        )
+        return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

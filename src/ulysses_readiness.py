@@ -227,7 +227,7 @@ def collect_switchover_readiness(
             "Candidate follows the Odysseus dev line",
             "passed" if git["branch"] == "dev" else "blocked",
             f"branch={git['branch'] or 'unknown'}; upstream={git['upstream'] or 'none'}",
-            "Keep the Ulysses work on the local dev branch tracking upstream/dev.",
+            "Keep the Diogenes work on the local dev branch tracking upstream/dev.",
         )
     )
     items.append(
@@ -350,7 +350,7 @@ def collect_switchover_readiness(
                     },
                     sort_keys=True,
                 ),
-                "Run the confirmed Ulysses build plan and retain its manifest.",
+                "Run the confirmed Diogenes build plan and retain its manifest.",
             ),
             (
                 "model",
@@ -447,7 +447,7 @@ def collect_switchover_readiness(
                 if active_ports
                 else "no declared production ports are active"
             ),
-            "Do not launch a parallel candidate on these ports; Nick owns the maintenance-window stop.",
+            "Do not launch a parallel candidate on these ports; the operator controls the maintenance-window stop.",
         )
     )
 
@@ -505,22 +505,22 @@ def collect_switchover_readiness(
         (
             "human.backup.production_venv",
             "Production venv recovery copy is recorded",
-            "Nick confirms a recoverable copy or snapshot of the Python 3.13 production venv.",
+            "Confirm a recoverable copy or snapshot of the Python 3.13 production venv.",
         ),
         (
             "human.backup.application_data",
             "Application data backup is verified",
-            "Nick verifies Ulysses/Odysseus data and state.db recovery before cutover.",
+            "Verify Diogenes/Odysseus data and state.db recovery before cutover.",
         ),
         (
             "human.stop.production",
             "Production stop is explicitly approved",
-            "Nick stops production only after every required automated gate passes.",
+            "Stop production only after every required automated gate passes.",
         ),
         (
             "human.validate.candidate",
             "Candidate smoke test is approved",
-            "Nick starts the candidate and validates login, chat, services, model endpoints, and rollback.",
+            "Start the candidate and validate login, chat, services, model endpoints, and rollback.",
         ),
     ):
         items.append(

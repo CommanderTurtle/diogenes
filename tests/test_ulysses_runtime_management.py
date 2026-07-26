@@ -141,6 +141,35 @@ def test_env_document_is_redacted_until_explicit_reveal(
     assert "API_KEY=secret-value" in shown["documents"][0]["content"]
 
 
+def test_project_file_discovery_is_bounded_and_ignores_dependency_trees(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "runtime"
+    nested = root / "deploy" / "local"
+    ignored = root / "node_modules" / "package"
+    nested.mkdir(parents=True)
+    ignored.mkdir(parents=True)
+    (root / ".env").write_text("PORT=7000\n", encoding="utf-8")
+    (root / "start.sh").write_text("#!/usr/bin/env bash\n", encoding="utf-8")
+    (nested / "service-config.json").write_text("{}\n", encoding="utf-8")
+    (nested / "runtime.jsonc").write_text("// comment\n{}\n", encoding="utf-8")
+    (nested / "README.md").write_text("not a runtime file\n", encoding="utf-8")
+    (ignored / "config.json").write_text("{}\n", encoding="utf-8")
+    item = {"id": "example.runtime", "root": root, "documents": ()}
+
+    documents = manager._runtime_documents(item)
+    by_label = {document["label"]: document for document in documents}
+
+    assert set(by_label) == {
+        ".env",
+        "deploy/local/service-config.json",
+        "start.sh",
+    }
+    assert by_label[".env"]["format"] == "env"
+    assert by_label["start.sh"]["format"] == "shell"
+    assert by_label["deploy/local/service-config.json"]["format"] == "json"
+
+
 def test_env_save_is_optimistic_and_preserves_comments(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -281,6 +310,61 @@ def test_javascript_start_plan_requires_sandwich_and_uses_fixed_tmux(
     assert plan["steps"][0]["argv"][-2:] == ["bun", "start"]
     assert "/usr/bin/env" in plan["steps"][0]["argv"]
     assert "VIRTUAL_ENV" in plan["steps"][0]["argv"]
+
+
+def test_open_and_initialize_actions_use_project_root(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "service"
+    root.mkdir()
+    missing_start = root / "start.sh"
+    item = {
+        "id": "example.service",
+        "label": "Example service",
+        "category": "native",
+        "root": root,
+        "documents": (),
+        "bootstrap_files": (
+            {"path": missing_start, "content": "#!/usr/bin/env bash\n", "mode": "0755"},
+        ),
+        "ports": [],
+    }
+    monkeypatch.setattr(manager, "load_runtime_management", lambda: (item,))
+    monkeypatch.setattr(manager.shutil, "which", lambda name: "/usr/bin/zed" if name == "zed" else None)
+    monkeypatch.setattr(
+        manager,
+        "collect_managed_runtimes",
+        lambda: {
+            "runtimes": [
+                {
+                    "id": "example.service",
+                    "status": "stopped",
+                    "dependencies_ready": True,
+                    "active_dependents": [],
+                    "tmux": {"managed": False},
+                }
+            ]
+        },
+    )
+
+    control = manager.ManagedRuntimeControl(tmp_path / "state")
+    open_plan, _ = control.create_plan(
+        runtime_id="example.service",
+        action="open",
+    )
+    initialize_plan, _ = control.create_plan(
+        runtime_id="example.service",
+        action="initialize",
+    )
+
+    assert open_plan["steps"][0]["argv"] == ["/usr/bin/zed", "."]
+    assert open_plan["steps"][0]["cwd"] == str(root)
+    assert initialize_plan["steps"][0]["argv"][-1] == "example.service"
+    assert initialize_plan["steps"][0]["argv"][1:3] == [
+        "-m",
+        "src.ulysses_runtime_bootstrap",
+    ]
 
 
 def test_native_update_plan_stops_installs_and_restarts_managed_session(

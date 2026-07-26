@@ -1403,6 +1403,21 @@ def setup_cookbook_routes() -> APIRouter:
                     if d.startswith(("home/", "mnt/", "media/", "data/", "opt/", "srv/", "var/")):
                         d = "/" + d
                     model_dirs.append(d)
+        if not host:
+            # Native Colibri containers live in explicit local directories, not
+            # necessarily in the Hugging Face cache. Always scan their configured
+            # parent directories so Cookbook reports the real path and byte size.
+            try:
+                from src.ulysses_colibri import default_colibri_catalog
+
+                for provider in default_colibri_catalog():
+                    if provider.model_root is None:
+                        continue
+                    parent = str(provider.model_root.parent)
+                    if parent not in model_dirs:
+                        model_dirs.append(parent)
+            except Exception as exc:
+                logger.warning("Colibri model directories were not added to scan: %s", exc)
         paths_code = _cached_model_scan_script(model_dirs)
 
         scan_py = TMUX_LOG_DIR / "scan_cache.py"
@@ -1491,6 +1506,17 @@ def setup_cookbook_routes() -> APIRouter:
                 if isinstance(m.get("gguf_files"), list):
                     entry["gguf_files"] = m["gguf_files"]
                 models.append(entry)
+            # A manually downloaded local_dir is authoritative over a stale or
+            # metadata-only HF cache row for the same repository.
+            preferred: dict[str, dict] = {}
+            for entry in models:
+                identity = str(entry.get("repo_id") or "").lower().replace("/", "--")
+                current = preferred.get(identity)
+                if current is None or (
+                    entry.get("is_local_dir") and not current.get("is_local_dir")
+                ):
+                    preferred[identity] = entry
+            models = list(preferred.values())
         except Exception as e:
             logger.warning(f"Failed to parse cached models host={host or 'local'}: {e}")
             if stderr_txt:

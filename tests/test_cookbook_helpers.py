@@ -876,9 +876,9 @@ def test_pip_install_no_cache_injects_flag():
     assert _pip_install_no_cache("pip install -q huggingface-hub") == \
         "pip install --no-cache-dir -q huggingface-hub"
     assert _pip_install_no_cache(
-        "uv pip install --python /srv/Ulysses/.venv/bin/python -r /srv/vllm.lock"
+        "uv pip install --python /srv/Diogenes/.venv/bin/python -r /srv/vllm.lock"
     ) == (
-        "uv pip install --no-cache --python /srv/Ulysses/.venv/bin/python "
+        "uv pip install --no-cache --python /srv/Diogenes/.venv/bin/python "
         "-r /srv/vllm.lock"
     )
 
@@ -897,8 +897,8 @@ def test_pip_install_no_cache_is_idempotent_and_scoped():
 
 def test_validate_serve_cmd_accepts_only_uv_pip_install():
     cmd = (
-        "uv pip install --python /srv/Ulysses/.venv/bin/python "
-        "-r /srv/Ulysses-state/locks/vllm.lock --strict"
+        "uv pip install --python /srv/Diogenes/.venv/bin/python "
+        "-r /srv/Diogenes-state/locks/vllm.lock --strict"
     )
     assert _validate_serve_cmd(cmd) == cmd
     with pytest.raises(HTTPException, match="only for a direct"):

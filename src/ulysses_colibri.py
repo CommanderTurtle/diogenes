@@ -928,7 +928,7 @@ def observe_colibri_provider(provider: ColibriProvider) -> dict[str, Any]:
             {
                 "code": f"{provider.provider_id}.build_unverified",
                 "severity": "error",
-                "summary": "Colibri build does not match a current Ulysses build manifest.",
+                "summary": "Colibri build does not match a current Diogenes build manifest.",
                 "evidence": "; ".join(manifest_reasons),
             }
         )

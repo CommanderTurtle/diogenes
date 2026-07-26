@@ -1,4 +1,4 @@
-"""Typed, side-effect-free runtime contracts for the Ulysses control plane."""
+"""Typed, side-effect-free runtime contracts for the Diogenes control plane."""
 
 from __future__ import annotations
 

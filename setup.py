@@ -237,7 +237,13 @@ def check_arch():
 
 
 def main():
-    print("\n=== Odysseus Setup ===\n")
+    print("\n=== Diogenes Setup ===\n")
+
+    # A fresh checkout must establish its native .env before anything tries to
+    # read deployment settings. This keeps setup.py useful on its own as well
+    # as through uvsetup.sh.
+    print("1. Environment file...")
+    create_env()
 
     # Load .env so pre-seeded ODYSSEUS_ADMIN_USER / ODYSSEUS_ADMIN_PASSWORD (and
     # other deployment vars) are honored on native installs, not just when they
@@ -252,11 +258,8 @@ def main():
     # Silicon under an x86/Rosetta Python) before importing anything native.
     check_arch()
 
-    print("1. Creating directories...")
+    print("\n2. Creating directories...")
     create_dirs()
-
-    print("\n2. Environment file...")
-    create_env()
 
     print("\n3. Checking dependencies...")
     check_deps()

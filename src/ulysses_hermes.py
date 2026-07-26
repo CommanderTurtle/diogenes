@@ -95,7 +95,7 @@ def _load_config(config_path: Path) -> tuple[dict[str, Any], list[dict[str, str]
             {
                 "code": "hermes.config.yaml_unavailable",
                 "severity": "error",
-                "summary": "YAML support is unavailable to the Ulysses process.",
+                "summary": "YAML support is unavailable to the Diogenes process.",
                 "evidence": "Install the declared PyYAML dependency before adoption.",
             }
         )
@@ -243,7 +243,7 @@ def collect_hermes_adoption(
     executable: str | None = None,
     gateway_unit: str = "hermes-gateway.service",
 ) -> dict[str, Any]:
-    """Describe how Ulysses could adopt management without moving Hermes."""
+    """Describe how Diogenes could adopt management without moving Hermes."""
 
     observed_at = time.time()
     resolved_home = (home or Path.home()).resolve()
@@ -262,7 +262,7 @@ def collect_hermes_adoption(
                 "code": "hermes.executable.missing",
                 "severity": "error",
                 "summary": "The native Hermes command is not on PATH.",
-                "evidence": "Ulysses will not install Hermes into its own virtual environment.",
+                "evidence": "Diogenes will not install Hermes into its own virtual environment.",
             }
         )
     if not source_root.is_dir():
@@ -292,7 +292,7 @@ def collect_hermes_adoption(
             "enabled": False,
             "human_confirmation": True,
             "maintenance_window": False,
-            "reason": "Durable Ulysses jobs are not enabled yet.",
+            "reason": "Adopt native Hermes in place before lifecycle control.",
         },
         {
             "id": "stop",

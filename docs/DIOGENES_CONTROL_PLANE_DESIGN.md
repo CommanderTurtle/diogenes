@@ -1,8 +1,8 @@
-# Ulysses control-plane design
+# Diogenes control-plane design
 
 ## Scope
 
-Ulysses adds one service-management surface in the existing Odysseus UI and
+Diogenes adds one service-management surface in the existing Odysseus UI and
 manages more than Docker:
 
 - Docker Compose projects and containers;
@@ -23,7 +23,7 @@ Odysseus and Hermes remain separate agents:
 - the existing Odysseus MCP configuration UI controls only MCPs registered to
   the Odysseus agent;
 - Hermes profiles and watchdogs control only MCPs registered to Hermes;
-- the Ulysses Services UI may observe and operate either registry, but it
+- the Diogenes Services UI may observe and operate either registry, but it
   never copies, merges, or implicitly registers configuration between them;
 - shared host services such as Camofox, Firecrawl, SearXNG, Chroma, and model
   endpoints remain host-scoped dependencies that either agent may reference
@@ -73,7 +73,7 @@ record never makes a dead process “running.”
 2. Produce a read-only inventory and ambiguity report.
 3. Register the service as externally managed.
 4. Compare its live launch, environment keys, ports, and data paths with a
-   proposed Ulysses definition.
+   proposed Diogenes definition.
 5. Add read-only status, health, logs, and port views.
 6. Test the adapter against a fixture or human-started candidate.
 7. Preview configuration migration and rollback.
@@ -83,16 +83,16 @@ Up/Down/Restart/Update controls remain hidden or disabled until adoption.
 
 ## Execution isolation
 
-Ulysses never relies on shell activation for managed commands. Each execution
+Diogenes never relies on shell activation for managed commands. Each execution
 starts with a sanitized environment, then applies its declared configuration:
 
-- Ulysses Python uses Ulysses's `.venv`.
+- Diogenes Python uses Diogenes's `.venv`.
 - Hermes remains a native installation with its own upstream-managed venv/home.
 - Odysseus production retains its known-good `.venv`.
 - Bun/npx-compatible tools use Sandwich.
 - Compose projects retain their own project roots and environment files.
 - tmux panes receive the service execution contract explicitly and do not
-  inherit whichever venv launched Ulysses.
+  inherit whichever venv launched Diogenes.
 
 ## Configuration
 
@@ -127,12 +127,12 @@ Colibri Hy3 runtimes. Sandwich detection/install/doctor is available there;
 service and package operations live in the Services JavaScript view.
 
 The existing Cookbook Active view is the implementation precedent: it already
-tracks the vLLM task, readiness, PID, and tmux output. Ulysses generalizes that
+tracks the vLLM task, readiness, PID, and tmux output. Diogenes generalizes that
 component rather than embedding a second terminal manager.
 
 The current six-pane workstation layout maps to:
 
-| Current pane | Ulysses representation |
+| Current pane | Diogenes representation |
 | --- | --- |
 | signal-cli daemon on 8090 | Messaging service card + health/log/console |
 | Camofox periodic stats on 9377 | Browser service metrics + health/log |
@@ -155,7 +155,7 @@ required safety contract.
 ## Browser and search capabilities
 
 - Camofox/Camofox MCP is the preferred general browser provider.
-- Ulysses does not auto-install Playwright or Playwright Chromium.
+- Diogenes does not auto-install Playwright or Playwright Chromium.
 - An existing Playwright installation can be reported and explicitly disabled.
 - Firecrawl's internal browser remains private to Firecrawl.
 - Firecrawl plus SearXNG provide the canonical agent search/scrape path.
@@ -176,7 +176,7 @@ required safety contract.
 
 | Runtime | Adapter | Initial state |
 | --- | --- | --- |
-| Ulysses API | native observation | managed |
+| Diogenes API | native observation | managed |
 | vLLM 0.23.0 / Agents A1 | native model endpoint | external |
 | Chroma | Docker Compose/container | external; persistence repair required |
 | Hermes gateway | systemd user/native | external |
@@ -211,7 +211,7 @@ the `odysseus_chromadb-data` volume at `/chroma/chroma`; the mounted directory i
 nearly empty while the active SQLite database and vector segments are under the
 container's unmounted `/data`.
 
-Ulysses therefore:
+Diogenes therefore:
 
 - reports the live persistence state as degraded without changing it;
 - pins the candidate image to the observed production digest;

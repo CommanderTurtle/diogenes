@@ -1,4 +1,4 @@
-# Ulysses golden production runtime profile
+# Diogenes golden production runtime profile
 
 Captured read-only from the active Odysseus production runtime on 2026-07-25.
 This is a compatibility oracle, not a lockfile and not permission to mutate the
@@ -57,7 +57,7 @@ distribution metadata. Package metadata alone is insufficient.
 - vLLM swap space is forced to zero by Odysseus's existing guarded runner
   patch in `routes/cookbook_routes.py`.
 
-The exact cached model path is machine state; Ulysses should store a model ID,
+The exact cached model path is machine state; Diogenes should store a model ID,
 resolved revision, and constrained model root rather than hard-code that path.
 
 ## Candidate acceptance gates
@@ -90,7 +90,7 @@ This is a process-start linker-path problem. It does not justify creating
 versionless or cross-version `.so` symlinks, changing `/usr/lib`, modifying a
 login shell, or normalizing the production environment.
 
-Ulysses provides `scripts/with-wsl-cuda-libs.sh` as the scoped candidate
+Diogenes provides `scripts/with-wsl-cuda-libs.sh` as the scoped candidate
 launcher. It:
 
 1. resolves `ULYSSES_VENV` when explicitly supplied, otherwise the candidate's

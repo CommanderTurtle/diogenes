@@ -30,7 +30,7 @@ def _request_json(url: str) -> dict[str, Any]:
         url,
         headers={
             "Accept": "application/vnd.github+json",
-            "User-Agent": "Ulysses-signal-cli-updater",
+            "User-Agent": "Diogenes-signal-cli-updater",
         },
     )
     with urllib.request.urlopen(request, timeout=30) as response:
@@ -85,7 +85,7 @@ def _download(
 ) -> None:
     request = urllib.request.Request(
         url,
-        headers={"User-Agent": "Ulysses-signal-cli-updater"},
+        headers={"User-Agent": "Diogenes-signal-cli-updater"},
     )
     total = 0
     digest = hashlib.sha256()

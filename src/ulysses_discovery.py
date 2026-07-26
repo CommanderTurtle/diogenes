@@ -1,4 +1,4 @@
-"""Read-only host discovery primitives for the Ulysses control plane."""
+"""Read-only host discovery primitives for the Diogenes control plane."""
 
 from __future__ import annotations
 

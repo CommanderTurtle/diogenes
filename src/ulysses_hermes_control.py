@@ -1,4 +1,4 @@
-"""Human-gated adoption and lifecycle planning for native Hermes."""
+"""Operator-confirmed adoption and lifecycle planning for native Hermes."""
 
 from __future__ import annotations
 
@@ -107,7 +107,7 @@ class HermesControl:
             action = dict(raw)
             action["enabled"] = bool(status["current"])
             action["reason"] = (
-                "Creates a confirmed, durable Ulysses runtime job."
+                "Creates a confirmed, durable Diogenes runtime job."
                 if status["current"]
                 else "Adopt native Hermes in place before lifecycle control."
             )

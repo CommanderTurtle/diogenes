@@ -118,7 +118,7 @@
         },
         "upstream-auto": {
           "label": "Upstream auto-tier",
-          "description": "Minimal current-dev auto-tier profile with no Ulysses tuning overrides.",
+          "description": "Minimal current-dev auto-tier profile with no Diogenes tuning overrides.",
           "ram": "0",
           "auto_tier": true,
           "ctx": "4096",

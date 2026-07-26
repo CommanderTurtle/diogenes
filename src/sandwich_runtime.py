@@ -1,4 +1,4 @@
-"""Validated bridge between Ulysses and its bundled Sandwich component.
+"""Validated bridge between Diogenes and its bundled Sandwich component.
 
 This module describes operations only. It never installs packages, patches
 Hermes, or starts a process while loading or probing the component.
@@ -104,10 +104,53 @@ class SandwichInstallation:
 def observe_sandwich_installation(
     *,
     search_path: str | None = None,
+    home: Path | None = None,
+    microservices_root: Path | None = None,
 ) -> SandwichInstallation:
-    """Resolve a Sandwich install from PATH only."""
+    """Resolve the native Sandwich install even under a reduced service PATH.
 
+    Interactive shells normally expose the user-level links in ``~/.local/bin``.
+    systemd, tmux, and application launchers may not. The canonical source root
+    is therefore an equally authoritative discovery input; Diogenes does not
+    mistake a missing inherited PATH entry for an absent installation.
+    """
+
+    isolated_probe = (
+        search_path is not None
+        and home is None
+        and microservices_root is None
+    )
     path = search_path if search_path is not None else os.environ.get("PATH")
+    resolved_home = (home or Path.home()).expanduser().resolve()
+    configured_services = (
+        microservices_root
+        or Path(
+            os.environ.get("ULYSSES_MICROSERVICES_ROOT")
+            or resolved_home / "Hermes"
+        )
+    ).expanduser()
+    configured_source = Path(
+        os.environ.get("ULYSSES_SANDWICH_ROOT")
+        or configured_services / "sandwich"
+    ).expanduser()
+
+    def command_path(command: str) -> Path | None:
+        candidates: list[Path] = []
+        found = shutil.which(command, path=path)
+        if found:
+            candidates.append(Path(found))
+        if not isolated_probe:
+            candidates.append(resolved_home / ".local" / "bin" / command)
+            if command == "bun":
+                candidates.append(resolved_home / ".bun" / "bin" / "bun")
+        for candidate in candidates:
+            try:
+                if candidate.is_file():
+                    return candidate.resolve()
+            except OSError:
+                continue
+        return None
+
     resolved: dict[str, Path] = {}
     for command in (
         "bun",
@@ -118,18 +161,33 @@ def observe_sandwich_installation(
         "pnpm",
         "yarn",
     ):
-        found = shutil.which(command, path=path)
+        found = command_path(command)
         if found:
-            resolved[command] = Path(found).resolve()
+            resolved[command] = found
+
+    source_candidates = [] if isolated_probe else [configured_source]
+    canonical = resolved.get("sandwich")
+    if canonical is not None and canonical.parent.name == "bin":
+        source_candidates.append(canonical.parent.parent)
+    source_root = next(
+        (
+            candidate.resolve()
+            for candidate in source_candidates
+            if (candidate / "bin" / "sandwich").is_file()
+        ),
+        None,
+    )
+
+    # A canonical source tree is usable even when the application process did
+    # not inherit ~/.local/bin. Report those exact wrapper entrypoints.
+    if source_root is not None:
+        for command in ("sandwich", "node", "npm", "npx", "pnpm", "yarn"):
+            candidate = (source_root / "bin" / command).resolve()
+            if command not in resolved and candidate.is_file():
+                resolved[command] = candidate
 
     required = ("bun", "node", "npm", "npx", "pnpm", "yarn")
     missing = tuple(command for command in required if command not in resolved)
-    canonical = resolved.get("sandwich")
-    source_root = (
-        canonical.parent.parent
-        if canonical is not None and canonical.parent.name == "bin"
-        else None
-    )
     wrapper_commands = ("sandwich", "node", "npm", "npx", "pnpm", "yarn")
     mismatched = (
         tuple(
@@ -174,7 +232,11 @@ def collect_sandwich_status(
         raise ValueError("ULYSSES_MICROSERVICES_ROOT must be absolute")
     expected_root = (configured_root.resolve() / "sandwich").resolve()
     bundled = load_sandwich_manifest(repo / "components" / "sandwich")
-    installation = observe_sandwich_installation(search_path=search_path)
+    installation = observe_sandwich_installation(
+        search_path=search_path,
+        home=resolved_home,
+        microservices_root=configured_root,
+    )
     installed_root = (
         installation.source_root.resolve()
         if installation.source_root is not None

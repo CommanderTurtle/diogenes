@@ -101,12 +101,12 @@ _BROWSER_MCP_PROVIDERS = {"playwright", "camofox", "disabled", "auto"}
 def browser_mcp_provider() -> str:
     """Resolve the explicitly selected browser MCP provider.
 
-    ``playwright`` preserves the upstream default. ``auto`` chooses Camofox
-    only when CAMOFOX_URL is explicitly configured; it never guesses from a
-    cached npm package. ``disabled`` suppresses browser MCP registration while
-    leaving packages and browser services untouched.
+    Diogenes defaults to Camofox. Playwright is available only through an
+    explicit deployment choice, never because a package happens to be cached.
+    ``disabled`` suppresses browser MCP registration while leaving packages
+    and browser services untouched.
     """
-    configured = os.environ.get("ODYSSEUS_BROWSER_MCP_PROVIDER", "playwright")
+    configured = os.environ.get("ODYSSEUS_BROWSER_MCP_PROVIDER", "camofox")
     provider = configured.strip().lower()
     if provider not in _BROWSER_MCP_PROVIDERS:
         logger.warning(
@@ -115,7 +115,7 @@ def browser_mcp_provider() -> str:
         )
         return "disabled"
     if provider == "auto":
-        return "camofox" if os.environ.get("CAMOFOX_URL", "").strip() else "playwright"
+        return "camofox"
     return provider
 
 
@@ -124,10 +124,30 @@ def _browser_server_config() -> dict | None:
     if provider == "disabled":
         return None
     source = _CAMOFOX_BROWSER_SERVER if provider == "camofox" else _PLAYWRIGHT_BROWSER_SERVER
-    return {
+    config = {
         **source,
         "args": list(source["args"]),
     }
+    if provider == "camofox":
+        services_root = os.environ.get(
+            "ULYSSES_MICROSERVICES_ROOT",
+            os.path.join(os.path.expanduser("~"), "Hermes"),
+        )
+        package_root = os.environ.get(
+            "CAMOFOX_MCP_ROOT",
+            os.path.join(services_root, "camofox-mcp"),
+        )
+        entrypoint = os.path.join(
+            os.path.expanduser(package_root),
+            "dist",
+            "index.js",
+        )
+        bun = which_tool("bun") or os.path.expanduser("~/.bun/bin/bun")
+        if os.path.isfile(entrypoint) and os.path.isfile(bun):
+            config["command"] = bun
+            config["args"] = [entrypoint]
+            config["local_source"] = package_root
+    return config
 
 
 def _camofox_mcp_env() -> dict[str, str]:
@@ -264,18 +284,24 @@ async def register_builtin_servers(mcp_manager):
         )
         return
     npx_path = _find_npx()
-    logger.info(f"NPX binary resolved to: {npx_path}")
 
     async def _start_npx_servers():
         await asyncio.sleep(3)  # let Python servers finish first
         for server_id, cfg in {"builtin_browser": browser_server}.items():
+            command_path = (
+                npx_path if cfg.get("command") == "npx" else cfg["command"]
+            )
             args = (
                 _browser_mcp_args(cfg["args"])
                 if cfg["provider"] == "playwright"
                 else list(cfg["args"])
             )
-            pkg_spec = _npx_package_from_args(args)
-            if BROWSER_MCP_REQUIRE_CACHE and pkg_spec and not await _is_npx_package_cached(npx_path, pkg_spec):
+            pkg_spec = (
+                _npx_package_from_args(args)
+                if command_path == npx_path
+                else None
+            )
+            if BROWSER_MCP_REQUIRE_CACHE and pkg_spec and not await _is_npx_package_cached(command_path, pkg_spec):
                 logger.warning(
                     f"{cfg['name']} is not available.\n"
                     f"  Reason: npm package {pkg_spec!r} is not installed in the npx cache.\n"
@@ -287,7 +313,12 @@ async def register_builtin_servers(mcp_manager):
                 )
                 continue
 
-            logger.info(f"Starting NPX server: {cfg['name']} ({npx_path} {' '.join(args)})")
+            logger.info(
+                "Starting browser MCP: %s (%s %s)",
+                cfg["name"],
+                command_path,
+                " ".join(args),
+            )
             try:
                 env = None
                 if cfg["provider"] == "playwright":
@@ -306,7 +337,7 @@ async def register_builtin_servers(mcp_manager):
                     server_id=server_id,
                     name=cfg["name"],
                     transport="stdio",
-                    command=npx_path,
+                    command=command_path,
                     args=args,
                     env=env,
                 )

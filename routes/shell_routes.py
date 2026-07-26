@@ -95,9 +95,9 @@ _ULYSSES_VLLM_MUTATION_RE = re.compile(
 
 
 def _ulysses_vllm_lock_contract(*, remote_host: str | None = None) -> dict | None:
-    """Describe the configured, exact Ulysses vLLM environment contract.
+    """Describe the configured, exact Diogenes vLLM environment contract.
 
-    The lock belongs to this Ulysses host.  A selected SSH target keeps the
+    The lock belongs to this Diogenes host.  A selected SSH target keeps the
     upstream generic package flow because a local absolute path has no meaning
     on another machine.
     """
@@ -105,7 +105,7 @@ def _ulysses_vllm_lock_contract(*, remote_host: str | None = None) -> dict | Non
         return None
     import sys
 
-    # A managed lock must never target the base interpreter. Ulysses owns only
+    # A managed lock must never target the base interpreter. Diogenes owns only
     # the inner environment from which the app is currently running.
     if sys.prefix == sys.base_prefix:
         return None
@@ -117,9 +117,13 @@ def _ulysses_vllm_lock_contract(*, remote_host: str | None = None) -> dict | Non
     if not python_path.is_file() or not (venv_path / "pyvenv.cfg").is_file():
         return None
     configured = os.getenv("ULYSSES_VLLM_LOCK", "").strip()
-    if not configured:
-        return None
-    lock_path = Path(configured).expanduser()
+    lock_path = (
+        Path(configured).expanduser()
+        if configured
+        else Path(__file__).resolve().parents[1]
+        / "requirements"
+        / "ulysses-vllm-cuda13.lock"
+    )
     if not lock_path.is_absolute() or not lock_path.is_file():
         return None
 
@@ -427,10 +431,10 @@ def _package_pip_update_status(
         return PackageUpdateStatus(
             False,
             (
-                f"Managed by the Ulysses uv lock (vLLM {pinned}); "
+                f"Managed by the Diogenes uv lock (vLLM {pinned}); "
                 "Reconcile reapplies the verified CUDA stack without upgrading to latest."
                 if pinned
-                else "Managed by the Ulysses uv lock; generic pip upgrades are disabled."
+                else "Managed by the Diogenes uv lock; generic pip upgrades are disabled."
             ),
         )
 
@@ -1529,14 +1533,6 @@ def setup_shell_routes() -> APIRouter:
                 "category": "Image",
                 "target": "local",
             },
-            # ── Tools ──
-            {
-                "name": "playwright",
-                "pip": "playwright",
-                "desc": "Browser automation for web tools",
-                "category": "Tools",
-                "target": "local",
-            },
         ]
 
         # Most packages should not be installed through external means. Hence, set the default of the
@@ -1958,7 +1954,7 @@ def setup_shell_routes() -> APIRouter:
                 return {
                     "ok": False,
                     "error": (
-                        "vLLM is managed by the configured Ulysses uv lock. "
+                        "vLLM is managed by the configured Diogenes uv lock. "
                         "Use the asynchronous Install/Reconcile action in Cookbook."
                     ),
                     "managed_install": managed_vllm,

@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import socket
 import subprocess
 import sys
@@ -26,7 +27,34 @@ SECRET_RE = re.compile(
     re.I,
 )
 PATH_TOKEN_RE = re.compile(r"\$\{([A-Z][A-Z0-9_]*)\}")
-ALLOWED_PATH_TOKENS = {"HOME", "ULYSSES_MICROSERVICES_ROOT"}
+ALLOWED_PATH_TOKENS = {
+    "HOME",
+    "ULYSSES_MICROSERVICES_ROOT",
+    "ULYSSES_REPOSITORY_ROOT",
+}
+DISCOVERY_SKIP_DIRS = {
+    ".git",
+    ".venv",
+    "node_modules",
+    "__pycache__",
+    "build",
+    "dist",
+    "coverage",
+    "vendor",
+}
+DISCOVERY_SUFFIXES = {
+    "",
+    ".conf",
+    ".env",
+    ".ini",
+    ".json",
+    ".jsonc",
+    ".sh",
+    ".toml",
+    ".txt",
+    ".yaml",
+    ".yml",
+}
 
 
 def _run(argv: list[str], *, cwd: Path | None = None, timeout: int = 20) -> subprocess.CompletedProcess[str]:
@@ -50,14 +78,99 @@ def _hash(path: Path) -> str | None:
         return None
 
 
-def _expand(raw: str, *, home: Path, services_root: Path) -> Path:
+def _document_format(path: Path) -> str:
+    name = path.name.lower()
+    if name == ".env" or name.startswith(".env."):
+        return "env"
+    if path.suffix.lower() == ".json":
+        return "json"
+    if path.suffix.lower() == ".sh":
+        return "shell"
+    return "text"
+
+
+def _runtime_documents(item: dict[str, Any]) -> tuple[dict[str, Any], ...]:
+    """Return catalog documents plus bounded project-local config discovery."""
+
+    root: Path = item["root"]
+    documents = [dict(document) for document in item.get("documents") or ()]
+    known = {document["path"].resolve() for document in documents}
+    if not root.is_dir():
+        return tuple(documents)
+
+    discovered: list[Path] = []
+    for current, dirnames, filenames in os.walk(root, followlinks=False):
+        current_path = Path(current)
+        try:
+            relative_depth = len(current_path.relative_to(root).parts)
+        except ValueError:
+            continue
+        dirnames[:] = [
+            name
+            for name in dirnames
+            if name not in DISCOVERY_SKIP_DIRS
+            and not name.startswith(".cache")
+            and relative_depth < 5
+        ]
+        for name in filenames:
+            lowered = name.lower()
+            if not (
+                lowered == ".env"
+                or lowered == "start.sh"
+                or "config" in lowered
+            ):
+                continue
+            candidate = current_path / name
+            if candidate.suffix.lower() not in DISCOVERY_SUFFIXES:
+                continue
+            try:
+                resolved = candidate.resolve(strict=True)
+                if not resolved.is_relative_to(root) or not resolved.is_file():
+                    continue
+                if resolved.stat().st_size > 1_000_000:
+                    continue
+            except OSError:
+                continue
+            if resolved not in known:
+                known.add(resolved)
+                discovered.append(resolved)
+            if len(discovered) >= 200:
+                break
+        if len(discovered) >= 200:
+            break
+
+    for path in sorted(discovered):
+        relative = path.relative_to(root).as_posix()
+        document_id = "file-" + hashlib.sha256(
+            relative.encode("utf-8")
+        ).hexdigest()[:16]
+        documents.append(
+            {
+                "id": document_id,
+                "path": path,
+                "format": _document_format(path),
+                "label": relative,
+            }
+        )
+    return tuple(documents)
+
+
+def _expand(
+    raw: str,
+    *,
+    home: Path,
+    services_root: Path,
+    repository_root: Path,
+) -> Path:
     unknown = set(PATH_TOKEN_RE.findall(raw)) - ALLOWED_PATH_TOKENS
     if unknown:
         raise RuntimeJobError(
             f"runtime catalog path contains unsupported variables: {sorted(unknown)}"
         )
-    value = raw.replace("${HOME}", str(home)).replace(
-        "${ULYSSES_MICROSERVICES_ROOT}", str(services_root)
+    value = (
+        raw.replace("${HOME}", str(home))
+        .replace("${ULYSSES_MICROSERVICES_ROOT}", str(services_root))
+        .replace("${ULYSSES_REPOSITORY_ROOT}", str(repository_root))
     )
     path = Path(value).expanduser()
     if not path.is_absolute():
@@ -143,7 +256,12 @@ def load_runtime_management(
                 raise RuntimeJobError(
                     f"{runtime_id} Git update source is not pinned safely"
                 )
-        root = _expand(str(raw["root"]), home=resolved_home, services_root=resolved_services)
+        root = _expand(
+            str(raw["root"]),
+            home=resolved_home,
+            services_root=resolved_services,
+            repository_root=repo.resolve(),
+        )
         item = dict(raw)
         item["root"] = root
         for field in ("compose", "package_json"):
@@ -175,6 +293,27 @@ def load_runtime_management(
                     "label": str(document["path"]),
                 }
             )
+        bootstrap_files: list[dict[str, Any]] = []
+        for bootstrap in raw.get("bootstrap_files") or []:
+            if not isinstance(bootstrap, dict):
+                raise RuntimeJobError("runtime bootstrap file must be an object")
+            candidate = (root / str(bootstrap.get("path") or "")).resolve()
+            if candidate == root or not candidate.is_relative_to(root):
+                raise RuntimeJobError("runtime bootstrap file escapes its root")
+            content = bootstrap.get("content")
+            mode = str(bootstrap.get("mode") or "0644")
+            if not isinstance(content, str) or "\0" in content:
+                raise RuntimeJobError("runtime bootstrap content is invalid")
+            if not re.fullmatch(r"0?[0-7]{3}", mode):
+                raise RuntimeJobError("runtime bootstrap mode is invalid")
+            bootstrap_files.append(
+                {
+                    "path": candidate,
+                    "content": content,
+                    "mode": mode,
+                }
+            )
+        item["bootstrap_files"] = tuple(bootstrap_files)
         if item.get("compose"):
             documents.append(
                 {
@@ -260,7 +399,7 @@ def _tmux_alive(name: str | None) -> bool:
 
 
 def _service_argv(argv: list[str]) -> list[str]:
-    """Run a host service without leaking Ulysses's active Python venv."""
+    """Run a host service without leaking Diogenes's active Python venv."""
 
     home = Path.home().resolve()
     bun_install = home / ".bun"
@@ -443,10 +582,30 @@ def collect_managed_runtimes() -> dict[str, Any]:
                         "exists": document["path"].is_file(),
                         "sha256": _hash(document["path"]),
                     }
-                    for document in item["documents"]
+                    for document in _runtime_documents(item)
                 ],
                 "hermes_mcp": bool(item.get("hermes_mcp")),
                 "actions": {
+                    "open": item["root"].is_dir() and shutil.which("zed") is not None,
+                    "initialize": (
+                        item["root"].is_dir()
+                        and any(
+                            not bootstrap["path"].exists()
+                            for bootstrap in item.get("bootstrap_files") or ()
+                        )
+                    ),
+                    "install": (
+                        not item["root"].exists()
+                        and (
+                            bool(item.get("git_update"))
+                            or bool(item.get("package_spec"))
+                            or bool(item.get("update_module"))
+                        )
+                        and (
+                            item["category"] != "javascript"
+                            or sandwich.installed
+                        )
+                    ),
                     "start": (
                         item["category"] == "docker"
                         and compose_ready
@@ -515,7 +674,7 @@ def read_runtime_documents(runtime_id: str, *, reveal: bool = False) -> dict[str
     if item is None:
         raise RuntimeJobError("unknown managed runtime")
     documents = []
-    for document in item["documents"]:
+    for document in _runtime_documents(item):
         path = document["path"]
         try:
             content = path.read_text(encoding="utf-8", errors="replace")
@@ -599,7 +758,11 @@ def save_runtime_document(
     item = next((value for value in load_runtime_management() if value["id"] == runtime_id), None)
     if item is None:
         raise RuntimeJobError("unknown managed runtime")
-    document = next((value for value in item["documents"] if value["id"] == document_id), None)
+    runtime_documents = _runtime_documents(item)
+    document = next(
+        (value for value in runtime_documents if value["id"] == document_id),
+        None,
+    )
     if document is None:
         raise RuntimeJobError("unknown runtime configuration document")
     if confirmation_phrase != f"SAVE {runtime_id} CONFIG":
@@ -641,7 +804,14 @@ def save_runtime_document(
                 raise RuntimeJobError(check.stderr.strip() or "shell configuration is invalid")
         if document["format"] == "compose":
             argv = ["docker", "compose"]
-            env_file = next((doc["path"] for doc in item["documents"] if doc["format"] == "env" and doc["path"].is_file()), None)
+            env_file = next(
+                (
+                    doc["path"]
+                    for doc in runtime_documents
+                    if doc["format"] == "env" and doc["path"].is_file()
+                ),
+                None,
+            )
             if env_file:
                 argv.extend(["--env-file", str(env_file)])
             check = _run([*argv, "-f", str(temp_path), "config", "--quiet"], cwd=item["root"])
@@ -689,6 +859,7 @@ class ManagedRuntimeControl:
 
     def _steps(self, item: dict[str, Any], action: str) -> list[dict[str, Any]]:
         root: Path = item["root"]
+        repository_root = Path(__file__).resolve().parents[1]
         if action == "update" and item.get("update_blocked_reason"):
             raise RuntimeJobError(str(item["update_blocked_reason"]))
         observed = next(
@@ -716,6 +887,136 @@ class ManagedRuntimeControl:
                 + ", ".join(observed.get("dependencies_unavailable") or [])
             )
         managed_session = bool((observed.get("tmux") or {}).get("managed"))
+        if action == "open":
+            executable = shutil.which("zed")
+            if executable is None:
+                raise RuntimeJobError("Zed is not available on PATH")
+            if not root.is_dir():
+                raise RuntimeJobError("runtime source directory is not installed")
+            return [
+                {
+                    "label": "Open project in Zed",
+                    "argv": [executable, "."],
+                    "cwd": str(root),
+                    "timeout": 30,
+                }
+            ]
+        if action == "initialize":
+            if not root.is_dir():
+                raise RuntimeJobError("runtime source directory is not installed")
+            return [
+                {
+                    "label": "Create missing project-local runtime files",
+                    "argv": [
+                        sys.executable,
+                        "-m",
+                        "src.ulysses_runtime_bootstrap",
+                        item["id"],
+                    ],
+                    "cwd": str(repository_root),
+                    "timeout": 60,
+                }
+            ]
+        if action == "install":
+            if root.exists():
+                raise RuntimeJobError("runtime source path already exists")
+            if item.get("git_update"):
+                steps = [
+                    {
+                        "label": "Create services parent",
+                        "argv": ["mkdir", "-p", str(root.parent)],
+                        "timeout": 30,
+                    },
+                    {
+                        "label": "Clone official project source",
+                        "argv": [
+                            "git",
+                            "clone",
+                            "--branch",
+                            str(item["source_branch"]),
+                            "--single-branch",
+                            str(item["source_url"]),
+                            str(root),
+                        ],
+                        "timeout": 1800,
+                    },
+                ]
+                steps.append(
+                    {
+                        "label": "Create project-local configuration defaults",
+                        "argv": [
+                            sys.executable,
+                            "-m",
+                            "src.ulysses_runtime_bootstrap",
+                            item["id"],
+                        ],
+                        "cwd": str(repository_root),
+                        "timeout": 60,
+                    }
+                )
+                if item["category"] == "javascript":
+                    steps.append(
+                        {
+                            "label": "Install with Bun",
+                            "argv": _service_argv(["bun", "install"]),
+                            "cwd": str(root),
+                            "timeout": 1800,
+                        }
+                    )
+                    if item.get("build_script"):
+                        steps.append(
+                            {
+                                "label": "Build with Bun",
+                                "argv": _service_argv(
+                                    ["bun", "run", str(item["build_script"])]
+                                ),
+                                "cwd": str(root),
+                                "timeout": 1800,
+                            }
+                        )
+                return steps
+            if item.get("package_spec"):
+                return [
+                    {
+                        "label": "Create runtime directory",
+                        "argv": ["mkdir", "-p", str(root)],
+                        "timeout": 30,
+                    },
+                    {
+                        "label": "Create project-local startup and configuration",
+                        "argv": [
+                            sys.executable,
+                            "-m",
+                            "src.ulysses_runtime_bootstrap",
+                            item["id"],
+                        ],
+                        "cwd": str(Path(__file__).resolve().parents[1]),
+                        "timeout": 60,
+                    },
+                    {
+                        "label": "Resolve package through Sandwich",
+                        "argv": _service_argv(
+                            ["npx", "-y", str(item["package_spec"]), "--version"]
+                        ),
+                        "cwd": str(root),
+                        "timeout": 900,
+                    },
+                ]
+            if item.get("update_module"):
+                return [
+                    {
+                        "label": "Install native runtime for this user",
+                        "argv": [
+                            sys.executable,
+                            "-m",
+                            str(item["update_module"]),
+                            *[str(value) for value in item.get("update_args") or []],
+                        ],
+                        "cwd": str(Path(__file__).resolve().parents[1]),
+                        "timeout": 900,
+                    }
+                ]
+            raise RuntimeJobError("runtime has no supported install contract")
         if (
             action == "sync"
             and item["category"] in {"javascript", "native"}
@@ -832,7 +1133,7 @@ class ManagedRuntimeControl:
         raise RuntimeJobError("unsupported runtime lifecycle action")
 
     def create_plan(self, *, runtime_id: str, action: str) -> tuple[dict[str, Any], str]:
-        if action not in {"start", "stop", "restart", "sync", "update"}:
+        if action not in {"open", "initialize", "install", "start", "stop", "restart", "sync", "update"}:
             raise RuntimeJobError("unsupported managed runtime action")
         item = self._item(runtime_id)
         return self.jobs.create_plan(

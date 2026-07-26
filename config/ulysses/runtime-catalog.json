@@ -3,7 +3,7 @@
   "runtimes": [
     {
       "runtime_id": "ulysses.api",
-      "label": "Ulysses API",
+      "label": "Diogenes API",
       "adapter": "native",
       "ownership": "managed",
       "source_root": "${ULYSSES_REPOSITORY_ROOT}",

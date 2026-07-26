@@ -419,6 +419,9 @@ function _selectTaskServer(task) {
 // new task's id so the next render collapses every other card and leaves only
 // the new one open. Consumed (cleared) by _renderRunningTab.
 let _soloExpandTaskId = null;
+let _managedServiceSessions = [];
+let _managedServiceFetch = null;
+let _managedServiceFetchAt = 0;
 
 // Storage keys
 const TASKS_KEY = 'cookbook-tasks';
@@ -431,6 +434,93 @@ const TASK_POLL_INTERVAL_MS = 3000;       // delay between reconnect-loop iterat
 const BG_MONITOR_INTERVAL_MS = 10000;     // background task status poll
 const STALE_PROGRESS_MS = 5 * 60 * 1000;  // download with no progress this long = stale
 const STARTUP_STALE_PROGRESS_MS = 45 * 1000; // 0%-forever startup stall: retry much sooner
+
+function _refreshManagedServiceSessions() {
+  const now = Date.now();
+  if (_managedServiceFetch || now - _managedServiceFetchAt < 2500) return;
+  _managedServiceFetchAt = now;
+  _managedServiceFetch = fetch('/api/odysseus/runtimes', { credentials: 'same-origin' })
+    .then(response => response.ok ? response.json() : null)
+    .then(payload => {
+      if (!payload) return;
+      const next = (payload.runtimes || []).filter(runtime =>
+        runtime?.status === 'running' && runtime?.tmux?.managed && runtime?.tmux?.session
+      );
+      const before = JSON.stringify(_managedServiceSessions.map(runtime => [
+        runtime.id,
+        runtime.status,
+        runtime.tmux?.session,
+      ]));
+      const after = JSON.stringify(next.map(runtime => [
+        runtime.id,
+        runtime.status,
+        runtime.tmux?.session,
+      ]));
+      _managedServiceSessions = next;
+      if (before !== after) _renderRunningTab();
+    })
+    .catch(() => {})
+    .finally(() => {
+      _managedServiceFetch = null;
+    });
+}
+
+function _renderManagedServiceSessions(group, adminCard) {
+  group.querySelector('.cookbook-managed-services-section')?.remove();
+  if (!_managedServiceSessions.length) return;
+  const section = document.createElement('div');
+  section.className = 'cookbook-managed-services-section';
+  section.innerHTML = `
+    <div class="cookbook-section-header">
+      <span class="cookbook-srv-status ok" title="Managed tmux services are active"></span>
+      <span class="cookbook-section-title">Managed services</span>
+      <button type="button" class="cookbook-btn" data-open-services>Open Services</button>
+    </div>
+    <div class="cookbook-section-body">
+      ${_managedServiceSessions.map(runtime => `
+        <article class="cookbook-task" data-managed-service="${esc(runtime.id)}">
+          <div class="cookbook-task-head">
+            <span class="cookbook-task-name">${esc(runtime.label || runtime.id)}</span>
+            <span class="cookbook-task-type">service</span>
+            <span class="cookbook-task-status cookbook-task-running">running</span>
+          </div>
+          <div class="cookbook-task-sub">
+            <span class="cookbook-task-session">${esc(runtime.tmux.session)}</span>
+            <span class="cookbook-task-dldir" title="${esc(runtime.root || '')}">${esc(runtime.root || '')}</span>
+          </div>
+          <div style="display:flex;gap:6px;margin-top:7px;">
+            <button type="button" class="cookbook-btn" data-managed-service-log="${esc(runtime.id)}">View console</button>
+          </div>
+          <pre data-managed-service-output="${esc(runtime.id)}" style="display:none;max-height:280px;overflow:auto;white-space:pre-wrap;margin-top:8px;"></pre>
+        </article>`).join('')}
+    </div>`;
+  adminCard.appendChild(section);
+  section.querySelector('[data-open-services]')?.addEventListener('click', () => {
+    document.getElementById('tool-services-btn')?.click();
+  });
+  section.querySelectorAll('[data-managed-service-log]').forEach(button => {
+    button.addEventListener('click', async () => {
+      const runtimeId = button.dataset.managedServiceLog;
+      const output = section.querySelector(
+        `[data-managed-service-output="${CSS.escape(runtimeId)}"]`
+      );
+      if (!output) return;
+      output.style.display = '';
+      output.textContent = 'Loading tmux console…';
+      try {
+        const response = await fetch(
+          `/api/odysseus/runtimes/${encodeURIComponent(runtimeId)}/log?max_chars=30000`,
+          { credentials: 'same-origin' },
+        );
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const payload = await response.json();
+        output.textContent = payload.text || '(no console output)';
+      } catch (error) {
+        output.textContent = `Console unavailable: ${error?.message || error}`;
+      }
+    });
+  });
+}
 
 // ── Phase detection (mirrors Python _parse_serve_phase in cookbook_routes.py) ──
 // Single source of truth for serve task status. KEEP IN SYNC with the Python version.
@@ -2043,6 +2133,7 @@ export async function _launchServeTask(shortName, repo, cmd, fields, hostOverrid
 // ── Render Running tab ──
 
 export function _renderRunningTab() {
+  _refreshManagedServiceSessions();
   // Auto-clear the sidebar notif (the bright-icon highlight) when no tasks
   // are actively running or errored. _showCookbookNotif fires on each task
   // event but the matching clear only ran on modal-open, so the highlight
@@ -2088,7 +2179,7 @@ export function _renderRunningTab() {
   });
 
   const tasks = _loadTasks();
-  const hasContent = tasks.length > 0;
+  const hasContent = tasks.length > 0 || _managedServiceSessions.length > 0;
   // Count anything that's really active: explicit 'running'/'queued' status,
   // OR a download whose tmux output is still showing live shard progress.
   // Without the output check, a task whose status got stuck at 'done' /
@@ -2098,7 +2189,7 @@ export function _renderRunningTab() {
     t.status === 'running'
     || t.status === 'queued'
     || _downloadOutputLooksActive(t)
-  ).length;
+  ).length + _managedServiceSessions.length;
   const activeCountHtml = activeCount ? ` <span class="cookbook-tab-count">${activeCount}</span>` : '';
 
   let tabBar = body.querySelector('.cookbook-tabs');
@@ -2144,7 +2235,7 @@ export function _renderRunningTab() {
       '<div style="display:flex;align-items:baseline;gap:8px;margin-bottom:2px;">' +
       '<h2 style="margin:0;padding:0;line-height:1;">Active <span id="running-count" class="memory-count" style="font-size:0.6em;opacity:0.6;font-weight:normal">' + activeCount + '</span></h2>' +
       '</div>' +
-      '<p class="memory-desc doclib-desc" style="margin-top:6px;">Active downloads, installs and model launches.</p>' +
+      '<p class="memory-desc doclib-desc" style="margin-top:6px;">Active managed services, downloads, installs and model launches.</p>' +
       '</div>';
     const firstGroup = body.querySelector('.cookbook-group');
     if (firstGroup) body.insertBefore(group, firstGroup);
@@ -2162,6 +2253,7 @@ export function _renderRunningTab() {
   }
 
   const _adminCard = group.querySelector('.admin-card');
+  _renderManagedServiceSessions(group, _adminCard || group);
   function _ensureSection(cls, label, items) {
     let sec = group.querySelector('.' + cls);
     if (!sec) {

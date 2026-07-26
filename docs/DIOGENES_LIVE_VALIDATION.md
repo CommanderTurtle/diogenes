@@ -1,4 +1,4 @@
-# Ulysses live runtime validation
+# Diogenes live runtime validation
 
 Captured on 2026-07-25 against the remote Debian WSL host. The candidate
 application was not started and the production Odysseus source, virtual
@@ -16,7 +16,7 @@ processes were not mutated.
 
 ## Docker lifecycle round-trip
 
-Ulysses generated persisted, argv-only, confirmation-gated jobs for Firecrawl
+Diogenes generated persisted, argv-only, confirmation-gated jobs for Firecrawl
 and SearXNG. The stop actions used `docker compose stop`, preserving containers,
 networks, and volumes. The start actions used `docker compose up -d`.
 
@@ -24,7 +24,7 @@ networks, and volumes. The start actions used `docker compose up -d`.
   containers restarted. The API root returned HTTP 200 JSON.
 - SearXNG stopped successfully, port 7070 closed, then two existing containers
   restarted. The root endpoint returned HTTP 200 HTML.
-- Ulysses job records and logs captured each transition with exit code 0.
+- Diogenes job records and logs captured each transition with exit code 0.
 
 Firecrawl emits warnings for unset optional Compose variables. These warnings
 were present without a required service failure and should be surfaced in the
@@ -33,7 +33,7 @@ runtime console without being classified as failed health.
 ## Managed tmux lifecycle round-trip
 
 Each service was launched by an existing project-native command in a dedicated
-Ulysses-owned tmux session, observed through the Ulysses log reader, and then
+Diogenes-owned tmux session, observed through the Diogenes log reader, and then
 stopped through a confirmation-gated job.
 
 - Camofox: `bun start` opened port 9377, launched and pre-warmed Camoufox, and
@@ -47,7 +47,7 @@ stopped through a confirmation-gated job.
   the stopped state.
 
 At the end of validation, ports 9377, 7999, and 8090 were closed and no
-Ulysses-owned tmux sessions remained.
+Diogenes-owned tmux sessions remained.
 
 ## Bifrost telemetry interpretation
 
@@ -71,7 +71,7 @@ checkout, or production virtual environment was changed.
   updates are enforced;
 - dependent runtime lifecycle and prior running/stopped state are preserved;
 - active JavaScript/native services cannot be source-synced;
-- managed tmux launches remove Ulysses Python-environment leakage;
+- managed tmux launches remove Diogenes Python-environment leakage;
 - redacted `.env` and JSON documents cannot accidentally overwrite real
   values, while an explicit authorized **Unredact & edit** flow remains;
 - Sandwich readiness requires the complete Bun-owned compatibility command
@@ -89,11 +89,11 @@ The final source review also found:
   `PATH` lookup alone is insufficient, so build preflight and manifest capture
   use the resolved absolute path;
 - Hy3's canonical `IOURING=1` build is currently blocked because the runtime
-  library exists but the `liburing` development header does not. Ulysses
+  library exists but the `liburing` development header does not. Diogenes
   reports that prerequisite rather than attempting an install or beginning a
   doomed CUDA build;
 - current Colibri `dev` quarantines nonzero `EXPERT_BUDGET` after issue #303
-  found quality collapse, zero MTP acceptance, and worse throughput. Ulysses
+  found quality collapse, zero MTP acceptance, and worse throughput. Diogenes
   keeps it at zero even though the older issue #273 recipe used four;
 - a model is not ready unless its Hugging Face local-download metadata carries
   the exact pinned revision in addition to matching the full shard/file/byte

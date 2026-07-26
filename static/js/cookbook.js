@@ -1201,13 +1201,13 @@ async function _fetchDependencies() {
       fetch('/api/cookbook/packages' + (_pkgParams.toString() ? '?' + _pkgParams.toString() : '')),
       _viewingRemote
         ? Promise.resolve(null)
-        : fetch('/api/ulysses/colibri/providers', { credentials: 'same-origin' }).catch(() => null),
+        : fetch('/api/odysseus/colibri/providers', { credentials: 'same-origin' }).catch(() => null),
       _viewingRemote
         ? Promise.resolve(null)
-        : fetch('/api/ulysses/hermes/adoption', { credentials: 'same-origin' }).catch(() => null),
+        : fetch('/api/odysseus/hermes/adoption', { credentials: 'same-origin' }).catch(() => null),
       _viewingRemote
         ? Promise.resolve(null)
-        : fetch('/api/ulysses/sandwich', { credentials: 'same-origin' }).catch(() => null),
+        : fetch('/api/odysseus/sandwich', { credentials: 'same-origin' }).catch(() => null),
     ]);
     const data = await resp.json();
     const _colibriExtras = colibriResp?.ok ? await colibriResp.json() : null;
@@ -1282,7 +1282,7 @@ async function _fetchDependencies() {
           ? ` data-managed-install-mode="uv-lock" data-managed-lock="${esc(pkg.managed_install.lock_path || '')}" data-managed-python="${esc(pkg.managed_install.python || '')}" data-managed-venv="${esc(pkg.managed_install.venv || '')}"`
           : '';
         _rebuildBtn = managed
-          ? `<button type="button" class="cookbook-dep-tag cookbook-dep-rebuild cookbook-dep-reinstall" data-reinstall-pkg="vllm"${managedData} title="Reconcile the exact uv-locked CUDA/vLLM stack in Ulysses' inner .venv.">Reconcile</button>`
+          ? `<button type="button" class="cookbook-dep-tag cookbook-dep-rebuild cookbook-dep-reinstall" data-reinstall-pkg="vllm"${managedData} title="Reconcile the exact uv-locked CUDA/vLLM stack in Diogenes' inner .venv.">Reconcile</button>`
           : `<button type="button" class="cookbook-dep-tag cookbook-dep-rebuild cookbook-dep-reinstall" data-reinstall-pkg="vllm" title="Force-reinstall vLLM (pulls a matching torch). Runs as a tmux task in the Running tab.">Reinstall</button>`;
       } else if (pkg.name === 'sglang' && pkg.installed) {
         _rebuildBtn = `<button type="button" class="cookbook-dep-tag cookbook-dep-rebuild cookbook-dep-reinstall" data-reinstall-pkg="sglang" title="Force-reinstall SGLang (pulls a matching torch). Runs as a tmux task in the Running tab.">Reinstall</button>`;
@@ -1405,10 +1405,10 @@ async function _fetchDependencies() {
       items.length ? _sectionHeader(title, note) + _rowsHtml(items) : '';
     const _extraAction = (runtimeId, action, label, enabled = true, title = '') =>
       `<button type="button" class="cookbook-dep-tag cookbook-dep-install" data-native-extra="${esc(runtimeId)}" data-native-extra-action="${esc(action)}"${enabled ? '' : ' disabled'} title="${esc(title)}">${esc(label)}</button>`;
-    const _extrasHtml = () => {
+    const _extrasHtml = (group = 'runtimes') => {
       if (_viewingRemote) return '';
       const rows = [];
-      if (_sandwichExtra) {
+      if (group === 'runtimes' && _sandwichExtra) {
         const ready = !!_sandwichExtra.ready;
         const action = ready ? 'doctor' : 'install';
         const detail = ready
@@ -1420,12 +1420,12 @@ async function _fetchDependencies() {
           + `<div class="memory-item-meta" style="font-size:10px;opacity:.5;margin-top:2px;">Bun compatibility layer · never installs Node</div>`
           + `<div class="memory-item-meta" style="font-size:10px;opacity:.65;margin-top:3px;">${esc(detail)}</div></div>`
           + _extraAction('sandwich.runtime', action, ready ? 'Doctor' : 'Install', true, ready ? 'Run the compatibility suite and doctor.' : 'Install the bundled component at the configured microservices root.')
-          + `<span class="cookbook-dep-tag cookbook-dep-cat">Extra</span>`
+          + `<span class="cookbook-dep-tag cookbook-dep-cat">Runtime</span>`
           + `<span class="cookbook-dep-tag ${ready ? 'cookbook-dep-installed' : 'cookbook-dep-na'}">${ready ? 'Installed' : 'Missing'}</span>`
           + `</div>`
         );
       }
-      if (_hermesExtra) {
+      if (group === 'runtimes' && _hermesExtra) {
         const install = _hermesExtra.install || {};
         const preview = _hermesExtra.adoption_preview || {};
         const update = (_hermesExtra.lifecycle_actions || []).find(action => action.id === 'update');
@@ -1433,15 +1433,15 @@ async function _fetchDependencies() {
         rows.push(
           `<div class="cookbook-dep-row" data-pkg-name="hermes" data-dep-kind="native">`
           + `<div class="cookbook-dep-info"><div class="memory-item-title">${_depGlyphHtml('hermes')}Hermes</div>`
-          + `<div class="memory-item-meta" style="font-size:10px;opacity:.5;margin-top:2px;">Native agent installation · separate from the Ulysses Python environment</div>`
+          + `<div class="memory-item-meta" style="font-size:10px;opacity:.5;margin-top:2px;">Native agent installation · separate from the Diogenes Python environment</div>`
           + `<div class="memory-item-meta" style="font-size:10px;opacity:.65;margin-top:3px;">${esc(install.version || 'version unknown')} · ${esc(install.source_root || 'source not detected')}</div></div>`
           + _extraAction('hermes.gateway', 'update', 'Update', !!update?.enabled, update?.reason || 'Adopt Hermes in Services before lifecycle control.')
-          + `<span class="cookbook-dep-tag cookbook-dep-cat">Extra</span>`
+          + `<span class="cookbook-dep-tag cookbook-dep-cat">Runtime</span>`
           + `<span class="cookbook-dep-tag ${installed ? 'cookbook-dep-installed' : 'cookbook-dep-na'}">${installed ? (preview.adoption_current ? 'Managed' : 'Installed') : 'Missing'}</span>`
           + `</div>`
         );
       }
-      for (const provider of (_colibriExtras?.providers || [])) {
+      for (const provider of (group === 'colibri' ? (_colibriExtras?.providers || []) : [])) {
         const isGlm = provider.id === 'colibri.glm';
         const source = provider.source || {};
         const build = provider.build || {};
@@ -1472,19 +1472,24 @@ async function _fetchDependencies() {
           + `<div class="memory-item-meta" style="font-size:10px;opacity:.65;margin-top:3px;">${esc(detail)}</div></div>`
           + _extraAction(provider.id, 'sync', source.present ? 'Sync' : 'Clone', !!actions.sync_available, source.dirty ? 'Preserve or commit local source changes before syncing.' : 'Fetch the official source with a fast-forward-only update.')
           + _extraAction(provider.id, 'build', 'Build CUDA', !!actions.build_available, 'Run the provider-specific native CUDA build and record a build manifest.')
-          + `<span class="cookbook-dep-tag cookbook-dep-cat">Extra</span>`
+          + `<span class="cookbook-dep-tag cookbook-dep-cat">LLM</span>`
           + `<span class="cookbook-dep-tag ${actions.start_available ? 'cookbook-dep-installed' : 'cookbook-dep-na'}">${esc(status)}</span>`
           + `</div>`
         );
       }
       return rows.length
-        ? _sectionHeader('Extras', 'Native system and source runtimes; never installed with pip or placed in the active venv.') + rows.join('')
+        ? _sectionHeader(
+            group === 'colibri' ? 'Colibri engines' : 'Native runtimes',
+            group === 'colibri'
+              ? 'Independent native C/CUDA LLM engines; each source tree is cloned, built, validated, and updated separately.'
+              : 'Host-level capabilities; never installed into the Diogenes Python environment.',
+          ) + rows.join('')
         : '';
     };
     const _pkgOrder = {
       System: ['tmux', 'docker', 'liburing-dev'],
       Tools: ['hf_transfer'],
-      LLM: ['llama_cpp', 'sglang', 'vllm', 'mlx_lm'],
+      LLM: ['llama_cpp', 'sglang', 'vllm', 'colibri_glm', 'colibri_hy3', 'mlx_lm'],
       Image: ['diffusers', 'krea_diffusers', 'transformers', 'sam_mask', 'mflux', 'boogu_image_mlx', 'mlx_vlm'],
     };
     const _sortDeps = (items, category) => {
@@ -1505,7 +1510,7 @@ async function _fetchDependencies() {
         byCat.get(cat).push(item);
       }
       const parts = [];
-      const order = ['System', 'Tools', 'Image', 'LLM', 'Audio', 'Other'];
+      const order = ['System', 'Tools', 'LLM', 'Image', 'Audio', 'Other'];
       for (const cat of order) {
         const catItems = _sortDeps(byCat.get(cat) || [], cat);
         if (!catItems.length) continue;
@@ -1533,6 +1538,7 @@ async function _fetchDependencies() {
               ? 'Browser and assistant utilities.'
               : '';
         parts.push(_section(cat, note, catItems));
+        if (cat === 'LLM') parts.push(_extrasHtml('colibri'));
       }
       return parts.join('');
     };
@@ -1545,7 +1551,7 @@ async function _fetchDependencies() {
         byCat.get(cat).push(item);
       }
       const parts = [_sectionHeader('Odysseus app', 'Run inside the Odysseus app itself.')];
-      const order = ['System', 'Tools', 'Image', 'LLM', 'Audio', 'Other'];
+      const order = ['System', 'Tools', 'LLM', 'Image', 'Audio', 'Other'];
       for (const cat of order) {
         const catItems = _sortDeps(byCat.get(cat) || [], cat);
         if (!catItems.length) continue;
@@ -1566,9 +1572,9 @@ async function _fetchDependencies() {
     const _serverDeps = pkgs.filter(p => p.target !== 'local' && _visibleDep(p));
 
     list.innerHTML = [
-      _extrasHtml(),
       _viewingRemote ? '' : _appDepsHtml(_appDeps),
       _serverDepsHtml(_serverDeps),
+      _extrasHtml('runtimes'),
     ].join('');
 
     list.querySelectorAll('[data-native-extra]').forEach(button => {
@@ -1578,10 +1584,10 @@ async function _fetchDependencies() {
         const isHermes = runtimeId === 'hermes.gateway';
         const isSandwich = runtimeId === 'sandwich.runtime';
         const endpoint = isHermes
-          ? '/api/ulysses/hermes/jobs/plan'
+          ? '/api/odysseus/hermes/jobs/plan'
           : isSandwich
-            ? '/api/ulysses/sandwich/jobs/plan'
-            : '/api/ulysses/colibri/jobs/plan';
+            ? '/api/odysseus/sandwich/jobs/plan'
+            : '/api/odysseus/colibri/jobs/plan';
         const body = isHermes || isSandwich
           ? { action }
           : { runtime_id: runtimeId, action };
@@ -1607,7 +1613,7 @@ async function _fetchDependencies() {
             { title: 'Confirm native dependency plan', confirmText: action === 'build' ? 'Build' : 'Run', cancelText: 'Cancel', danger: action === 'build' },
           );
           if (!confirmed) return;
-          const executeResponse = await fetch(`/api/ulysses/jobs/${encodeURIComponent(job.id)}/execute`, {
+          const executeResponse = await fetch(`/api/odysseus/jobs/${encodeURIComponent(job.id)}/execute`, {
             method: 'POST',
             credentials: 'same-origin',
             headers: { 'Content-Type': 'application/json' },
@@ -2503,7 +2509,7 @@ function _wireTabEvents(body) {
         const python = btn.dataset.managedPython || '';
         const venv = btn.dataset.managedVenv || '';
         if (!lock || !python || !venv || host) {
-          uiModule.showToast('Managed vLLM reconcile is available only for this Ulysses host and its configured inner .venv.', 9000);
+          uiModule.showToast('Managed vLLM reconcile is available only for this Diogenes host and its configured inner .venv.', 9000);
           return;
         }
         if (!confirm(`Reconcile the verified vLLM/CUDA stack in ${venv}?\n\nThis uses uv and the configured exact lock. It will not upgrade to latest.`)) return;

@@ -16,12 +16,12 @@ def test_visible_identity_uses_greek_wordmark() -> None:
     login = _read("static/login.html")
     manifest = json.loads(_read("static/manifest.json"))
 
-    assert "<title>Οδυσσέας · Ulysses</title>" in index
-    assert '<span class="sidebar-brand-title">Οδυσσέας</span>' in index
-    assert ">Οδυσσέας</div>" in index
-    assert "<title>Οδυσσέας · Ulysses — Login</title>" in login
-    assert manifest["name"] == "Οδυσσέας · Ulysses"
-    assert manifest["short_name"] == "Οδυσσέας"
+    assert "<title>Ɗiogenēs</title>" in index
+    assert '<span class="sidebar-brand-title">Ɗiogenēs</span>' in index
+    assert ">Ɗiogenēs</div>" in index
+    assert "<title>Ɗiogenēs — Login</title>" in login
+    assert manifest["name"] == "Ɗiogenēs"
+    assert manifest["short_name"] == "Ɗiogenēs"
 
 
 def test_upstream_odysseus_storage_identity_is_unchanged() -> None:
@@ -68,26 +68,26 @@ def test_services_window_preserves_agent_and_mcp_boundaries() -> None:
     assert "Hermes agent" in services
     assert "Settings → Integrations" in services
     assert "never copies or merges" in services
-    assert "/api/ulysses/topology" in services
-    assert "/api/ulysses/chroma/persistence" in services
-    assert "/api/ulysses/hermes/adoption" in services
-    assert "/api/ulysses/readiness" in services
-    assert "Ulysses never relocates Hermes into its own virtual environment" in services
+    assert "/api/odysseus/topology" in services
+    assert "/api/odysseus/chroma/persistence" in services
+    assert "/api/odysseus/hermes/adoption" in services
+    assert "/api/odysseus/readiness" in services
+    assert "Diogenes never relocates Hermes into its own virtual environment" in services
     assert "authenticated management view shows each configured command" in services
 
 
 def test_services_window_uses_planned_confirmed_runtime_jobs() -> None:
     services = _read("static/js/ulyssesServices.js")
 
-    assert "read-only" in services
-    assert "Apply unavailable — maintenance window required" in services
+    assert "Persistence safeguards" in services
+    assert "Apply unavailable" not in services
     assert "Adopt native Hermes in place" in services
     assert "Create plan" in services
     assert "Confirm lifecycle plan" in services
-    assert "/api/ulysses/hermes/jobs/plan" in services
-    assert "/api/ulysses/jobs/${encodeURIComponent(job.id)}/execute" in services
-    assert "/api/ulysses/jobs/${encodeURIComponent(jobId)}/log" in services
-    assert "Nick owns the maintenance-window stop" in services
+    assert "/api/odysseus/hermes/jobs/plan" in services
+    assert "/api/odysseus/jobs/${encodeURIComponent(job.id)}/execute" in services
+    assert "/api/odysseus/jobs/${encodeURIComponent(jobId)}/log" in services
+    assert "The operator controls the maintenance-window stop" in services
     assert "Python and GPU runtime" in services
     assert "method: 'POST'" in services
     assert "method: 'PUT'" in services
@@ -105,6 +105,21 @@ def test_services_window_uses_planned_confirmed_runtime_jobs() -> None:
     assert "arbitrary shell command" not in services
 
 
+def test_services_exposes_project_files_zed_and_managed_active_sessions() -> None:
+    services = _read("static/js/ulyssesServices.js")
+    running = _read("static/js/cookbookRunning.js")
+
+    assert "Open in Zed" in services
+    assert "Create start/config" in services
+    assert "data-runtime-document-select" in services
+    assert "data-runtime-editor" in services
+    assert "Validate & save" in services
+    assert "/api/odysseus/runtimes" in running
+    assert "Managed services" in running
+    assert "data-managed-service-log" in running
+    assert "View console" in running
+
+
 def test_cookbook_recognizes_recommended_and_legacy_colibri_models() -> None:
     cookbook = _read("static/js/cookbook.js").lower()
     serve = _read("static/js/cookbookServe.js").lower()
@@ -118,7 +133,7 @@ def test_cookbook_recognizes_recommended_and_legacy_colibri_models() -> None:
 def test_cookbook_extras_include_native_sandwich_installation() -> None:
     cookbook = _read("static/js/cookbook.js")
 
-    assert "/api/ulysses/sandwich" in cookbook
-    assert "/api/ulysses/sandwich/jobs/plan" in cookbook
+    assert "/api/odysseus/sandwich" in cookbook
+    assert "/api/odysseus/sandwich/jobs/plan" in cookbook
     assert "sandwich.runtime" in cookbook
     assert "Bun compatibility layer · never installs Node" in cookbook

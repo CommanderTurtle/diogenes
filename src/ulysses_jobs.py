@@ -1,4 +1,4 @@
-"""Durable, argv-only runtime jobs for the Ulysses control plane.
+"""Durable, argv-only runtime jobs for the Diogenes control plane.
 
 Plans are persisted before execution, require a short-lived confirmation token,
 and run in a detached worker. The API never accepts an arbitrary shell command.

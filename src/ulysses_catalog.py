@@ -1,4 +1,4 @@
-"""Portable runtime catalog loading for Ulysses."""
+"""Portable runtime catalog loading for Diogenes."""
 
 from __future__ import annotations
 

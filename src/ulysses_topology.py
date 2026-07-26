@@ -1,4 +1,4 @@
-"""Pure topology projection for Ulysses discovery observations."""
+"""Pure topology projection for Diogenes discovery observations."""
 
 from __future__ import annotations
 

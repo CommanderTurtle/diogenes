@@ -66,7 +66,7 @@ async function _colibriProviderForModel(model, force = false) {
   const runtimeId = _colibriRuntimeIdForModel(model);
   if (!runtimeId) return null;
   if (force || !_colibriProvidersCache || Date.now() - _colibriProvidersCachedAt > 15000) {
-    const res = await fetch('/api/ulysses/colibri/providers', { credentials: 'same-origin' });
+    const res = await fetch('/api/odysseus/colibri/providers', { credentials: 'same-origin' });
     if (!res.ok) throw new Error(`Colibri provider observation failed: HTTP ${res.status}`);
     const data = await res.json();
     _colibriProvidersCache = Array.isArray(data.providers) ? data.providers : [];
@@ -859,14 +859,14 @@ async function _fetchServeRuntimePackage(panel, backend) {
     if (!provider) return { pkg: null, target };
     const summary = [
       provider.source?.ready ? 'official source ready' : 'source not ready',
-      provider.build?.cuda_built ? 'CUDA build ready' : 'CUDA build required',
+      provider.build?.ready ? 'verified CUDA build ready' : 'verified CUDA build required',
       provider.model?.present
         ? `${provider.model.shards} model shards ready`
         : `${provider.model?.download_markers || 0} download markers remain`,
     ].join('; ');
     return {
       pkg: {
-        installed: !!provider.build?.cuda_built,
+        installed: !!provider.build?.ready,
         probe_error: false,
         status_note: summary,
       },
@@ -1691,12 +1691,15 @@ function _rerenderCachedModels() {
         const _profileVram = String(_colibriProfile.vram ?? '0');
         const _profileCtx = String(_colibriProfile.ctx ?? '4096');
         const _profilePolicy = String(_colibriProfile.policy || 'balanced');
+        const _ramHelp = _colibriIsGlm
+          ? 'Host RAM budget for resident experts. The RTX 5090 high-RAM profile uses 56 GB on a 64 GB host.'
+          : 'Host RAM budget for resident experts. Set 0 to let the Hy3 auto-tier planner use current free memory.';
         panelHtml += `<div class="hwfit-serve-row hwfit-serve-row-core hwfit-backend-colibri_glm hwfit-backend-colibri_hy3">`;
-        panelHtml += `<label>${_l('RAM GB','Resident expert working-set budget. The 5090 profile reserves 56 GB from the 64 GB host.')}<input type="text" class="hwfit-sf" data-field="colibri_ram" value="${esc(sv('colibri_ram', _profileRam))}" /></label>`;
-        panelHtml += `<label>${_l('VRAM GB','0 delegates to Colibri auto-tier, which fills measured free VRAM while reserving dense weights and KV/runtime headroom.')}<input type="text" class="hwfit-sf" data-field="colibri_vram" value="${esc(sv('colibri_vram', _profileVram))}" /></label>`;
-        panelHtml += `<label>${_l('Context','Colibri context budget for each sequence.')}<input type="text" class="hwfit-sf" data-field="colibri_ctx" value="${esc(sv('colibri_ctx', _profileCtx))}" /></label>`;
-        panelHtml += `<label>${_l('Policy','Upstream resource policy. balanced is the stable default; experimental-fast is never selected automatically.')}<select class="hwfit-sf" data-field="colibri_policy">${['quality','balanced','experimental-fast'].map(value => `<option value="${value}"${String(sv('colibri_policy', _profilePolicy)) === value ? ' selected' : ''}>${value}</option>`).join('')}</select></label>`;
-        panelHtml += `<label class="hwfit-sf-cb"><input type="checkbox" class="hwfit-sf" data-field="colibri_auto_tier"${sv('colibri_auto_tier', !!_colibriProfile.auto_tier) ? ' checked' : ''} /> Auto tier${_h('Use Colibri resource planning to size RAM/VRAM tiers from live free memory.')}</label>`;
+        panelHtml += `<label>${_l('RAM GB',_ramHelp)}<input type="text" class="hwfit-sf" data-field="colibri_ram" value="${esc(sv('colibri_ram', _profileRam))}" /></label>`;
+        panelHtml += `<label>${_l('VRAM GB','GPU memory budget for expert residency. Set 0 to use the memory measured by Colibri at launch while retaining dense-weight and KV-cache headroom.')}<input type="text" class="hwfit-sf" data-field="colibri_vram" value="${esc(sv('colibri_vram', _profileVram))}" /></label>`;
+        panelHtml += `<label>${_l('Context','Maximum context tokens allocated to each Colibri sequence.')}<input type="text" class="hwfit-sf" data-field="colibri_ctx" value="${esc(sv('colibri_ctx', _profileCtx))}" /></label>`;
+        panelHtml += `<label>${_l('Policy','Colibri resource policy. balanced is the stable default; experimental-fast is opt-in.')}<select class="hwfit-sf" data-field="colibri_policy">${['quality','balanced','experimental-fast'].map(value => `<option value="${value}"${String(sv('colibri_policy', _profilePolicy)) === value ? ' selected' : ''}>${value}</option>`).join('')}</select></label>`;
+        panelHtml += `<label class="hwfit-sf-cb"><input type="checkbox" class="hwfit-sf" data-field="colibri_auto_tier"${sv('colibri_auto_tier', !!_colibriProfile.auto_tier) ? ' checked' : ''} /> Auto tier${_h('Size Colibri RAM and VRAM tiers from memory available at launch.')}</label>`;
         panelHtml += `</div>`;
       }
       // ── Advanced (collapsed by default) ──
@@ -1713,10 +1716,10 @@ function _rerenderCachedModels() {
         const _cudaPipeDefault = String(_colibriEnv.COLI_CUDA_PIPE ?? (_colibriIsGlm ? '2' : '0'));
         panelHtml += `<div class="hwfit-backend-colibri_glm hwfit-backend-colibri_hy3" style="font-size:10px;line-height:1.45;color:var(--fg-muted);margin:2px 0 8px;padding:7px 9px;border:1px solid var(--border);border-radius:6px;">${esc(_colibriProfile.description || '')}<br><span style="opacity:.8;">Source: ${esc(_colibriProvider.source?.commit || 'not observed')} · model: ${esc(_colibriProvider.model?.path || 'not configured')}</span></div>`;
         panelHtml += `<div class="hwfit-serve-row hwfit-backend-colibri_glm hwfit-backend-colibri_hy3">`;
-        panelHtml += `<label>${_l('I/O Pipeline','0 off; 1 threaded async reads; 2 io_uring (Hy3 build includes IOURING=1).')}<select class="hwfit-sf" data-field="colibri_io_pipeline">${['0','1','2'].map(value => `<option value="${value}"${String(sv('colibri_io_pipeline', _ioDefault)) === value ? ' selected' : ''}>${value}</option>`).join('')}</select></label>`;
-        panelHtml += `<label>${_l('I/O Workers','Upstream supports 1–64. Eight is the documented stable default; tune only after benchmarking.')}<input type="text" class="hwfit-sf" data-field="colibri_pipe_workers" value="${esc(sv('colibri_pipe_workers', String(_colibriEnv.PIPE_WORKERS || '8')))}" /></label>`;
-        panelHtml += `<label>${_l('CUDA Pipeline','0 off; 1 resident multi-step; 2 pipe2. GLM issue #273 uses pipe2 on a single Blackwell GPU.')}<select class="hwfit-sf" data-field="colibri_cuda_pipeline">${['0','1','2'].map(value => `<option value="${value}"${String(sv('colibri_cuda_pipeline', _cudaPipeDefault)) === value ? ' selected' : ''}>${value}</option>`).join('')}</select></label>`;
-        panelHtml += `<label>${_l('Repin','Adapt the RAM/VRAM expert set every N tokens. Blank uses upstream default.')}<input type="text" class="hwfit-sf" data-field="colibri_repin" value="${esc(sv('colibri_repin', ''))}" placeholder="auto" /></label>`;
+        panelHtml += `<label>${_l('I/O Pipeline','Expert-weight read mode: 0 disables pipelining, 1 uses threaded asynchronous reads, and 2 uses io_uring. Hy3 is built with IOURING=1.')}<select class="hwfit-sf" data-field="colibri_io_pipeline">${['0','1','2'].map(value => `<option value="${value}"${String(sv('colibri_io_pipeline', _ioDefault)) === value ? ' selected' : ''}>${value}</option>`).join('')}</select></label>`;
+        panelHtml += `<label>${_l('I/O Workers','Concurrent expert-weight readers. Colibri accepts 1–64; 8 is the documented stable default.')}<input type="text" class="hwfit-sf" data-field="colibri_pipe_workers" value="${esc(sv('colibri_pipe_workers', String(_colibriEnv.PIPE_WORKERS || '8')))}" /></label>`;
+        panelHtml += `<label>${_l('CUDA Pipeline','CUDA execution mode: 0 disables the pipeline, 1 uses resident multi-step execution, and 2 uses pipe2. GLM issue #273 documents pipe2 for single-GPU Blackwell.')}<select class="hwfit-sf" data-field="colibri_cuda_pipeline">${['0','1','2'].map(value => `<option value="${value}"${String(sv('colibri_cuda_pipeline', _cudaPipeDefault)) === value ? ' selected' : ''}>${value}</option>`).join('')}</select></label>`;
+        panelHtml += `<label>${_l('Repin','Recalculate the resident RAM/VRAM expert set after this many tokens. Leave blank for the engine default.')}<input type="text" class="hwfit-sf" data-field="colibri_repin" value="${esc(sv('colibri_repin', ''))}" placeholder="auto" /></label>`;
         panelHtml += `<label>${_l('Max Queue','Maximum queued OpenAI-compatible requests.')}<input type="text" class="hwfit-sf" data-field="colibri_max_queue" value="${esc(sv('colibri_max_queue', '8'))}" /></label>`;
         panelHtml += `<label>${_l('Queue Timeout','Seconds a request may remain queued.')}<input type="text" class="hwfit-sf" data-field="colibri_queue_timeout" value="${esc(sv('colibri_queue_timeout', '300'))}" /></label>`;
         panelHtml += `<label>${_l('KV Slots','Independent sequence contexts; current upstream supports 1–16.')}<input type="text" class="hwfit-sf" data-field="colibri_kv_slots" value="${esc(sv('colibri_kv_slots', '1'))}" /></label>`;
@@ -1728,16 +1731,16 @@ function _rerenderCachedModels() {
         panelHtml += `<label>${_l('Cap','Token cap. Blank uses upstream default.')}<input type="text" class="hwfit-sf" data-field="colibri_cap" value="${esc(sv('colibri_cap', ''))}" placeholder="auto" /></label>`;
         panelHtml += `</div>`;
         panelHtml += `<div class="hwfit-serve-checks hwfit-backend-colibri_glm hwfit-backend-colibri_hy3">`;
-        panelHtml += `<label class="hwfit-sf-cb"><input type="checkbox" class="hwfit-sf" data-field="colibri_direct"${sv('colibri_direct', _colibriEnv.DIRECT === '1') ? ' checked' : ''} /> Direct I/O${_h('O_DIRECT bypasses page cache. Recommended by issue #273 and Hy3 for fast NVMe; benchmark if storage changes.')}</label>`;
-        panelHtml += `<label class="hwfit-sf-cb"><input type="checkbox" class="hwfit-sf" data-field="colibri_pilot_real"${sv('colibri_pilot_real', _colibriEnv.PILOT_REAL === '1') ? ' checked' : ''} /> Real Prefetch${_h('Value-preserving cross-layer prefetch. GLM 5090 profile enables it.')}</label>`;
-        panelHtml += `<label class="hwfit-sf-cb"><input type="checkbox" class="hwfit-sf" data-field="colibri_cache_route"${sv('colibri_cache_route', false) ? ' checked' : ''} /> Experimental Cache Route${_h('Changes MoE routing to prefer resident experts. Off by default to preserve full top-K behavior.')}</label>`;
-        panelHtml += `<label class="hwfit-sf-cb"><input type="checkbox" class="hwfit-sf" data-field="colibri_cuda_mtp"${sv('colibri_cuda_mtp', false) ? ' checked' : ''} /> Experimental CUDA MTP${_h('Off by default upstream under CUDA. Enable only after residency/acceptance benchmarking.')}</label>`;
-        if (_colibriIsGlm) panelHtml += `<label class="hwfit-sf-cb hwfit-backend-colibri_glm"><input type="checkbox" class="hwfit-sf" data-field="colibri_tool_salvage"${sv('colibri_tool_salvage', false) ? ' checked' : ''} /> Tool Salvage${_h('Opt-in recovery for malformed int4 tool calls.')}</label>`;
-        if (!_colibriIsGlm) panelHtml += `<label class="hwfit-sf-cb hwfit-backend-colibri_hy3"><input type="checkbox" class="hwfit-sf" data-field="colibri_verbose"${sv('colibri_verbose', false) ? ' checked' : ''} /> Verbose Engine${_h('Pass Hy3 engine stderr through to the Active console.')}</label>`;
+        panelHtml += `<label class="hwfit-sf-cb"><input type="checkbox" class="hwfit-sf" data-field="colibri_direct"${sv('colibri_direct', _colibriEnv.DIRECT === '1') ? ' checked' : ''} /> Direct I/O${_h('Use O_DIRECT for expert-weight reads, bypassing the page cache. Intended for fast local NVMe; benchmark again if storage changes.')}</label>`;
+        panelHtml += `<label class="hwfit-sf-cb"><input type="checkbox" class="hwfit-sf" data-field="colibri_pilot_real"${sv('colibri_pilot_real', _colibriEnv.PILOT_REAL === '1') ? ' checked' : ''} /> Real Prefetch${_h('Enable value-preserving cross-layer expert prefetch. Included in the GLM RTX 5090 profile.')}</label>`;
+        panelHtml += `<label class="hwfit-sf-cb"><input type="checkbox" class="hwfit-sf" data-field="colibri_cache_route"${sv('colibri_cache_route', false) ? ' checked' : ''} /> Experimental Cache Route${_h('Allow the MoE router to prefer resident experts. Disabled by default because it can change full top-K routing behavior.')}</label>`;
+        panelHtml += `<label class="hwfit-sf-cb"><input type="checkbox" class="hwfit-sf" data-field="colibri_cuda_mtp"${sv('colibri_cuda_mtp', false) ? ' checked' : ''} /> Experimental CUDA MTP${_h('Enable the experimental CUDA MTP path. Keep disabled until acceptance rate and memory residency have been benchmarked for this model.')}</label>`;
+        if (_colibriIsGlm) panelHtml += `<label class="hwfit-sf-cb hwfit-backend-colibri_glm"><input type="checkbox" class="hwfit-sf" data-field="colibri_tool_salvage"${sv('colibri_tool_salvage', false) ? ' checked' : ''} /> Tool Salvage${_h('Attempt recovery when an int4 GLM response contains a malformed tool-call envelope. Disabled by default.')}</label>`;
+        if (!_colibriIsGlm) panelHtml += `<label class="hwfit-sf-cb hwfit-backend-colibri_hy3"><input type="checkbox" class="hwfit-sf" data-field="colibri_verbose"${sv('colibri_verbose', false) ? ' checked' : ''} /> Verbose Engine${_h('Include Hy3 engine diagnostics in the Active console.')}</label>`;
         panelHtml += `</div>`;
         panelHtml += `<div class="hwfit-serve-row hwfit-backend-colibri_glm hwfit-backend-colibri_hy3">`;
-        panelHtml += `<label>${_l('Route J','Sacred true top ranks when experimental cache routing is on.')}<input type="text" class="hwfit-sf" data-field="colibri_route_j" value="${esc(sv('colibri_route_j', '2'))}" /></label>`;
-        panelHtml += `<label>${_l('Route M','Maximum resident-preference rank window when experimental cache routing is on.')}<input type="text" class="hwfit-sf" data-field="colibri_route_m" value="${esc(sv('colibri_route_m', '12'))}" /></label>`;
+        panelHtml += `<label>${_l('Route J','Number of highest-scoring router choices that experimental cache routing may never replace.')}<input type="text" class="hwfit-sf" data-field="colibri_route_j" value="${esc(sv('colibri_route_j', '2'))}" /></label>`;
+        panelHtml += `<label>${_l('Route M','Maximum router-rank window in which experimental cache routing may prefer a resident expert.')}<input type="text" class="hwfit-sf" data-field="colibri_route_m" value="${esc(sv('colibri_route_m', '12'))}" /></label>`;
         panelHtml += `</div>`;
       }
       // Advanced vLLM/SGLang row (KV Cache, Attention, Swap, Env)

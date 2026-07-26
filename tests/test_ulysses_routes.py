@@ -171,7 +171,7 @@ def test_topology_requires_authentication(monkeypatch):
     def gate(_request: Request):
         raise HTTPException(401, "Not authenticated")
 
-    response = _client(monkeypatch, gate).get("/api/ulysses/topology")
+    response = _client(monkeypatch, gate).get("/api/odysseus/topology")
     assert response.status_code == 401
 
 
@@ -179,13 +179,13 @@ def test_topology_requires_admin(monkeypatch):
     def gate(_request: Request):
         raise HTTPException(403, "Admin only")
 
-    response = _client(monkeypatch, gate).get("/api/ulysses/topology")
+    response = _client(monkeypatch, gate).get("/api/odysseus/topology")
     assert response.status_code == 403
 
 
 def test_admin_receives_read_only_topology(monkeypatch):
     response = _client(monkeypatch, lambda _request: None).get(
-        "/api/ulysses/topology"
+        "/api/odysseus/topology"
     )
 
     assert response.status_code == 200
@@ -198,9 +198,9 @@ def test_admin_receives_read_only_topology(monkeypatch):
 def test_admin_receives_sandwich_status_and_can_plan_doctor(monkeypatch):
     client = _client(monkeypatch, lambda _request: None)
 
-    status = client.get("/api/ulysses/sandwich")
+    status = client.get("/api/odysseus/sandwich")
     planned = client.post(
-        "/api/ulysses/sandwich/jobs/plan",
+        "/api/odysseus/sandwich/jobs/plan",
         json={"action": "doctor"},
     )
 
@@ -219,7 +219,7 @@ def test_chroma_persistence_requires_admin(monkeypatch):
         raise HTTPException(403, "Admin only")
 
     response = _client(monkeypatch, gate).get(
-        "/api/ulysses/chroma/persistence"
+        "/api/odysseus/chroma/persistence"
     )
     assert response.status_code == 403
 
@@ -235,7 +235,7 @@ def test_admin_receives_read_only_chroma_persistence(monkeypatch):
         monkeypatch,
         lambda _request: None,
         chroma_report=report,
-    ).get("/api/ulysses/chroma/persistence")
+    ).get("/api/odysseus/chroma/persistence")
 
     assert response.status_code == 200
     assert response.json() == report
@@ -245,7 +245,7 @@ def test_hermes_adoption_requires_admin(monkeypatch):
     def gate(_request: Request):
         raise HTTPException(403, "Admin only")
 
-    response = _client(monkeypatch, gate).get("/api/ulysses/hermes/adoption")
+    response = _client(monkeypatch, gate).get("/api/odysseus/hermes/adoption")
     assert response.status_code == 403
 
 
@@ -259,7 +259,7 @@ def test_admin_receives_read_only_hermes_adoption(monkeypatch):
         monkeypatch,
         lambda _request: None,
         hermes_report=report,
-    ).get("/api/ulysses/hermes/adoption")
+    ).get("/api/odysseus/hermes/adoption")
 
     assert response.status_code == 200
     assert response.json() == report
@@ -270,7 +270,7 @@ def test_colibri_providers_require_admin(monkeypatch):
         raise HTTPException(403, "Admin only")
 
     response = _client(monkeypatch, gate).get(
-        "/api/ulysses/colibri/providers"
+        "/api/odysseus/colibri/providers"
     )
     assert response.status_code == 403
 
@@ -288,7 +288,7 @@ def test_admin_receives_separate_colibri_provider_observations(monkeypatch):
         monkeypatch,
         lambda _request: None,
         colibri_report=report,
-    ).get("/api/ulysses/colibri/providers")
+    ).get("/api/odysseus/colibri/providers")
 
     assert response.status_code == 200
     assert response.json() == report
@@ -303,7 +303,7 @@ def test_admin_can_render_but_not_execute_a_colibri_command(monkeypatch):
         ),
     )
     response = _client(monkeypatch, lambda _request: None).post(
-        "/api/ulysses/colibri/command",
+        "/api/odysseus/colibri/command",
         json={
             "runtime_id": "colibri.glm",
             "settings": {"profile": "rtx5090-high-ram"},
@@ -319,7 +319,7 @@ def test_admin_can_render_but_not_execute_a_colibri_command(monkeypatch):
 
 def test_admin_can_create_a_confirmed_colibri_build_plan(monkeypatch):
     response = _client(monkeypatch, lambda _request: None).post(
-        "/api/ulysses/colibri/jobs/plan",
+        "/api/odysseus/colibri/jobs/plan",
         json={"runtime_id": "colibri.hy3", "action": "build"},
     )
 
@@ -332,7 +332,7 @@ def test_admin_can_create_a_confirmed_colibri_build_plan(monkeypatch):
 
 def test_admin_receives_managed_runtime_categories(monkeypatch):
     response = _client(monkeypatch, lambda _request: None).get(
-        "/api/ulysses/runtimes"
+        "/api/odysseus/runtimes"
     )
 
     assert response.status_code == 200
@@ -341,7 +341,7 @@ def test_admin_receives_managed_runtime_categories(monkeypatch):
 
 def test_admin_can_create_a_managed_runtime_plan(monkeypatch):
     response = _client(monkeypatch, lambda _request: None).post(
-        "/api/ulysses/runtimes/jobs/plan",
+        "/api/odysseus/runtimes/jobs/plan",
         json={"runtime_id": "signal.cli", "action": "start"},
     )
 
@@ -352,7 +352,7 @@ def test_admin_can_create_a_managed_runtime_plan(monkeypatch):
 
 def test_admin_can_create_a_confirmed_hermes_job_plan(monkeypatch):
     response = _client(monkeypatch, lambda _request: None).post(
-        "/api/ulysses/hermes/jobs/plan",
+        "/api/odysseus/hermes/jobs/plan",
         json={"action": "restart"},
     )
 
@@ -364,7 +364,7 @@ def test_admin_can_create_a_confirmed_hermes_job_plan(monkeypatch):
 
 def test_admin_can_plan_a_hermes_owned_mcp_test(monkeypatch):
     response = _client(monkeypatch, lambda _request: None).post(
-        "/api/ulysses/hermes/mcp/jobs/plan",
+        "/api/odysseus/hermes/mcp/jobs/plan",
         json={"action": "test", "name": "camofox-mcp"},
     )
 
@@ -378,7 +378,7 @@ def test_runtime_job_execution_requires_admin(monkeypatch):
         raise HTTPException(403, "Admin only")
 
     response = _client(monkeypatch, gate).post(
-        f"/api/ulysses/jobs/{'a' * 32}/execute",
+        f"/api/odysseus/jobs/{'a' * 32}/execute",
         json={
             "confirmation_token": "token",
             "confirmation_phrase": "RESTART HERMES",
@@ -389,7 +389,7 @@ def test_runtime_job_execution_requires_admin(monkeypatch):
 
 def test_admin_receives_read_only_switchover_readiness(monkeypatch):
     response = _client(monkeypatch, lambda _request: None).get(
-        "/api/ulysses/readiness"
+        "/api/odysseus/readiness"
     )
 
     assert response.status_code == 200

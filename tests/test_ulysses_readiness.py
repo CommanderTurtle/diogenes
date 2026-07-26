@@ -19,7 +19,7 @@ def test_cuda_launcher_requires_an_explicit_venv_override() -> None:
 def test_readiness_blocks_version_and_persistence_gaps(
     monkeypatch, tmp_path: Path
 ) -> None:
-    repo = tmp_path / "Ulysses"
+    repo = tmp_path / "Diogenes"
     prod = tmp_path / "odysseus"
     repo.mkdir()
     prod.mkdir()
@@ -97,7 +97,7 @@ def test_readiness_blocks_version_and_persistence_gaps(
 def test_readiness_never_claims_human_cutover_is_complete(
     monkeypatch, tmp_path: Path
 ) -> None:
-    repo = tmp_path / "Ulysses"
+    repo = tmp_path / "Diogenes"
     prod = tmp_path / "odysseus"
     repo.mkdir()
     prod.mkdir()
@@ -152,7 +152,7 @@ def test_readiness_gates_colibri_and_managed_runtime_contracts(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
-    repo = tmp_path / "Ulysses"
+    repo = tmp_path / "Diogenes"
     prod = tmp_path / "odysseus"
     repo.mkdir()
     prod.mkdir()

@@ -26,7 +26,9 @@
       "root": "${ULYSSES_MICROSERVICES_ROOT}/SEARXNG/searxng",
       "compose": "docker-compose.yml",
       "env_files": [".env"],
-      "git_update": false,
+      "git_update": true,
+      "source_url": "https://github.com/searxng/searxng-docker.git",
+      "source_branch": "master",
       "build_on_update": false,
       "ports": [7070]
     },
@@ -34,7 +36,7 @@
       "id": "chroma.vector",
       "label": "Chroma",
       "category": "docker",
-      "root": "${HOME}/Odysseus/odysseus",
+      "root": "${ULYSSES_REPOSITORY_ROOT}",
       "compose": "docker-compose.yml",
       "env_files": [".env"],
       "compose_services": ["chromadb"],
@@ -51,8 +53,21 @@
       "role": "Shared Odysseus and Hermes browser backend",
       "root": "${ULYSSES_MICROSERVICES_ROOT}/camofox/camofox-browser",
       "package_json": "package.json",
-      "env_files": [],
-      "launch": ["bun", "start"],
+      "env_files": [".env"],
+      "config_files": [{"path": "start.sh", "format": "shell"}],
+      "bootstrap_files": [
+        {
+          "path": ".env",
+          "mode": "0600",
+          "content": "# Camofox browser environment\nCAMOFOX_PORT=9377\n"
+        },
+        {
+          "path": "start.sh",
+          "mode": "0755",
+          "content": "#!/usr/bin/env bash\nset -Eeuo pipefail\nROOT=\"$(cd -- \"$(dirname -- \"${BASH_SOURCE[0]}\")\" && pwd -P)\"\ncd \"$ROOT\"\nif [[ -f .env ]]; then\n  set -a\n  source .env\n  set +a\nfi\nexec bun start\n"
+        }
+      ],
+      "launch": ["bash", "start.sh"],
       "tmux_session": "ulysses-camofox-browser",
       "git_update": true,
       "source_url": "https://github.com/jo-inc/camofox-browser",
@@ -70,9 +85,26 @@
       "env_files": [".env"],
       "config_files": [
         {"path": "config.json", "format": "json"},
-        {"path": "startup.sh", "format": "shell"}
+        {"path": "start.sh", "format": "shell"}
       ],
-      "launch": ["bash", "startup.sh"],
+      "bootstrap_files": [
+        {
+          "path": ".env",
+          "mode": "0600",
+          "content": "# Bifrost host settings\nBIFROST_HOST=0.0.0.0\nBIFROST_PORT=7999\n"
+        },
+        {
+          "path": "start.sh",
+          "mode": "0755",
+          "content": "#!/usr/bin/env bash\nset -Eeuo pipefail\nROOT=\"$(cd -- \"$(dirname -- \"${BASH_SOURCE[0]}\")\" && pwd -P)\"\ncd \"$ROOT\"\nif [[ -f .env ]]; then\n  set -a\n  source .env\n  set +a\nfi\nexec npx -y @maximhq/bifrost@latest -app-dir . -port \"${BIFROST_PORT:-7999}\" -host \"${BIFROST_HOST:-127.0.0.1}\"\n"
+        },
+        {
+          "path": "config.json",
+          "mode": "0600",
+          "content": "{\n  \"$schema\": \"https://www.getbifrost.ai/schema\",\n  \"client\": {\n    \"enforce_auth_on_inference\": true,\n    \"drop_excess_requests\": true\n  },\n  \"providers\": {}\n}\n"
+        }
+      ],
+      "launch": ["bash", "start.sh"],
       "tmux_session": "ulysses-bifrost",
       "package_spec": "@maximhq/bifrost@latest",
       "git_update": false,
@@ -134,9 +166,24 @@
       "capability_group": "messaging",
       "role": "Interactive Signal backend",
       "root": "${ULYSSES_MICROSERVICES_ROOT}/signal-cli",
-      "env_files": [],
-      "config_files": [{"path": "runconfig.sh", "format": "shell"}],
-      "launch": ["bash", "runconfig.sh"],
+      "env_files": [".env"],
+      "config_files": [
+        {"path": "start.sh", "format": "shell"},
+        {"path": "runconfig.sh", "format": "shell"}
+      ],
+      "bootstrap_files": [
+        {
+          "path": ".env",
+          "mode": "0600",
+          "content": "# Used when no legacy runconfig.sh exists.\nSIGNAL_ACCOUNT=\nSIGNAL_HTTP_HOST=127.0.0.1\nSIGNAL_HTTP_PORT=8090\n"
+        },
+        {
+          "path": "start.sh",
+          "mode": "0755",
+          "content": "#!/usr/bin/env bash\nset -Eeuo pipefail\nROOT=\"$(cd -- \"$(dirname -- \"${BASH_SOURCE[0]}\")\" && pwd -P)\"\ncd \"$ROOT\"\nif [[ -f runconfig.sh ]]; then\n  exec bash runconfig.sh\nfi\nif [[ -f .env ]]; then\n  set -a\n  source .env\n  set +a\nfi\n: \"${SIGNAL_ACCOUNT:?Set SIGNAL_ACCOUNT in .env before starting signal-cli}\"\nexec signal-cli --account \"$SIGNAL_ACCOUNT\" daemon --http \"${SIGNAL_HTTP_HOST:-127.0.0.1}:${SIGNAL_HTTP_PORT:-8090}\"\n"
+        }
+      ],
+      "launch": ["bash", "start.sh"],
       "tmux_session": "ulysses-signal-cli",
       "update_module": "src.ulysses_signal_update",
       "update_args": ["--install-user"],

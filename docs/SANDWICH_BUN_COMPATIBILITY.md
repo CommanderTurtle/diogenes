@@ -7,9 +7,9 @@ Captured on 2026-07-25 without installing Node.
 - Installed Bun: `1.3.14` (`0d9b296a`)
 - Sandwich component: `0.2.0`
 - Sandwich compatibility suite: 36 passed
-- Ulysses runtime-management, identity, and audit contract suites: passing
+- Diogenes runtime-management, identity, and audit contract suites: passing
 - Detected installation: `/home/alienl/Hermes/sandwich`
-- Latest full isolated Ulysses run under the installed Bun: 4,890 passed,
+- Latest full isolated Diogenes run under the installed Bun: 4,890 passed,
   3 skipped, 0 failed.
 
 Sandwich now handles:
@@ -23,9 +23,9 @@ Sandwich now handles:
 - fail-loud ambiguous workspace installs.
 
 The component is now bundled at `components/sandwich` with a validated
-`sandwich.component.v1` manifest. Ulysses resolves its doctor and maintenance
+`sandwich.component.v1` manifest. Diogenes resolves its doctor and maintenance
 commands to absolute component paths and supplies a sanitized Bun-only
-environment without inheriting Ulysses's Python virtual environment.
+environment without inheriting Diogenes's Python virtual environment.
 
 Readiness is intentionally strict: `sandwich`, `node`, `npm`, `npx`, `pnpm`,
 and `yarn` must all resolve from the same Sandwich `bin` directory. A system
@@ -33,7 +33,7 @@ Node mixed into `PATH` cannot make an incomplete installation appear ready.
 The live installation currently satisfies that contract and is byte-identical
 to the bundled core component.
 
-Cookbook Dependencies lists Sandwich under Extras. If it is absent, Ulysses
+Cookbook Dependencies lists Sandwich under Extras. If it is absent, Diogenes
 can stage the exact bundled component at
 `${ULYSSES_MICROSERVICES_ROOT}/sandwich` after confirmation. If anything
 divergent already occupies that path, installation refuses to overwrite it.
@@ -42,7 +42,7 @@ Standalone update, rollback, and uninstall remain later lifecycle work.
 
 JavaScript and native tmux services are launched with explicit argv and a
 sanitized environment that removes `VIRTUAL_ENV`, `PYTHONHOME`, and
-`PYTHONPATH`. This prevents an Odysseus/Ulysses Python environment from leaking
+`PYTHONPATH`. This prevents an Odysseus/Diogenes Python environment from leaking
 into Bun, MCP, browser, proxy, or native service processes.
 
 ## Hermes profile
@@ -72,7 +72,7 @@ longer than roughly 6,144 bytes as `NameTooLong`.
 
 The bundled `node` compatibility preload resolves ordinary base64 JavaScript
 data modules without Node. Oversized generated modules are still rejected
-before Bun invokes plugin resolution, so the Ulysses test harnesses now write
+before Bun invokes plugin resolution, so the Diogenes test harnesses now write
 their generated source to temporary `.mjs` files. That is valid in both Bun and
 Node and exercises the same browser source without a canary runtime.
 

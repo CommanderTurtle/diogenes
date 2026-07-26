@@ -29,7 +29,7 @@ Sandwich control command resolution at the user level.
 ## Layout
 
 - `bin/`: the canonical `sandwich` command and compatibility façades
-- `manifest.json`: versioned operations consumed by Ulysses
+- `manifest.json`: versioned operations consumed by Diogenes
 - `lib/`: shared Bun discovery and translation helpers
 - `config/`: managed Bun and shell configuration
 - `scripts/install-user.sh`: previewable user-level installer
@@ -94,7 +94,7 @@ Hermes commit match, rejects unrelated tracked changes, backs up the files it
 will replace, applies the pinned patch and Bun artifacts, performs frozen
 workspace installs, and rebuilds the TUI and Web workspaces. It never restarts
 Hermes or another service. `--allow-active` is an explicit human override, not
-an automatic Ulysses action.
+an automatic Diogenes action.
 
 After a reviewed upstream Hermes update, maintainers can refresh the profile
 against an explicitly selected upstream reference:

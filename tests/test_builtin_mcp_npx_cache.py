@@ -50,13 +50,13 @@ def test_browser_mcp_cache_requirement_can_be_enabled(monkeypatch):
     assert builtin_mcp.BROWSER_MCP_REQUIRE_CACHE is True
 
 
-def test_browser_provider_defaults_to_playwright_for_compatibility(monkeypatch):
+def test_browser_provider_defaults_to_camofox(monkeypatch):
     monkeypatch.delenv("ODYSSEUS_BROWSER_MCP_PROVIDER", raising=False)
     monkeypatch.delenv("CAMOFOX_URL", raising=False)
     builtin_mcp = _load_builtin_mcp(monkeypatch)
 
-    assert builtin_mcp.browser_mcp_provider() == "playwright"
-    assert builtin_mcp._browser_server_config()["provider"] == "playwright"
+    assert builtin_mcp.browser_mcp_provider() == "camofox"
+    assert builtin_mcp._browser_server_config()["provider"] == "camofox"
 
 
 def test_browser_provider_can_select_camofox_without_playwright_args(monkeypatch):
@@ -80,11 +80,11 @@ def test_browser_provider_can_be_disabled_without_uninstalling(monkeypatch):
     assert builtin_mcp._browser_server_config() is None
 
 
-def test_browser_provider_auto_requires_explicit_camofox_url(monkeypatch):
+def test_browser_provider_auto_never_falls_back_to_playwright(monkeypatch):
     monkeypatch.setenv("ODYSSEUS_BROWSER_MCP_PROVIDER", "auto")
     monkeypatch.delenv("CAMOFOX_URL", raising=False)
     builtin_mcp = _load_builtin_mcp(monkeypatch)
-    assert builtin_mcp.browser_mcp_provider() == "playwright"
+    assert builtin_mcp.browser_mcp_provider() == "camofox"
 
     monkeypatch.setenv("CAMOFOX_URL", "http://localhost:9377")
     assert builtin_mcp.browser_mcp_provider() == "camofox"

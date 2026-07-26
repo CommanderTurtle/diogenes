@@ -1,4 +1,4 @@
-"""Admin-only, read-only Ulysses control-plane routes."""
+"""Admin-only, read-only Diogenes control-plane routes."""
 
 from __future__ import annotations
 
@@ -113,7 +113,7 @@ def setup_ulysses_routes(
         [dict, dict, dict, dict, dict], dict
     ] = collect_switchover_readiness,
 ) -> APIRouter:
-    router = APIRouter(prefix="/api/ulysses", tags=["ulysses"])
+    router = APIRouter(prefix="/api/odysseus", tags=["odysseus"])
 
     @router.get("/topology")
     async def get_topology(request: Request) -> dict:
