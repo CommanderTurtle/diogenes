@@ -66,6 +66,7 @@ def test_prepare_is_a_self_contained_runtime_clone(tmp_path):
 
     assert result["ports_started"] == []
     assert result["runtime"]["self_contained"] is True
+    assert _git(runtime, "branch", "--show-current") == "active"
     assert not (runtime / ".env").exists()
     assert not (runtime / "data").is_symlink()
     assert (runtime / "uvsetup.sh").is_file()

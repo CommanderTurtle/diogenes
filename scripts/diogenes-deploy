@@ -14,6 +14,8 @@ from pathlib import Path
 SOURCE_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_RUNTIME_ROOT = SOURCE_ROOT.parent / "Diogenes-prod"
 EXPECTED_UPSTREAM_URL = "https://github.com/odysseus-dev/odysseus.git"
+SOURCE_BRANCH = "dev"
+RUNTIME_BRANCH = "active"
 RUNTIME_LOCAL_PATHS = (".env", ".venv", "data")
 _GITHUB_REMOTE_RE = re.compile(
     r"^(?:https://github\.com/|git@github\.com:|ssh://git@github\.com/)"
@@ -112,9 +114,10 @@ def source_contract(source_root: Path) -> dict:
             "preparing Diogenes-prod"
         )
     branch = _git(source_root, "branch", "--show-current")
-    if branch != "dev":
+    if branch != SOURCE_BRANCH:
         raise DeployError(
-            f"source branch must be dev, found {branch or 'detached HEAD'}"
+            f"source branch must be {SOURCE_BRANCH}, found "
+            f"{branch or 'detached HEAD'}"
         )
     upstream_url = _validated_upstream_url(source_root)
     head = _git(source_root, "rev-parse", "HEAD")
@@ -234,6 +237,7 @@ def prepare_runtime(source_root: Path, runtime_root: Path) -> dict:
         ]
     )
     try:
+        _git(runtime_root, "branch", "-m", RUNTIME_BRANCH)
         _git(runtime_root, "remote", "rename", "origin", "source")
         _git(runtime_root, "remote", "set-url", "--push", "source", "DISABLED")
         _git(
@@ -325,9 +329,10 @@ def update_runtime(source_root: Path, runtime_root: Path) -> dict:
             "preserved and do not make the checkout dirty."
         )
     branch = _git(runtime_root, "branch", "--show-current")
-    if branch != "dev":
+    if branch != RUNTIME_BRANCH:
         raise DeployError(
-            f"runtime branch must be dev, found {branch or 'detached HEAD'}"
+            f"runtime branch must be {RUNTIME_BRANCH}, found "
+            f"{branch or 'detached HEAD'}"
         )
 
     configured_source = _git(

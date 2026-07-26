@@ -6,12 +6,15 @@ convention, not a fixed home-directory requirement:
 | Path | Purpose |
 | --- | --- |
 | `<checkout>` | PR-ready development checkout on `dev` |
-| `<checkout-parent>/Diogenes-prod` | Runtime copy with its own `.env`, `.venv`, `data/`, and Chroma Compose context |
+| `<checkout-parent>/Diogenes-prod` | Runtime copy on local branch `active`, with its own `.env`, `.venv`, `data/`, and Chroma Compose context |
 
 There is no required `Diogenes-build` or `Diogenes-state` directory. A runtime
 copy must behave like a normal clone: all source, defaults, lock contracts,
 Compose files, and setup tooling live in the repository. The ignored runtime
 artifacts stay directly inside `Diogenes-prod`.
+
+`active` is deliberately local: it fast-forwards from the reviewed `dev`
+source but is never treated as a cloud release branch.
 
 ## Prepare the production copy
 
@@ -27,7 +30,8 @@ cd ../Diogenes-prod
 ./uvsetup.sh
 ```
 
-`prepare` makes a local no-hardlink clone of the exact `dev` commit. It starts
+`prepare` makes a local no-hardlink clone of the exact `dev` commit and names
+the runtime branch `active`. It starts
 no port, container, tmux session, model, or web server. It refuses to overwrite
 an existing runtime tree and records the reviewed source/runtime commit in the
 ignored `.diogenes-runtime.json` provenance file.
