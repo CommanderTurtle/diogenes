@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 import re
 import shlex
+from pathlib import Path
 from typing import Any
 
 from src.ulysses_prism import PrismProvider, default_prism_catalog
@@ -15,6 +16,17 @@ class PrismCommandError(ValueError):
 
 
 _GPU_RE = re.compile(r"^\d+(?:,\d+)*$")
+_ENV_ASSIGNMENT_RE = re.compile(
+    r"^([A-Za-z_][A-Za-z0-9_]*)=(.*)$",
+    re.DOTALL,
+)
+_CUSTOM_ENV_RE = re.compile(
+    r"^(?:CUDA_VISIBLE_DEVICES|CUDA_[A-Z0-9_]+|GGML_[A-Z0-9_]+|LLAMA_[A-Z0-9_]+)$"
+)
+_MAX_EDITABLE_COMMAND_BYTES = 32_768
+_MAX_EDITABLE_TOKENS = 512
+_MAX_ENV_ASSIGNMENTS = 64
+_MAX_ENV_VALUE_BYTES = 4_096
 _ALLOWED_SETTINGS = {
     "profile",
     "host",
@@ -277,9 +289,185 @@ def validate_prism_serve_command(
     settings: dict[str, Any],
     submitted: str,
 ) -> str:
-    expected = render_prism_serve_command(model_id, settings)
-    if submitted.strip() != expected:
+    """Validate and canonicalize an operator-editable PrismML command.
+
+    The controls regenerate a known-good command, but the launch textarea keeps
+    vanilla Odysseus' final-command contract.  Current or future llama-server
+    flags may be edited without granting arbitrary shell execution: the command
+    is tokenized and re-quoted, while the managed executable, selected model,
+    optional drafter/projector, and API alias remain catalog-owned.
+    """
+    # Validate the accompanying structured state even when the operator has
+    # edited the final argv.  It remains the persisted source for the controls.
+    build_prism_serve_argv(model_id, settings)
+    provider = _provider()
+    try:
+        model = provider.model(model_id)
+    except ValueError as exc:
+        raise PrismCommandError("unsupported PrismML model") from exc
+    raw = str(submitted or "").strip()
+    if not raw:
+        raise PrismCommandError("PrismML launch command is empty")
+    if len(raw.encode("utf-8")) > _MAX_EDITABLE_COMMAND_BYTES:
+        raise PrismCommandError("PrismML launch command is too large")
+    if "\n" in raw or "\r" in raw or "\x00" in raw:
+        raise PrismCommandError("PrismML launch command must be a single line")
+    try:
+        tokens = shlex.split(raw, posix=True)
+    except ValueError as exc:
         raise PrismCommandError(
-            "PrismML command does not match its structured launch settings"
+            "PrismML launch command could not be parsed"
+        ) from exc
+    if len(tokens) > _MAX_EDITABLE_TOKENS:
+        raise PrismCommandError("PrismML launch command has too many arguments")
+
+    environment: list[tuple[str, str]] = []
+    environment_keys: set[str] = set()
+    cursor = 0
+    while cursor < len(tokens):
+        match = _ENV_ASSIGNMENT_RE.fullmatch(tokens[cursor])
+        if not match:
+            break
+        key, value = match.groups()
+        if not _CUSTOM_ENV_RE.fullmatch(key):
+            raise PrismCommandError(
+                f"unsupported PrismML environment key: {key}"
+            )
+        if key in environment_keys:
+            raise PrismCommandError(
+                f"duplicate PrismML environment assignment: {key}"
+            )
+        if len(value.encode("utf-8")) > _MAX_ENV_VALUE_BYTES:
+            raise PrismCommandError(
+                f"PrismML environment value is too large: {key}"
+            )
+        if key == "CUDA_VISIBLE_DEVICES" and not _GPU_RE.fullmatch(value):
+            raise PrismCommandError(
+                "CUDA_VISIBLE_DEVICES must be a comma-separated device list"
+            )
+        environment.append((key, value))
+        environment_keys.add(key)
+        cursor += 1
+        if len(environment) > _MAX_ENV_ASSIGNMENTS:
+            raise PrismCommandError(
+                "PrismML launch command has too many environment assignments"
+            )
+
+    if cursor >= len(tokens):
+        raise PrismCommandError("PrismML launch command is missing llama-server")
+    executable = Path(tokens[cursor]).expanduser()
+    try:
+        executable_matches = (
+            executable.resolve(strict=False)
+            == provider.server_path.expanduser().resolve(strict=False)
         )
-    return expected
+    except OSError:
+        executable_matches = False
+    if not executable_matches:
+        raise PrismCommandError(
+            "PrismML launch command must use the managed llama-server"
+        )
+    argv = tokens[cursor + 1 :]
+
+    protected: dict[str, list[str]] = {
+        "model": [],
+        "alias": [],
+        "host": [],
+        "port": [],
+        "drafter": [],
+        "projector": [],
+    }
+    spellings = {
+        "-m": "model",
+        "--model": "model",
+        "--alias": "alias",
+        "--host": "host",
+        "--port": "port",
+        "-md": "drafter",
+        "--model-draft": "drafter",
+        "--mmproj": "projector",
+    }
+    index = 0
+    while index < len(argv):
+        token = argv[index]
+        matched: tuple[str, str] | None = None
+        for spelling, key in spellings.items():
+            if token == spelling or token.startswith(f"{spelling}="):
+                matched = (spelling, key)
+                break
+        if matched is None:
+            index += 1
+            continue
+        spelling, key = matched
+        if token == spelling:
+            if index + 1 >= len(argv):
+                raise PrismCommandError(f"{spelling} requires a value")
+            protected[key].append(argv[index + 1])
+            index += 2
+            continue
+        protected[key].append(token.split("=", 1)[1])
+        index += 1
+
+    def _exact_path(values: list[str], expected: Path, *, label: str) -> None:
+        if len(values) != 1:
+            raise PrismCommandError(
+                f"PrismML launch command requires exactly one {label}"
+            )
+        try:
+            supplied = Path(values[0]).expanduser().resolve(strict=False)
+            wanted = expected.expanduser().resolve(strict=False)
+        except OSError as exc:
+            raise PrismCommandError(
+                f"PrismML {label} path could not be resolved"
+            ) from exc
+        if supplied != wanted:
+            raise PrismCommandError(
+                f"PrismML launch command cannot change the selected {label}"
+            )
+
+    _exact_path(
+        protected["model"],
+        provider.model_path(model),
+        label="model",
+    )
+    if protected["alias"] != [model.api_model_id]:
+        raise PrismCommandError(
+            "PrismML launch command requires the selected model's --alias"
+        )
+    if len(protected["host"]) != 1 or protected["host"][0] not in {
+        "127.0.0.1",
+        "0.0.0.0",
+    }:
+        raise PrismCommandError(
+            "PrismML launch host must be loopback or all interfaces"
+        )
+    if len(protected["port"]) != 1:
+        raise PrismCommandError(
+            "PrismML launch command requires exactly one --port"
+        )
+    try:
+        port = int(protected["port"][0])
+    except ValueError as exc:
+        raise PrismCommandError("PrismML launch port is not numeric") from exc
+    if not 1024 <= port <= 65535:
+        raise PrismCommandError("PrismML launch port must be 1024-65535")
+    if protected["drafter"]:
+        _exact_path(
+            protected["drafter"],
+            provider.drafter_path(model),
+            label="drafter",
+        )
+    if protected["projector"]:
+        _exact_path(
+            protected["projector"],
+            provider.mmproj_path(model),
+            label="vision projector",
+        )
+
+    rendered = [
+        f"{key}={shlex.quote(value)}"
+        for key, value in environment
+    ]
+    rendered.append(shlex.quote(str(provider.server_path)))
+    rendered.extend(shlex.quote(token) for token in argv)
+    return " ".join(rendered)

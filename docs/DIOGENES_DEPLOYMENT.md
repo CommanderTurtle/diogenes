@@ -37,22 +37,29 @@ the freshly fetched `upstream/dev` as an ancestor. Linked Git worktrees are
 accepted; uploaded `.git` directories are neither required nor supported as a
 deployment format.
 
-`uvsetup.sh` performs the canonical native setup:
+`uvsetup.sh` is deliberately the same four-step native setup used by an
+operator:
 
-1. confirms the services root (default `~/Hermes`);
-2. creates `.env` from `.env.example` and writes resolved host paths;
-3. creates `.venv` with uv-managed CPython 3.13.12 and `--seed`;
-4. installs `requirements.txt` into that exact interpreter;
-5. runs `setup.py` and `uv pip check`;
-6. creates an isolated `.venv-model-download` for Hugging Face transfers;
-7. reconciles the committed Bun lock with Sandwich's Bun runtime;
-8. prints the manual launch commands.
+1. `uv venv --python 3.13.12 --seed`;
+2. `source .venv/bin/activate`;
+3. `uv pip install -r requirements.txt`;
+4. `uv run setup.py`.
 
-Chroma is not started unless `--with-chroma` is explicitly supplied:
+`setup.py` creates `.env` from the committed `.env.example` only when `.env`
+does not already exist. The example already carries the portable `~/Hermes`
+services-root and Sandwich defaults. Setup never starts Chroma, a model, tmux,
+or any host service. Start Chroma independently when it is wanted:
 
 ```bash
-./uvsetup.sh --with-chroma
+docker compose up -d chromadb
 ```
+
+`startwithuv.sh` is also the tmux environment boundary. At application startup,
+Diogenes pins tmux's server-global `VIRTUAL_ENV` and `PATH` to this checkout's
+`.venv`; every later local session and pane inherits it without sourcing an
+activation script. Host Git, Docker, Bun/Sandwich, and Hermes maintenance never
+runs through tmux—it uses confirmation-gated argv jobs with the virtual
+environment removed.
 
 ## Native runtime defaults
 
@@ -75,7 +82,8 @@ environment. PrismML is a third native engine with its own official
 `PrismML-Eng/llama.cpp` checkout, CUDA build, exact GGUF contracts, port, and
 tmux runtime.
 
-Model transfers also stay outside the serving environment:
+The Cookbook creates its isolated model-transfer environment on demand. A
+standalone transfer can use the same environment after it exists:
 
 ```bash
 .venv-model-download/bin/python download_models.py colibri
@@ -90,8 +98,7 @@ first, and expose a reliable retry mode.
 
 ```bash
 cd /path/to/Diogenes-prod
-source .venv/bin/activate
-uv run --active --no-sync python -m uvicorn app:app --host 0.0.0.0 --port 7000
+./startwithuv.sh
 ```
 
 Chroma remains the Compose service in the same runtime tree:
@@ -112,7 +119,18 @@ the gateway only when explicitly requested.
 
 ## Updating
 
-Develop in `Diogenes`, incorporate `upstream/dev`, review and commit the Diogenes
-changes, then prepare a fresh `Diogenes-prod` after deliberately moving or
-removing the stopped previous runtime. Runtime state is local to that copy; copy
-only the `.env` and `data/` content you intentionally want to preserve.
+Develop in `Diogenes`, incorporate `upstream/dev`, review and commit the
+Diogenes changes, then fast-forward the existing stopped runtime:
+
+```bash
+cd /path/to/Diogenes
+./scripts/diogenes-deploy --fetch-upstream --pretty inspect
+./scripts/diogenes-deploy --pretty update
+```
+
+The update changes tracked source files only. It preserves the runtime's
+existing `.env`, `.venv`, `data/`, and Docker volumes, and it does not stop,
+start, recreate, or update Chroma. Re-run the explicit uv dependency commands
+only when the reviewed source change actually changes Python requirements. The
+update fails closed if those runtime-local paths are symbolic links or if the
+reviewed source revision begins tracking them.

@@ -20,6 +20,10 @@ if [[ ! -x "$SCRIPT_DIR/.venv/bin/python" ]]; then
   echo "Error: $SCRIPT_DIR/.venv/bin/python is missing; run uvsetup.sh first." >&2
   exit 1
 fi
+if [[ ! -x "$SCRIPT_DIR/startwithuv.sh" ]]; then
+  echo "Error: $SCRIPT_DIR/startwithuv.sh is not executable." >&2
+  exit 1
+fi
 
 if [[ -e "$CURRENT_LINK" && ! -L "$CURRENT_LINK" ]]; then
   echo "Error: $CURRENT_LINK exists and is not a symbolic link." >&2

@@ -1,4 +1,4 @@
-"""Admin-only, read-only Diogenes control-plane routes."""
+"""Admin-only Diogenes host-observation and fixed-action routes."""
 
 from __future__ import annotations
 
@@ -9,6 +9,16 @@ from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
 from core.middleware import require_admin
+from src.diogenes_docker_projects import (
+    DockerProjectControl,
+    DockerResourceControl,
+    collect_docker_projects,
+    read_docker_container_log,
+    read_docker_documents,
+    read_docker_log,
+    save_docker_document,
+)
+from src.diogenes_skill_auditor import SkillAuditorControl, collect_skills
 from src.sandwich_runtime import (
     collect_sandwich_status,
     observe_sandwich_installation,
@@ -46,6 +56,7 @@ from src.ulysses_runtime_management import (
 )
 from src.ulysses_sandwich_control import SandwichControl
 from src.ulysses_topology import build_topology_report
+from src.tmux_ownership import list_owned_sessions, shutdown_owned_sessions
 
 
 class HermesAdoptionApplyRequest(BaseModel):
@@ -100,7 +111,24 @@ class ManagedRuntimePlanRequest(BaseModel):
     action: str
 
 
+class DockerProjectPlanRequest(BaseModel):
+    project_id: str
+    action: str
+    services: list[str] = Field(default_factory=list)
+
+
+class DockerResourcePlanRequest(BaseModel):
+    kind: str
+    resource_id: str
+    action: str
+
+
 class SandwichLifecyclePlanRequest(BaseModel):
+    action: str
+
+
+class SkillAuditorPlanRequest(BaseModel):
+    skill_id: str
     action: str
 
 
@@ -108,6 +136,17 @@ class RuntimeDocumentSaveRequest(BaseModel):
     expected_sha256: str | None = None
     content: str
     confirmation_phrase: str
+
+
+class DockerDocumentSaveRequest(BaseModel):
+    expected_sha256: str
+    content: str
+    confirmation_phrase: str
+
+
+class TmuxShutdownRequest(BaseModel):
+    confirmation_phrase: str
+    include_agents: bool = False
 
 
 def _job_http_error(exc: RuntimeJobError) -> HTTPException:
@@ -132,9 +171,19 @@ def setup_ulysses_routes(
     colibri_control_factory: Callable[[], ColibriControl] = ColibriControl,
     prism_control_factory: Callable[[], PrismControl] = PrismControl,
     runtime_control_factory: Callable[[], ManagedRuntimeControl] = ManagedRuntimeControl,
+    docker_control_factory: Callable[
+        [], DockerProjectControl
+    ] = DockerProjectControl,
+    docker_resource_control_factory: Callable[
+        [], DockerResourceControl
+    ] = DockerResourceControl,
     sandwich_control_factory: Callable[[], SandwichControl] = SandwichControl,
+    skill_auditor_control_factory: Callable[
+        [], SkillAuditorControl
+    ] = SkillAuditorControl,
     sandwich_collector: Callable[[], dict] = collect_sandwich_status,
     managed_runtime_collector: Callable[[], dict] = collect_managed_runtimes,
+    docker_project_collector: Callable[[], dict] = collect_docker_projects,
     readiness_collector: Callable[
         [dict, dict, dict, dict, dict], dict
     ] = collect_switchover_readiness,
@@ -158,6 +207,32 @@ def setup_ulysses_routes(
     async def get_chroma_persistence(request: Request) -> dict:
         require_admin(request)
         return await run_in_threadpool(chroma_collector)
+
+    @router.get("/tmux/owned")
+    async def get_owned_tmux_sessions(request: Request) -> dict:
+        require_admin(request)
+        sessions = await run_in_threadpool(list_owned_sessions)
+        return {
+            "schema_version": "diogenes.tmux-inventory.v1",
+            "sessions": [session.as_dict() for session in sessions],
+            "external_policy": (
+                "Only explicitly tagged Diogenes sessions are listed. "
+                "Legacy, adopted, and external tmux sessions are excluded."
+            ),
+        }
+
+    @router.post("/tmux/shutdown")
+    async def shutdown_tmux_sessions(
+        request: Request,
+        body: TmuxShutdownRequest,
+    ) -> dict:
+        require_admin(request)
+        if body.confirmation_phrase != "STOP DIOGENES SESSIONS":
+            raise HTTPException(400, "confirmation phrase mismatch")
+        return await run_in_threadpool(
+            shutdown_owned_sessions,
+            include_agents=body.include_agents,
+        )
 
     @router.get("/hermes/adoption")
     async def get_hermes_adoption(request: Request) -> dict:
@@ -186,6 +261,129 @@ def setup_ulysses_routes(
     async def get_managed_runtimes(request: Request) -> dict:
         require_admin(request)
         return await run_in_threadpool(managed_runtime_collector)
+
+    @router.get("/docker/projects")
+    async def get_docker_projects(request: Request) -> dict:
+        require_admin(request)
+        return await run_in_threadpool(docker_project_collector)
+
+    @router.get("/skills/audit")
+    async def get_skill_audit(request: Request) -> dict:
+        require_admin(request)
+        try:
+            return await run_in_threadpool(collect_skills)
+        except RuntimeJobError as exc:
+            raise HTTPException(400, str(exc)) from exc
+
+    @router.get("/docker/projects/{project_id}/documents")
+    async def get_docker_project_documents(
+        request: Request,
+        project_id: str,
+        reveal: bool = False,
+    ) -> dict:
+        require_admin(request)
+        try:
+            return await run_in_threadpool(
+                read_docker_documents,
+                project_id,
+                reveal=reveal,
+            )
+        except RuntimeJobError as exc:
+            raise HTTPException(400, str(exc)) from exc
+
+    @router.put(
+        "/docker/projects/{project_id}/documents/{document_id}"
+    )
+    async def put_docker_project_document(
+        request: Request,
+        project_id: str,
+        document_id: str,
+        body: DockerDocumentSaveRequest,
+    ) -> dict:
+        require_admin(request)
+        try:
+            return await run_in_threadpool(
+                save_docker_document,
+                project_id,
+                document_id,
+                expected_sha256=body.expected_sha256,
+                content=body.content,
+                confirmation_phrase=body.confirmation_phrase,
+            )
+        except RuntimeJobError as exc:
+            raise _job_http_error(exc) from exc
+
+    @router.get("/docker/projects/{project_id}/log")
+    async def get_docker_project_log(
+        request: Request,
+        project_id: str,
+        service: str | None = None,
+        tail: int = 300,
+        max_chars: int = 30000,
+    ) -> dict:
+        require_admin(request)
+        try:
+            return await run_in_threadpool(
+                read_docker_log,
+                project_id,
+                service=service,
+                tail=tail,
+                max_chars=max_chars,
+            )
+        except RuntimeJobError as exc:
+            raise HTTPException(400, str(exc)) from exc
+
+    @router.get("/docker/containers/{container_id}/log")
+    async def get_docker_container_log(
+        request: Request,
+        container_id: str,
+        tail: int = 300,
+        max_chars: int = 30000,
+    ) -> dict:
+        require_admin(request)
+        try:
+            return await run_in_threadpool(
+                read_docker_container_log,
+                container_id,
+                tail=tail,
+                max_chars=max_chars,
+            )
+        except RuntimeJobError as exc:
+            raise HTTPException(400, str(exc)) from exc
+
+    @router.post("/docker/jobs/plan")
+    async def plan_docker_project(
+        request: Request,
+        body: DockerProjectPlanRequest,
+    ) -> dict:
+        require_admin(request)
+        try:
+            plan, token = await run_in_threadpool(
+                docker_control_factory().create_plan,
+                project_id=body.project_id,
+                action=body.action,
+                services=body.services,
+            )
+            return {"job": plan, "confirmation_token": token}
+        except RuntimeJobError as exc:
+            raise _job_http_error(exc) from exc
+
+    @router.post("/docker/resources/jobs/plan")
+    async def plan_docker_resource(
+        request: Request,
+        body: DockerResourcePlanRequest,
+    ) -> dict:
+        require_admin(request)
+        try:
+            plan, token = await run_in_threadpool(
+                docker_resource_control_factory().create_plan,
+                kind=body.kind,
+                resource_id=body.resource_id,
+                action=body.action,
+            )
+            return {"job": plan, "confirmation_token": token}
+        except RuntimeJobError as exc:
+            raise _job_http_error(exc) from exc
 
     @router.get("/runtimes/{runtime_id}/documents")
     async def get_runtime_documents(
@@ -255,6 +453,22 @@ def setup_ulysses_routes(
         except RuntimeJobError as exc:
             raise _job_http_error(exc) from exc
 
+    @router.post("/skills/jobs/plan")
+    async def plan_skill_auditor_action(
+        request: Request,
+        body: SkillAuditorPlanRequest,
+    ) -> dict:
+        require_admin(request)
+        try:
+            plan, token = await run_in_threadpool(
+                skill_auditor_control_factory().create_plan,
+                skill_id=body.skill_id,
+                action=body.action,
+            )
+            return {"job": plan, "confirmation_token": token}
+        except RuntimeJobError as exc:
+            raise _job_http_error(exc) from exc
+
     @router.post("/sandwich/jobs/plan")
     async def plan_sandwich_lifecycle(
         request: Request,
@@ -290,7 +504,10 @@ def setup_ulysses_routes(
             "schema_version": "ulysses.colibri-command.v1",
             "runtime_id": body.runtime_id,
             "command": command,
-            "editable": False,
+            # The structured controls regenerate this command, but the final
+            # textarea follows vanilla Odysseus and remains operator-editable.
+            # /api/model/serve parses and canonicalizes it before execution.
+            "editable": True,
         }
 
     @router.post("/colibri/jobs/plan")
@@ -330,7 +547,10 @@ def setup_ulysses_routes(
             "runtime_id": "prism.llamacpp",
             "model_id": body.model_id,
             "command": command,
-            "editable": False,
+            # Match the native Cookbook contract: controls regenerate the
+            # command, while /api/model/serve parses and canonicalizes manual
+            # edits before the host job ever sees them.
+            "editable": True,
         }
 
     @router.post("/prism/jobs/plan")

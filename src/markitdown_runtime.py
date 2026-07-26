@@ -2,7 +2,7 @@
 
 markitdown (MIT, Microsoft) converts Office/EPUB documents to Markdown, which is
 more token-efficient and model-legible than a raw text dump. It is **optional**:
-install with `pip install -r requirements-optional.txt`. When absent, callers
+install with `uv pip install --python .venv/bin/python -r requirements-optional.txt`. When absent, callers
 degrade gracefully (chat shows a hint; the RAG indexer skips the file) — the MIT
 core never hard-depends on it. Mirrors the optional-dependency pattern in
 `src/pdf_runtime.py`.
@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 MARKITDOWN_MISSING = (
     "Office/EPUB document extraction requires markitdown. Install optional "
-    "dependencies with `pip install -r requirements-optional.txt`."
+    "dependencies with `uv pip install --python .venv/bin/python -r requirements-optional.txt`."
 )
 
 # Formats routed through markitdown. PDFs stay on pypdf (src/document_processor

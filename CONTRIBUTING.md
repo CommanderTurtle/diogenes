@@ -35,13 +35,12 @@ On GNU/Linux or WSL, use the same uv-managed environment as a native
 Ɗiogenēs deployment:
 
 ```bash
-./uvsetup.sh --skip-javascript --skip-model-downloader
-source .venv/bin/activate
-uv run --active --no-sync python -m uvicorn app:app --host 127.0.0.1 --port 7000
+./uvsetup.sh
+./startwithuv.sh
 ```
 
-The script creates `.env`, an isolated `.venv`, and the application data
-layout, but starts no service. macOS contributors should follow
+The setup creates `.venv`, installs the application requirements, and runs
+`setup.py`; the separate start script launches the web service. macOS contributors should follow
 `docs/setup.md`; Windows is not actively tested outside WSL.
 
 ## Running Checks

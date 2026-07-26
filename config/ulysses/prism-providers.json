@@ -62,12 +62,32 @@
       "profiles": {
         "rtx5090-quality": {
           "label": "RTX 5090 · quality",
-          "description": "Full CUDA offload, Flash Attention, native tool calls, FP16 KV cache, and no experimental drafter.",
+          "description": "131K context, full CUDA offload, Flash Attention, native tool calls, FP16 KV cache, and reusable multi-turn prompt cache.",
           "context": 131072,
           "gpu_layers": 999,
           "parallel": 1,
           "flash_attention": true,
           "kv4": false,
+          "speculative": false
+        },
+        "rtx5090-throughput": {
+          "label": "RTX 5090 · DSpark throughput",
+          "description": "Lossless model-matched DSpark decoding for roughly 1.8–2× decode on CUDA. Single-slot and 64K context; cross-request prompt-cache reuse is intentionally traded for decode speed.",
+          "context": 65536,
+          "gpu_layers": 999,
+          "parallel": 1,
+          "flash_attention": true,
+          "kv4": false,
+          "speculative": true
+        },
+        "rtx5090-full-context": {
+          "label": "RTX 5090 · full 262K",
+          "description": "Full trained context with q4_0 KV cache. The official model measurements put the complete ternary 262K window near 12.8 GB peak; KV4 is a memory setting, not a speed setting.",
+          "context": 262144,
+          "gpu_layers": 999,
+          "parallel": 1,
+          "flash_attention": true,
+          "kv4": true,
           "speculative": false
         },
         "portable": {
@@ -85,6 +105,7 @@
         "repository": "https://github.com/PrismML-Eng/llama.cpp",
         "releases": "https://github.com/PrismML-Eng/llama.cpp/releases",
         "demo": "https://github.com/PrismML-Eng/Bonsai-demo",
+        "agent_guide": "https://github.com/PrismML-Eng/Bonsai-demo/blob/main/AGENTS.md",
         "ternary_weights": "https://huggingface.co/prism-ml/Ternary-Bonsai-27B-gguf",
         "binary_weights": "https://huggingface.co/prism-ml/Bonsai-27B-gguf"
       }

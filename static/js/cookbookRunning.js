@@ -125,6 +125,23 @@ function _downloadOutputLooksActive(task) {
       || /Downloading\s+'[^']+'\s+to\s+'[^']*\.incomplete'/i.test(out);
 }
 
+const _ACTIVE_TASK_STATUSES = new Set([
+  'running',
+  'ready',
+  'queued',
+  'loading',
+  'warming',
+  'starting',
+]);
+
+function _taskIsActive(task) {
+  return !!task && (
+    _ACTIVE_TASK_STATUSES.has(task.status || '')
+    || !!task._serveReady
+    || _downloadOutputLooksActive(task)
+  );
+}
+
 function _canClearTask(task) {
   if (!task || task.status === 'running') return false;
   if (task.type === 'serve' && (task.status === 'ready' || (!['error', 'crashed', 'failed', 'completed'].includes(task.status) && _serveOutputLooksReady(task)))) return false;
@@ -2185,11 +2202,7 @@ export function _renderRunningTab() {
   // Without the output check, a task whose status got stuck at 'done' /
   // 'crashed' (before auto-reconnect catches it) would read as "Running 0"
   // even when the model is actively downloading on the host.
-  const activeCount = tasks.filter(t =>
-    t.status === 'running'
-    || t.status === 'queued'
-    || _downloadOutputLooksActive(t)
-  ).length + _managedServiceSessions.length;
+  const activeCount = tasks.filter(_taskIsActive).length + _managedServiceSessions.length;
   const activeCountHtml = activeCount ? ` <span class="cookbook-tab-count">${activeCount}</span>` : '';
 
   let tabBar = body.querySelector('.cookbook-tabs');
@@ -2324,7 +2337,7 @@ export function _renderRunningTab() {
       const _secDot = (key && allTasks.some(_serveTaskFailed)) ? 'fail' : 'ok';
       const _dotTitle = key ? (_secDot === 'fail' ? 'Server not responding' : 'Reachable') : 'Local (this machine)';
       const _srvColor = _serverColorForTaskGroup(key || 'local', allTasks);
-      sec.insertAdjacentHTML('afterbegin', `<div class="cookbook-section-header${_srvColor ? ' has-server-color' : ''}" data-collapse="${bodyId}"${_serverHeaderStyle(_srvColor)}><svg class="cookbook-section-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="6 9 12 15 18 9"/></svg><span class="cookbook-srv-status ${_secDot}" title="${_dotTitle}" style="flex-shrink:0;position:relative;top:0px;"></span><span class="cookbook-section-title" style="margin:0;">${esc(sg.name)}</span><button class="cookbook-btn cookbook-stop-all-btn" data-stop-server="${esc(key)}" title="Stop all running servers"><svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" stroke="none" aria-hidden="true" style="vertical-align:-1px;margin-right:4px;"><rect x="5" y="5" width="14" height="14" rx="1.5"/></svg>Stop all</button><button class="cookbook-btn cookbook-clear-btn" data-clear-server="${esc(key)}" title="Clear finished tasks"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="vertical-align:-1px;margin-right:4px;"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/></svg>Clear finished</button></div><div id="${bodyId}" class="cookbook-section-body"></div>`);
+      sec.insertAdjacentHTML('afterbegin', `<div class="cookbook-section-header${_srvColor ? ' has-server-color' : ''}" data-collapse="${bodyId}"${_serverHeaderStyle(_srvColor)}><svg class="cookbook-section-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="6 9 12 15 18 9"/></svg><span class="cookbook-srv-status ${_secDot}" title="${_dotTitle}" style="flex-shrink:0;position:relative;top:0px;"></span><span class="cookbook-section-title" style="margin:0;">${esc(sg.name)}</span><button class="cookbook-btn cookbook-stop-all-btn" data-stop-server="${esc(key)}" title="${key && key !== 'local' ? 'Stop every active tracked task on this remote target' : 'Gracefully stop every verified Diogenes-owned local tmux session; legacy and adopted sessions are skipped'}"><svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" stroke="none" aria-hidden="true" style="vertical-align:-1px;margin-right:4px;"><rect x="5" y="5" width="14" height="14" rx="1.5"/></svg>Stop all</button><button class="cookbook-btn cookbook-clear-btn" data-clear-server="${esc(key)}" title="Clear finished tasks"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="vertical-align:-1px;margin-right:4px;"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/></svg>Clear finished</button></div><div id="${bodyId}" class="cookbook-section-body"></div>`);
     }
   }
 
@@ -2378,25 +2391,114 @@ export function _renderRunningTab() {
     });
   });
 
-  // Wire "Stop all" buttons — stop every running task on that server.
+  // Wire "Stop all" buttons. Local shutdown uses server-side ownership tags,
+  // never tmux prefixes or kill-server; remote targets retain the tracked-task
+  // path because their tmux server is outside this host's ownership inventory.
   group.querySelectorAll('[data-stop-server]').forEach(btn => {
     if (btn._bound) return;
     btn._bound = true;
     btn.addEventListener('click', async (e) => {
       e.stopPropagation();  // don't toggle the section collapse
       const host = btn.dataset.stopServer;
-      const running = _loadTasks().filter(t => _taskServerKey(t) === host && t.status === 'running');
+      const running = _loadTasks().filter(t => _taskServerKey(t) === host && _taskIsActive(t));
+      if (!host || host === 'local') {
+        btn.disabled = true;
+        try {
+          const inventoryRes = await fetch('/api/odysseus/tmux/owned', {
+            credentials: 'same-origin',
+          });
+          const inventory = await inventoryRes.json().catch(() => ({}));
+          if (!inventoryRes.ok) throw new Error(inventory.detail || `HTTP ${inventoryRes.status}`);
+          const sessions = inventory.sessions || [];
+          const ordinary = sessions.filter(session => session.kind !== 'agent');
+          const agents = sessions.filter(session => session.kind === 'agent');
+          if (!ordinary.length) {
+            uiModule.showToast(
+              running.length
+                ? 'No verified Diogenes-owned sessions were found. Legacy/adopted sessions must be stopped from their individual cards once.'
+                : 'No verified Diogenes-owned sessions are running.',
+              8000,
+            );
+            return;
+          }
+          const kindSummary = ordinary.reduce((out, session) => {
+            out[session.kind || 'session'] = (out[session.kind || 'session'] || 0) + 1;
+            return out;
+          }, {});
+          const summary = Object.entries(kindSummary)
+            .map(([kind, count]) => `${count} ${kind}`)
+            .join(', ');
+          const agentNote = agents.length
+            ? ` ${agents.length} agent shell${agents.length === 1 ? '' : 's'} will be left running.`
+            : '';
+          if (!await window.styledConfirm(
+            `Gracefully stop ${ordinary.length} verified Diogenes session${ordinary.length === 1 ? '' : 's'} (${summary})?${agentNote}\n\nLegacy, adopted, and external tmux sessions are never touched.`,
+            { title: 'Stop managed sessions', confirmText: 'Stop all', danger: true },
+          )) return;
+          ordinary.forEach(session => {
+            const task = running.find(item => item.sessionId === session.name);
+            if (task) _updateTask(task.sessionId, { _userStopped: true });
+          });
+          const stopRes = await fetch('/api/odysseus/tmux/shutdown', {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              confirmation_phrase: 'STOP DIOGENES SESSIONS',
+              include_agents: false,
+            }),
+          });
+          const result = await stopRes.json().catch(() => ({}));
+          if (!stopRes.ok) throw new Error(result.detail || `HTTP ${stopRes.status}`);
+          const stoppedNames = new Set([
+            ...(result.stopped || []),
+            ...(result.already_gone || []),
+          ].map(item => item.name));
+          running.forEach(task => {
+            if (!stoppedNames.has(task.sessionId)) return;
+            const el = document.querySelector(`.cookbook-task[data-task-id="${task.sessionId}"]`);
+            const outputText = el?.querySelector('.cookbook-output-pre')?.textContent || task.output || '';
+            if (task.type === 'serve' && task.payload) {
+              _removeEndpointByUrl(_endpointUrlForTask(task, outputText));
+            }
+            _updateTask(task.sessionId, { status: 'stopped', _userStopped: true });
+            if (el) _animateOutThenRemove(el, task.sessionId);
+          });
+          const failed = (result.failed || []).length;
+          const skipped = (result.skipped || []).length;
+          uiModule.showToast(
+            `Stopped ${stoppedNames.size} managed session${stoppedNames.size === 1 ? '' : 's'}${failed ? `; ${failed} failed` : ''}${skipped ? `; ${skipped} skipped` : ''}.`,
+            failed ? 9000 : 5000,
+          );
+          setTimeout(() => _refreshManagedServiceSessions(true), 800);
+        } catch (error) {
+          uiModule.showToast(`Managed shutdown failed: ${error?.message || error}`, 9000);
+        } finally {
+          btn.disabled = false;
+        }
+        return;
+      }
+
       if (!running.length) { uiModule.showToast(`Nothing running on ${_serverName(host)}`); return; }
-      if (!await window.styledConfirm(`Stop ${running.length} running task${running.length > 1 ? 's' : ''} on ${_serverName(host)}?`, { confirmText: 'Stop all' })) return;
-      // Mark every task as user-stopped BEFORE firing the kills so that the
-      // download auto-retry logic never restarts a task the user just stopped.
-      running.forEach(t => _updateTask(t.sessionId, { _userStopped: true }));
-      // Reuse each task's own Stop action so it does the full teardown
-      // (send C-c, drop the endpoint, mark stopped) consistently.
-      running.forEach(t => {
-        const el = document.querySelector(`.cookbook-task[data-task-id="${t.sessionId}"]`);
-        el?.querySelector('.cookbook-task-action-stop')?.click();
-      });
+      if (!await window.styledConfirm(`Stop ${running.length} active task${running.length > 1 ? 's' : ''} on ${_serverName(host)}?`, { confirmText: 'Stop all' })) return;
+      for (const task of running) {
+        _updateTask(task.sessionId, { _userStopped: true });
+        const el = document.querySelector(`.cookbook-task[data-task-id="${task.sessionId}"]`);
+        const outputText = el?.querySelector('.cookbook-output-pre')?.textContent || task.output || '';
+        if (task.type === 'serve' && task.payload) {
+          _removeEndpointByUrl(_endpointUrlForTask(task, outputText));
+        }
+        try {
+          await fetch('/api/shell/exec', {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ command: _tmuxGracefulKill(task) }),
+          });
+        } catch {}
+        _updateTask(task.sessionId, { status: 'stopped', _userStopped: true });
+        if (el) _animateOutThenRemove(el, task.sessionId);
+      }
       uiModule.showToast(`Stopped ${running.length} task${running.length > 1 ? 's' : ''} on ${_serverName(host)}`);
     });
   });

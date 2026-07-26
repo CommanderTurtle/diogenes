@@ -26,7 +26,11 @@ try:
     from huggingface_hub import HfApi
     from huggingface_hub.utils import HfHubHTTPError
 except ImportError:
-    print("Install huggingface_hub: pip install huggingface_hub", file=sys.stderr)
+    print(
+        "Install huggingface_hub: "
+        "uv pip install --python .venv/bin/python huggingface_hub",
+        file=sys.stderr,
+    )
     sys.exit(1)
 
 

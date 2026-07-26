@@ -9,10 +9,11 @@ state.
 1. Commit the development checkout on `dev`.
 2. Fetch `upstream/dev` and confirm that it is an ancestor of the candidate.
 3. Run `scripts/diogenes-deploy inspect`; resolve every blocked item.
-4. Prepare a fresh sibling `Diogenes-prod` with `scripts/diogenes-deploy
-   prepare`.
-5. Run `./uvsetup.sh` inside that runtime copy. Add `--with-chroma` only when
-   Chroma should start during setup.
+4. Prepare the sibling `Diogenes-prod` once with `scripts/diogenes-deploy
+   prepare`; use `scripts/diogenes-deploy update` for later fast-forwards.
+5. Run `./uvsetup.sh` for the initial runtime environment. Start Chroma
+   separately with `docker compose up -d chromadb` only when it is wanted;
+   source updates never recreate it.
 6. Run the static, focused, and full validation commands reported by the
    release commit.
 

@@ -115,8 +115,9 @@ def _entrypoint() -> int:
         or not interpreter.is_file()
     ):
         print(
-            "The isolated model downloader is unavailable. Run ./uvsetup.sh "
-            "without --skip-install/--skip-model-downloader, then retry.",
+            "The isolated model downloader is unavailable. Use the model "
+            "download action in Cookbook, which creates .venv-model-download "
+            "without modifying Diogenes's serving environment.",
             file=sys.stderr,
             flush=True,
         )

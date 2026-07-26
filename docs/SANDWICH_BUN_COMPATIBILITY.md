@@ -9,10 +9,12 @@ The default checkout is:
 ${ULYSSES_MICROSERVICES_ROOT}/sandwich
 ```
 
-`uvsetup.sh` writes both `ULYSSES_MICROSERVICES_ROOT` and
-`ULYSSES_SANDWICH_ROOT` to `.env`. With `--with-sandwich`, setup clones the
-standalone repository and runs its confirmed user installer. The Services and
-Cookbook screens use the same path, manifest, Git checkout, and command shims.
+`.env.example` defines `ULYSSES_MICROSERVICES_ROOT` from the current user's
+home and `ULYSSES_SANDWICH_ROOT` beneath it. `setup.py` copies those portable
+defaults into `.env` on first setup and never overwrites an existing `.env`.
+The Services screen detects the checkout directly, offers its separate
+confirmation-gated install/update actions, and uses the same path, manifest,
+Git checkout, and command shims as Cookbook.
 
 A ready installation has one valid `sandwich.component.v1` manifest and Bun
 facades for `node`, `npm`, `npx`, `pnpm`, `yarn`, and `corepack` that all

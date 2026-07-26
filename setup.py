@@ -174,12 +174,12 @@ def create_default_admin():
             # same Apple Silicon mismatch check_arch() guards against, caught here
             # for the rarer case of an x86 wheel inside an arm64 venv.
             print("  [error] bcrypt loaded with the wrong CPU architecture.")
-            print("          Rebuild the venv with an arm64 Python:")
-            print("            rm -rf venv && /opt/homebrew/bin/python3.11 -m venv venv")
-            print("            ./venv/bin/pip install -r requirements.txt")
+            print("          Rebuild the environment with uv and an arm64 Python:")
+            print("            rm -rf .venv && uv venv --python 3.13.12 --seed")
+            print("            uv pip install --python .venv/bin/python -r requirements.txt")
             return "skipped"
         print("  [warn] bcrypt not installed — skipping admin user creation")
-        print("         Run: pip install bcrypt")
+        print("         Run: uv pip install --python .venv/bin/python bcrypt")
         return "skipped"
 
 
@@ -231,6 +231,88 @@ def check_deps():
         print("  [ok] tmux installed")
 
 
+def setup_sandwich():
+    """Offer the optional Bun compatibility layer at its configured host root."""
+
+    services_root = os.path.expanduser(
+        os.path.expandvars(
+            os.getenv("ULYSSES_MICROSERVICES_ROOT") or os.path.join("~", "Hermes")
+        )
+    )
+    sandwich_root = os.path.expanduser(
+        os.path.expandvars(
+            os.getenv("ULYSSES_SANDWICH_ROOT")
+            or os.path.join(services_root, "sandwich")
+        )
+    )
+    executable = os.path.join(sandwich_root, "bin", "sandwich")
+    if os.path.isfile(executable):
+        print(f"  [ok] Sandwich detected at {sandwich_root}")
+        return "exists"
+
+    command = (
+        "git clone https://github.com/CommanderTurtle/sandwich.git "
+        f"{sandwich_root!r} && {os.path.join(sandwich_root, 'install.sh')!r}"
+    )
+    if (
+        not sys.stdin.isatty()
+        or os.getenv("ODYSSEUS_SKIP_SANDWICH_PROMPT", "").lower()
+        in {"1", "true", "yes"}
+    ):
+        print("  [skip] Sandwich is not installed (optional)")
+        print(f"         {command}")
+        return "skipped"
+
+    answer = input(
+        f"  Install optional Sandwich at {sandwich_root}? [y/N]: "
+    ).strip().lower()
+    if answer not in {"y", "yes"}:
+        print("  [skip] Sandwich installation was not requested")
+        return "skipped"
+    if os.path.exists(sandwich_root):
+        try:
+            occupied = bool(os.listdir(sandwich_root))
+        except OSError as exc:
+            print(f"  [error] Cannot inspect Sandwich path: {exc}")
+            return "failed"
+        if occupied:
+            print(
+                "  [error] Sandwich path already contains files; "
+                "nothing was overwritten"
+            )
+            return "failed"
+    git = shutil.which("git")
+    if not git:
+        print("  [error] git is required to install Sandwich")
+        return "failed"
+    os.makedirs(os.path.dirname(sandwich_root), exist_ok=True)
+    cloned = subprocess.run(
+        [
+            git,
+            "clone",
+            "--branch",
+            "main",
+            "--single-branch",
+            "https://github.com/CommanderTurtle/sandwich.git",
+            sandwich_root,
+        ],
+        check=False,
+    )
+    if cloned.returncode:
+        print("  [error] Sandwich clone failed; inspect the destination above")
+        return "failed"
+    install = os.path.join(sandwich_root, "install.sh")
+    arguments = [install]
+    if shutil.which("hermes"):
+        arguments.append("--with-hermes")
+    completed = subprocess.run(arguments, cwd=sandwich_root, check=False)
+    if completed.returncode:
+        print("  [error] Sandwich installer did not complete")
+        return "failed"
+    print("  [ok] Sandwich installed")
+    return "created"
+
+
 def check_arch():
     """Stop early, with guidance, if we're on Apple Silicon but running an
     Intel (x86_64) Python through Rosetta.
@@ -260,12 +342,12 @@ def check_arch():
     print("          Intel (x86_64) Python through Rosetta. Compiled packages would")
     print('          load as the wrong architecture and crash with "incompatible')
     print('          architecture" later on.')
-    print("\n          Rebuild the environment with Homebrew's arm64 Python:")
-    print("            brew install python@3.11          # if you don't have it yet")
-    print("            rm -rf venv")
-    print("            /opt/homebrew/bin/python3.11 -m venv venv")
-    print("            ./venv/bin/pip install -r requirements.txt")
-    print("            ./venv/bin/python setup.py")
+    print("\n          Rebuild the environment with uv's arm64 Python:")
+    print("            brew install uv                  # if you don't have it yet")
+    print("            rm -rf .venv")
+    print("            uv venv --python 3.13.12 --seed")
+    print("            uv pip install --python .venv/bin/python -r requirements.txt")
+    print("            uv run setup.py")
     print("\n          Tip: ./start-macos.sh does all of this with the right Python.\n")
     sys.exit(1)
 
@@ -297,10 +379,13 @@ def main():
     print("\n3. Checking dependencies...")
     check_deps()
 
-    print("\n4. Initializing database...")
+    print("\n4. Optional Bun compatibility...")
+    setup_sandwich()
+
+    print("\n5. Initializing database...")
     init_database()
 
-    print("\n5. Creating initial admin...")
+    print("\n6. Creating initial admin...")
 
     admin_status = "failed"
 
@@ -315,7 +400,7 @@ def main():
     # this, so suppress the manual hint there to avoid a contradictory URL.
     if not os.getenv("ODYSSEUS_SKIP_RUN_HINT"):
         print(f"\nStart the server with:")
-        print("  uv run --active --no-sync python -m uvicorn app:app --host 127.0.0.1 --port 7000")
+        print("  ./startwithuv.sh")
         print(f"\nThen open http://localhost:7000")
 
     # Cleaned, action-focused final instruction strings

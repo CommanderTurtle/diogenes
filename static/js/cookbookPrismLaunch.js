@@ -1,5 +1,6 @@
-// Pure PrismML launch helpers. The browser sends only structured settings to
-// the server; Python owns the canonical executable, model path, and argv.
+// Pure PrismML launch helpers. Python owns the canonical executable and model
+// paths; the generated command remains editable and is parsed/re-quoted by the
+// server before launch.
 
 const PRISM_MODELS = [
   {
@@ -82,7 +83,7 @@ export async function renderPrismCommand(
       payload?.detail || payload?.error || `PrismML command failed: HTTP ${response.status}`
     );
   }
-  if (!payload?.command || payload.editable !== false) {
+  if (!payload?.command || payload.editable !== true) {
     throw new Error('PrismML command response is invalid.');
   }
   return payload.command;

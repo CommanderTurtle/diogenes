@@ -43,12 +43,12 @@ From a reviewed `dev` checkout:
 
 ```bash
 ./uvsetup.sh
-source .venv/bin/activate
-uv run --active --no-sync python -m uvicorn app:app --host 127.0.0.1 --port 7000
+./startwithuv.sh
 ```
 
-`uvsetup.sh` creates the canonical inner virtual environment and starts nothing
-unless explicitly requested. Development and runtime-copy instructions are in
+`uvsetup.sh` creates the Python 3.13.12 inner virtual environment, installs
+`requirements.txt`, and runs the native setup. `startwithuv.sh` starts only the
+web application on `0.0.0.0:7000`. Development and runtime-copy instructions are in
 [`docs/DIOGENES_DEPLOYMENT.md`](docs/DIOGENES_DEPLOYMENT.md).
 
 ## Upstream Docker Quick Start

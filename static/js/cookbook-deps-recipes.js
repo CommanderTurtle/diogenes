@@ -6,12 +6,12 @@
 // generic fallback for that backend.
 
 // Recipes carry two variants per entry:
-//   variants.pip    → install into the configured venv via pip/uv
+//   variants.pip    → install into the configured environment
 //   variants.docker → pull the official container image
 //
-// The renderer prepends a `source <venv>/bin/activate` for the pip variant
-// (env_prefix handles activation for Run). The docker variant skips the
-// activate line — `docker pull` doesn't need a venv.
+// On a local Linux Diogenes checkout the renderer rewrites every Python
+// mutation to `uv pip --python <checkout>/.venv/bin/python`. Remote and
+// platform-specific targets retain their upstream Python installer.
 
 const _RECIPES = [
   // ── vllm ──────────────────────────────────────────────────────────────
@@ -23,7 +23,7 @@ const _RECIPES = [
     label: 'MiniMax M2 / M2.7',
     match: (m) => /minimax[-_]?m\s?2(\.7)?/i.test(m || ''),
     variants: {
-      pip:    { commands: ['uv pip install -U vllm --torch-backend=cu130 --extra-index-url https://wheels.vllm.ai/nightly'] },
+      pip:    { commands: ['uv pip install -U vllm --torch-backend=cu130 --extra-index-url https://wheels.vllm.ai/nightly/cu130'] },
       docker: { commands: ['docker pull vllm/vllm-openai:latest'] },
     },
   },
@@ -33,7 +33,7 @@ const _RECIPES = [
     label: 'Any vLLM model',
     match: () => true,
     variants: {
-      pip:    { commands: ['uv pip install -U vllm --torch-backend=cu130 --extra-index-url https://wheels.vllm.ai/nightly'] },
+      pip:    { commands: ['uv pip install -U vllm --torch-backend=cu130 --extra-index-url https://wheels.vllm.ai/nightly/cu130'] },
       docker: { commands: ['docker pull vllm/vllm-openai:latest'] },
     },
   },
@@ -55,7 +55,7 @@ const _RECIPES = [
     label: 'Any MLX model',
     match: () => true,
     variants: {
-      pip:    { commands: ['python -m pip install -U mlx-lm'] },
+      pip:    { commands: ['uv pip install -U mlx-lm'] },
     },
   },
   {
@@ -63,7 +63,7 @@ const _RECIPES = [
     label: 'mflux-compatible MLX image models',
     match: () => true,
     variants: {
-      pip:    { commands: ['python -m pip install -U mflux fastapi uvicorn python-multipart'] },
+      pip:    { commands: ['uv pip install -U mflux fastapi uvicorn python-multipart'] },
     },
   },
   {
@@ -71,7 +71,7 @@ const _RECIPES = [
     label: 'MLX image models (Boogu)',
     match: () => true,
     variants: {
-      pip:    { commands: ['python -m pip install -U git+https://github.com/xocialize/boogu-image-mlx.git fastapi uvicorn python-multipart pillow'] },
+      pip:    { commands: ['uv pip install -U git+https://github.com/xocialize/boogu-image-mlx.git fastapi uvicorn python-multipart pillow'] },
     },
   },
   {
@@ -79,7 +79,7 @@ const _RECIPES = [
     label: 'MLX image models (HiDream)',
     match: () => true,
     variants: {
-      pip:    { commands: ['python -m pip install -U fastapi uvicorn python-multipart mlx mlx-vlm "transformers>=4.57.0,<6.0" "huggingface_hub[hf_xet]" safetensors numpy pillow tqdm sentencepiece'] },
+      pip:    { commands: ['uv pip install -U fastapi uvicorn python-multipart mlx mlx-vlm "transformers>=4.57.0,<6.0" "huggingface_hub[hf_xet]" safetensors numpy pillow tqdm sentencepiece'] },
     },
   },
   {
@@ -89,7 +89,7 @@ const _RECIPES = [
     variants: {
       pip: {
         commands: [
-          'python -m pip install -U fastapi uvicorn python-multipart pillow huggingface_hub',
+          'uv pip install -U fastapi uvicorn python-multipart pillow huggingface_hub',
           'BRIDGE_DIR="${ODYSSEUS_ROOT:-$PWD}/swift/odysseus-mlx-image-bridge"; test -d "$BRIDGE_DIR" || { echo "Run this from an Odysseus checkout that includes swift/odysseus-mlx-image-bridge, or set ODYSSEUS_ROOT=/path/to/odysseus."; exit 1; }',
           'BRIDGE_DIR="${ODYSSEUS_ROOT:-$PWD}/swift/odysseus-mlx-image-bridge"; cd "$BRIDGE_DIR" && swift build -c release --product odysseus-mlx-inpaint',
           'BRIDGE_DIR="${ODYSSEUS_ROOT:-$PWD}/swift/odysseus-mlx-image-bridge"; mkdir -p "$HOME/.local/bin" && cp "$BRIDGE_DIR/.build/release/odysseus-mlx-inpaint" "$HOME/.local/bin/odysseus-mlx-inpaint"',
@@ -105,7 +105,7 @@ const _RECIPES = [
     variants: {
       pip: {
         commands: [
-          'python -m pip install -U fastapi uvicorn python-multipart pillow huggingface_hub',
+          'uv pip install -U fastapi uvicorn python-multipart pillow huggingface_hub',
           'BRIDGE_DIR="${ODYSSEUS_ROOT:-$PWD}/swift/odysseus-mlx-image-bridge"; test -d "$BRIDGE_DIR" || { echo "Run this from an Odysseus checkout that includes swift/odysseus-mlx-image-bridge, or set ODYSSEUS_ROOT=/path/to/odysseus."; exit 1; }',
           'BRIDGE_DIR="${ODYSSEUS_ROOT:-$PWD}/swift/odysseus-mlx-image-bridge"; cd "$BRIDGE_DIR" && swift build -c release --product odysseus-mlx-colorize',
           'BRIDGE_DIR="${ODYSSEUS_ROOT:-$PWD}/swift/odysseus-mlx-image-bridge"; mkdir -p "$HOME/.local/bin" && cp "$BRIDGE_DIR/.build/release/odysseus-mlx-colorize" "$HOME/.local/bin/odysseus-mlx-colorize"',
@@ -121,7 +121,7 @@ const _RECIPES = [
     label: 'Any Diffusers image model',
     match: () => true,
     variants: {
-      pip:    { commands: ['python -m pip install -U "diffusers[torch]" torchvision accelerate scipy python-multipart'] },
+      pip:    { commands: ['uv pip install -U "diffusers[torch]" torchvision accelerate scipy python-multipart'] },
     },
   },
   {
@@ -129,7 +129,7 @@ const _RECIPES = [
     label: 'Latest Diffusers from Git',
     match: () => true,
     variants: {
-      pip:    { commands: ['python -m pip install -U git+https://github.com/huggingface/diffusers.git torchvision accelerate scipy python-multipart'] },
+      pip:    { commands: ['uv pip install -U git+https://github.com/huggingface/diffusers.git torchvision accelerate scipy python-multipart'] },
     },
   },
   {
@@ -137,7 +137,7 @@ const _RECIPES = [
     label: 'SAM object mask tools',
     match: () => true,
     variants: {
-      pip:    { commands: ['python -m pip install -U torch torchvision transformers accelerate pillow'] },
+      pip:    { commands: ['uv pip install -U torch torchvision transformers accelerate pillow'] },
     },
   },
 

@@ -15,6 +15,7 @@
       "default_port": 8642,
       "model_id": "glm-5.2-colibri",
       "weight_repo": "mastouri/GLM-5.2-colibri-int4-g64-with-int8-mtp",
+      "source_inspected_commit": "d78f6e9a7fe2401b29990c75fab66d720e6ecd0c",
       "model_variants": [
         {
           "id": "gs64-int8-mtp",
@@ -36,8 +37,8 @@
           "quality_note": "Current upstream-recommended group-size-64 container; preserves substantially more quality than legacy per-row int4."
         }
       ],
-      "minimum_commit": "5f167e5964f40a3a62d4cadb911543ce0f15b49b",
-      "minimum_commit_reason": "Merged PR #274: single-GPU decode pipeline and expert-cache reserve fix",
+      "minimum_commit": "d78f6e9a7fe2401b29990c75fab66d720e6ecd0c",
+      "minimum_commit_reason": "Current dev contract inspected 2026-07-26: grouped-int4 CUDA correctness, explicit expert-tier budgeting, corrected pilot cache guard, tool salvage, and KV-slot conversation affinity",
       "cli_path": "c/coli",
       "engine_path": "c/colibri",
       "setup_path": "c/setup.sh",
@@ -73,28 +74,189 @@
       ],
       "supports_tools": true,
       "model_type": "llm",
-      "default_profile": "rtx5090-high-ram",
+      "default_profile": "rtx5090-faithful-conservative",
       "profiles": {
         "rtx5090-high-ram": {
-          "label": "RTX 5090 · high RAM",
-          "description": "Correctness-first single-GPU profile derived from issue #273 and current dev settings. Experimental expert caps, cache routing, and CUDA MTP remain off.",
+          "label": "RTX 5090 · faithful 32K",
+          "description": "Long-context exact-routing profile for the grouped-int4 checkpoint. CUDA dense/attention stays resident, MTP and cache-aware routing stay off, and the expert request leaves room for the measured 12.48 GB dense set plus runtime reserve.",
+          "ram": "56",
+          "auto_tier": true,
+          "ctx": "32768",
+          "gpu": "0",
+          "vram": "17",
+          "repin": "16",
+          "policy": "quality",
+          "env": {
+            "COLI_CUDA": "1",
+            "CUDA_DENSE": "1",
+            "COLI_CUDA_ATTN": "1",
+            "CUDA_RESERVE_GB": "1",
+            "DIRECT": "1",
+            "PIPE": "1",
+            "PIPE_WORKERS": "16",
+            "PREFETCH": "1",
+            "EXPERT_BUDGET": "0",
+            "CACHE_ROUTE": "0",
+            "DRAFT": "0",
+            "COLI_TOOL_SALVAGE": "1"
+          }
+        },
+        "rtx5090-faithful-conservative": {
+          "label": "RTX 5090 · faithful throughput",
+          "description": "Default 5090 profile: exact top-8 routing, 4K KV allocation, grouped-int4 CUDA dense/attention, direct Gen5-NVMe I/O, 16 loaders, learned re-pinning, and no speculation. This combines the current grouped-checkpoint guidance with the WSL2/5090 and Gen5/5090 reports without changing model routing.",
           "ram": "56",
           "auto_tier": true,
           "ctx": "4096",
           "gpu": "0",
-          "vram": "0",
+          "vram": "17",
+          "repin": "16",
+          "policy": "quality",
+          "env": {
+            "COLI_CUDA": "1",
+            "CUDA_DENSE": "1",
+            "COLI_CUDA_ATTN": "1",
+            "CUDA_RESERVE_GB": "1",
+            "DIRECT": "1",
+            "PIPE": "1",
+            "PIPE_WORKERS": "16",
+            "PREFETCH": "1",
+            "EXPERT_BUDGET": "0",
+            "CACHE_ROUTE": "0",
+            "DRAFT": "0",
+            "COLI_TOOL_SALVAGE": "1"
+          }
+        },
+        "rtx5090-balanced-route": {
+          "label": "RTX 5090 · balanced routing",
+          "description": "Approximate-routing throughput profile from the current 5080/Blackwell report (J3/M16/alpha 0.5). It may replace lower-ranked experts and is not output-equivalent to faithful routing.",
+          "ram": "56",
+          "auto_tier": true,
+          "ctx": "4096",
+          "gpu": "0",
+          "vram": "17",
+          "repin": "16",
           "policy": "balanced",
           "env": {
             "COLI_CUDA": "1",
             "CUDA_DENSE": "1",
             "COLI_CUDA_ATTN": "1",
-            "COLI_CUDA_PIPE": "2",
+            "CUDA_RESERVE_GB": "1",
             "DIRECT": "1",
             "PIPE": "1",
-            "PIPE_WORKERS": "8",
-            "PILOT_REAL": "1",
+            "PIPE_WORKERS": "16",
+            "PREFETCH": "1",
             "EXPERT_BUDGET": "0",
-            "CACHE_ROUTE": "0"
+            "CACHE_ROUTE": "1",
+            "ROUTE_J": "3",
+            "ROUTE_M": "16",
+            "ROUTE_ALPHA": "0.5",
+            "DRAFT": "0",
+            "COLI_TOOL_SALVAGE": "1"
+          }
+        },
+        "rtx5090-aggressive-route": {
+          "label": "RTX 5090 · aggressive routing",
+          "description": "Explicit experimental throughput profile (J2/M24/alpha 0.5). It changes MoE routing more aggressively; use only when speed is worth reduced fidelity.",
+          "ram": "56",
+          "auto_tier": true,
+          "ctx": "4096",
+          "gpu": "0",
+          "vram": "17",
+          "repin": "16",
+          "policy": "experimental-fast",
+          "env": {
+            "COLI_CUDA": "1",
+            "CUDA_DENSE": "1",
+            "COLI_CUDA_ATTN": "1",
+            "CUDA_RESERVE_GB": "1",
+            "DIRECT": "1",
+            "PIPE": "1",
+            "PIPE_WORKERS": "16",
+            "PREFETCH": "1",
+            "EXPERT_BUDGET": "0",
+            "CACHE_ROUTE": "1",
+            "ROUTE_J": "2",
+            "ROUTE_M": "24",
+            "ROUTE_ALPHA": "0.5",
+            "DRAFT": "0",
+            "COLI_TOOL_SALVAGE": "1"
+          }
+        },
+        "rtx5090-mtp-trial": {
+          "label": "RTX 5090 · MTP trial",
+          "description": "Faithful routing with the checkpoint’s included int8 MTP head enabled. Current CUDA measurements can regress unless expert-cache hit rate is near 99%; compare its accepted-draft telemetry before keeping it.",
+          "ram": "56",
+          "auto_tier": true,
+          "ctx": "4096",
+          "gpu": "0",
+          "vram": "17",
+          "repin": "16",
+          "policy": "quality",
+          "env": {
+            "COLI_CUDA": "1",
+            "CUDA_DENSE": "1",
+            "COLI_CUDA_ATTN": "1",
+            "COLI_CUDA_MTP": "1",
+            "CUDA_RESERVE_GB": "1",
+            "DIRECT": "1",
+            "PIPE": "1",
+            "PIPE_WORKERS": "16",
+            "PREFETCH": "1",
+            "EXPERT_BUDGET": "0",
+            "CACHE_ROUTE": "0",
+            "COLI_TOOL_SALVAGE": "1"
+          }
+        },
+        "rtx5090-pipe2-trial": {
+          "label": "RTX 5090 · pipe2 A/B",
+          "description": "Exact-routing 4K A/B for issue #273’s single-token resident CUDA pipeline. Current grouped-checkpoint defaults do not require pipe2, so this remains an explicit comparison rather than a hidden default.",
+          "ram": "56",
+          "auto_tier": true,
+          "ctx": "4096",
+          "gpu": "0",
+          "vram": "17",
+          "repin": "16",
+          "policy": "quality",
+          "env": {
+            "COLI_CUDA": "1",
+            "CUDA_DENSE": "1",
+            "COLI_CUDA_ATTN": "1",
+            "COLI_CUDA_PIPE": "2",
+            "CUDA_RESERVE_GB": "1",
+            "DIRECT": "1",
+            "PIPE": "1",
+            "PIPE_WORKERS": "16",
+            "PREFETCH": "1",
+            "EXPERT_BUDGET": "0",
+            "CACHE_ROUTE": "0",
+            "DRAFT": "0",
+            "COLI_TOOL_SALVAGE": "1"
+          }
+        },
+        "rtx5090-uring-trial": {
+          "label": "RTX 5090 · io_uring A/B",
+          "description": "Exact-routing 4K profile with GLM's separate Linux io_uring expert reader enabled. It is independent from CUDA pipe2 and remains an explicit local-NVMe comparison.",
+          "ram": "56",
+          "auto_tier": true,
+          "ctx": "4096",
+          "gpu": "0",
+          "vram": "17",
+          "repin": "16",
+          "policy": "quality",
+          "env": {
+            "COLI_CUDA": "1",
+            "CUDA_DENSE": "1",
+            "COLI_CUDA_ATTN": "1",
+            "CUDA_RESERVE_GB": "1",
+            "DIRECT": "1",
+            "URING": "1",
+            "PIPE": "1",
+            "PIPE_WORKERS": "16",
+            "PREFETCH": "1",
+            "EXPERT_BUDGET": "0",
+            "CACHE_ROUTE": "0",
+            "DRAFT": "0",
+            "COLI_TOOL_SALVAGE": "1"
           }
         },
         "upstream-auto": {
@@ -113,7 +275,14 @@
         "repository": "https://github.com/JustVugg/colibri",
         "api": "https://github.com/JustVugg/colibri/blob/dev/docs/api.md",
         "cuda": "https://github.com/JustVugg/colibri/blob/dev/docs/cuda.md",
-        "optimization": "https://github.com/JustVugg/colibri/issues/273"
+        "environment": "https://github.com/JustVugg/colibri/blob/dev/docs/ENVIRONMENT.md",
+        "optimization": "https://github.com/JustVugg/colibri/issues/273",
+        "expert_budget_warning": "https://github.com/JustVugg/colibri/issues/303",
+        "single_5090": "https://github.com/JustVugg/colibri/issues/120",
+        "wsl_5090": "https://github.com/JustVugg/colibri/issues/101",
+        "grouped_blackwell_matrix": "https://github.com/JustVugg/colibri/issues/467",
+        "cuda_budget_fix": "https://github.com/JustVugg/colibri/pull/495",
+        "pilot_guard_fix": "https://github.com/JustVugg/colibri/pull/497"
       }
     },
     {
@@ -130,6 +299,7 @@
       "default_port": 8643,
       "model_id": "hy3-colibri",
       "weight_repo": "UnderstandLing/Hy3-colibri-int4",
+      "source_inspected_commit": "08f8439ebfe1994b607aed6adf857c80e8894c4c",
       "model_variants": [
         {
           "id": "int4-int8-mtp",
@@ -229,29 +399,115 @@
       "default_profile": "rtx5090-high-ram",
       "profiles": {
         "rtx5090-high-ram": {
-          "label": "RTX 5090 · high RAM",
-          "description": "5090 profile using the upstream auto-tier to size both RAM and free VRAM at launch, with direct I/O, io_uring, and the planner-recommended single-GPU CUDA pipeline.",
-          "ram": "0",
+          "label": "RTX 5090 · faithful best",
+          "description": "Accuracy-first Hy3 profile: 56 GB host tier, 28 GB expert VRAM tier, float KV with CUDA attention, exact IDOT safeguard, and no speculative drafting.",
+          "ram": "56",
           "auto_tier": true,
           "ctx": "4096",
           "gpu": "0",
-          "vram": "0",
-          "verbose": true,
+          "vram": "28",
+          "policy": "quality",
+          "env": {
+            "COLI_CUDA": "1",
+            "CUDA_DENSE": "0",
+            "CUDA_ATTN": "1",
+            "DIRECT": "1",
+            "PIPE": "2",
+            "PIPE_WORKERS": "16",
+            "IDOT": "0",
+            "DRAFT": "0",
+            "COLI_TOOL_SALVAGE": "1"
+          }
+        },
+        "rtx5090-dense-attention": {
+          "label": "RTX 5090 · dense + attention",
+          "description": "Keeps Hy3 dense layers and float-KV attention on CUDA with a 24 GB expert VRAM tier. Compare with faithful best: expert-cache hit rate determines which wins.",
+          "ram": "56",
+          "auto_tier": true,
+          "ctx": "4096",
+          "gpu": "0",
+          "vram": "24",
+          "policy": "quality",
+          "env": {
+            "COLI_CUDA": "1",
+            "CUDA_DENSE": "1",
+            "CUDA_ATTN": "1",
+            "DIRECT": "1",
+            "PIPE": "2",
+            "PIPE_WORKERS": "16",
+            "IDOT": "0",
+            "DRAFT": "0",
+            "COLI_TOOL_SALVAGE": "1"
+          }
+        },
+        "rtx5090-long-context": {
+          "label": "RTX 5090 · long-context KV-I8",
+          "description": "Compressed-KV profile for longer contexts. KV-I8 reduces KV memory and intentionally disables the float-KV CUDA attention path; it is a memory/quality trade-off.",
+          "ram": "56",
+          "auto_tier": true,
+          "ctx": "32768",
+          "gpu": "0",
+          "vram": "28",
+          "policy": "quality",
+          "env": {
+            "COLI_CUDA": "1",
+            "CUDA_DENSE": "0",
+            "CUDA_ATTN": "0",
+            "KV_I8": "1",
+            "DIRECT": "1",
+            "PIPE": "2",
+            "PIPE_WORKERS": "16",
+            "IDOT": "0",
+            "DRAFT": "0",
+            "COLI_TOOL_SALVAGE": "1"
+          }
+        },
+        "rtx5090-mtp-trial": {
+          "label": "RTX 5090 · MTP trial",
+          "description": "Uses the checkpoint’s included int8 MTP shards with Hy3’s current three-token draft path. The engine may self-disable after persistently low acceptance; compare telemetry before keeping it.",
+          "ram": "56",
+          "auto_tier": true,
+          "ctx": "4096",
+          "gpu": "0",
+          "vram": "28",
+          "policy": "quality",
+          "env": {
+            "COLI_CUDA": "1",
+            "CUDA_DENSE": "0",
+            "CUDA_ATTN": "1",
+            "DIRECT": "1",
+            "PIPE": "2",
+            "PIPE_WORKERS": "16",
+            "IDOT": "0",
+            "DRAFT": "3",
+            "TREE_DRAFT": "1",
+            "COLI_TOOL_SALVAGE": "1"
+          }
+        },
+        "rtx5090-native-idot": {
+          "label": "RTX 5090 · native IDOT",
+          "description": "Official Hy3 integer-dot fast path with the same 56 GB RAM and 28 GB expert tier. Use this for maximum native throughput; switch back to faithful best when byte-level f32-kernel comparison matters.",
+          "ram": "56",
+          "auto_tier": true,
+          "ctx": "4096",
+          "gpu": "0",
+          "vram": "28",
           "policy": "balanced",
           "env": {
             "COLI_CUDA": "1",
+            "CUDA_DENSE": "0",
             "CUDA_ATTN": "1",
-            "COLI_CUDA_PIPE": "1",
             "DIRECT": "1",
             "PIPE": "2",
-            "PIPE_WORKERS": "8",
-            "EXPERT_BUDGET": "0",
-            "CACHE_ROUTE": "0"
+            "PIPE_WORKERS": "16",
+            "IDOT": "1",
+            "DRAFT": "0",
+            "COLI_TOOL_SALVAGE": "1"
           }
         },
         "upstream-comfortable": {
           "label": "Upstream comfortable",
-          "description": "The official README's 56 GB RAM / 16 GB VRAM planning profile without optional I/O overrides.",
+          "description": "The official README’s 56 GB RAM / 16 GB expert VRAM planning profile without Diogenes tuning overrides.",
           "ram": "56",
           "auto_tier": true,
           "ctx": "4096",
@@ -263,7 +519,8 @@
       },
       "documentation": {
         "repository": "https://github.com/ErikTromp/colibri-hy3",
-        "weights": "https://huggingface.co/UnderstandLing/Hy3-colibri-int4"
+        "weights": "https://huggingface.co/UnderstandLing/Hy3-colibri-int4",
+        "glm_pipeline_reference": "https://github.com/JustVugg/colibri/issues/273"
       }
     }
   ]

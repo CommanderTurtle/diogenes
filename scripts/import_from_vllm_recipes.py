@@ -33,7 +33,7 @@ try:
     import httpx
     import yaml
 except ImportError:
-    print("pip install httpx PyYAML", file=sys.stderr)
+    print("uv pip install --python .venv/bin/python httpx PyYAML", file=sys.stderr)
     sys.exit(1)
 
 try:

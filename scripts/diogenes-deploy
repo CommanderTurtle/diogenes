@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Prepare a self-contained Diogenes-prod checkout without starting it."""
+"""Prepare or fast-forward a self-contained Diogenes-prod checkout."""
 
 from __future__ import annotations
 
@@ -14,6 +14,7 @@ from pathlib import Path
 SOURCE_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_RUNTIME_ROOT = SOURCE_ROOT.parent / "Diogenes-prod"
 EXPECTED_UPSTREAM_URL = "https://github.com/odysseus-dev/odysseus.git"
+RUNTIME_LOCAL_PATHS = (".env", ".venv", "data")
 _GITHUB_REMOTE_RE = re.compile(
     r"^(?:https://github\.com/|git@github\.com:|ssh://git@github\.com/)"
     r"([^/\s]+)/([^/\s]+)/?$",
@@ -176,9 +177,18 @@ def fetch_upstream(source_root: Path) -> None:
     )
 
 
+def _linked_runtime_state(runtime_root: Path) -> list[str]:
+    return [
+        path
+        for path in RUNTIME_LOCAL_PATHS
+        if (runtime_root / path).is_symlink()
+    ]
+
+
 def runtime_contract(runtime_root: Path) -> dict:
     present = runtime_root.is_dir()
     git_present = (runtime_root / ".git").is_dir()
+    linked_runtime_state = _linked_runtime_state(runtime_root)
     return {
         "root": str(runtime_root),
         "present": present,
@@ -194,9 +204,10 @@ def runtime_contract(runtime_root: Path) -> dict:
         "uvsetup_present": (runtime_root / "uvsetup.sh").is_file(),
         "self_contained": (
             present
-            and not (runtime_root / ".env").is_symlink()
-            and not (runtime_root / "data").is_symlink()
+            and git_present
+            and not linked_runtime_state
         ),
+        "linked_runtime_state": linked_runtime_state,
     }
 
 
@@ -275,6 +286,163 @@ def prepare_runtime(source_root: Path, runtime_root: Path) -> dict:
     }
 
 
+def update_runtime(source_root: Path, runtime_root: Path) -> dict:
+    """Fast-forward production code while preserving all runtime-local state."""
+    provenance = source_contract(source_root)
+    if not runtime_root.is_dir():
+        raise DeployError(
+            f"runtime target does not exist: {runtime_root}; use prepare first"
+        )
+    if runtime_root.resolve() == source_root.resolve():
+        raise DeployError("runtime target cannot be the development checkout")
+    if (
+        _git(
+            runtime_root,
+            "rev-parse",
+            "--is-inside-work-tree",
+            check=False,
+        )
+        != "true"
+    ):
+        raise DeployError(f"runtime is not a Git checkout: {runtime_root}")
+    linked_runtime_state = _linked_runtime_state(runtime_root)
+    if linked_runtime_state:
+        raise DeployError(
+            "runtime-local state must remain inside the production checkout; "
+            "remove these symbolic links before updating: "
+            + ", ".join(linked_runtime_state)
+        )
+    dirty = _git(
+        runtime_root,
+        "status",
+        "--porcelain",
+        "--untracked-files=normal",
+    )
+    if dirty:
+        raise DeployError(
+            "runtime checkout has source changes; commit or remove them before "
+            "updating. Ignored .env, .venv, data, and container volumes are "
+            "preserved and do not make the checkout dirty."
+        )
+    branch = _git(runtime_root, "branch", "--show-current")
+    if branch != "dev":
+        raise DeployError(
+            f"runtime branch must be dev, found {branch or 'detached HEAD'}"
+        )
+
+    configured_source = _git(
+        runtime_root,
+        "config",
+        "--get",
+        "remote.source.url",
+        check=False,
+    )
+    if not configured_source:
+        raise DeployError(
+            "runtime remote 'source' is not configured; prepare the runtime "
+            "from the reviewed development checkout"
+        )
+    try:
+        configured_source_root = Path(configured_source).expanduser().resolve()
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise DeployError(
+            f"runtime remote 'source' is not a valid local path: "
+            f"{configured_source}"
+        ) from exc
+    if configured_source_root != source_root.resolve():
+        raise DeployError(
+            "runtime remote 'source' must point at the reviewed development "
+            f"checkout {source_root.resolve()}; found "
+            f"{configured_source or 'not configured'}"
+        )
+
+    _run(
+        [
+            "git",
+            "-C",
+            str(runtime_root),
+            "fetch",
+            "--prune",
+            "source",
+            "+refs/heads/dev:refs/remotes/source/dev",
+        ]
+    )
+    target = _git(runtime_root, "rev-parse", "refs/remotes/source/dev")
+    if target != provenance["head"]:
+        raise DeployError(
+            "runtime fetched a source/dev revision that does not match the "
+            "reviewed development checkout"
+        )
+    tracked_runtime_state = [
+        path
+        for path in _git(
+            runtime_root,
+            "ls-tree",
+            "-r",
+            "--name-only",
+            target,
+            "--",
+            *RUNTIME_LOCAL_PATHS,
+        ).splitlines()
+        if path
+    ]
+    if tracked_runtime_state:
+        raise DeployError(
+            "reviewed source revision tracks runtime-local state and cannot be "
+            "deployed safely: "
+            + ", ".join(tracked_runtime_state)
+        )
+    previous = _git(runtime_root, "rev-parse", "HEAD")
+    if (
+        _run(
+            [
+                "git",
+                "-C",
+                str(runtime_root),
+                "merge-base",
+                "--is-ancestor",
+                previous,
+                target,
+            ],
+            check=False,
+        ).returncode
+        != 0
+    ):
+        raise DeployError(
+            "runtime cannot fast-forward to source/dev; reconcile its Git "
+            "history explicitly"
+        )
+    _git(runtime_root, "merge", "--ff-only", target)
+    current = _git(runtime_root, "rev-parse", "HEAD")
+    if current != target:
+        raise DeployError("runtime did not reach the reviewed source revision")
+
+    manifest = {
+        "schema_version": "diogenes.runtime.v1",
+        "self_contained": True,
+        "source": provenance,
+        "runtime": {
+            "root": str(runtime_root.resolve()),
+            "branch": branch,
+            "head": current,
+            "previous_head": previous,
+        },
+    }
+    (runtime_root / ".diogenes-runtime.json").write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    return {
+        "ok": True,
+        "updated": previous != current,
+        "runtime": runtime_contract(runtime_root),
+        "source": provenance,
+        "preserved": [".env", ".venv", "data", "Docker volumes"],
+        "services_restarted": [],
+        "next": f"cd {runtime_root.resolve()} && ./startwithuv.sh",
+    }
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="diogenes-deploy")
     parser.add_argument("--pretty", action="store_true")
@@ -289,7 +457,7 @@ def _parser() -> argparse.ArgumentParser:
         type=Path,
         default=DEFAULT_RUNTIME_ROOT,
     )
-    parser.add_argument("command", choices=("inspect", "prepare"))
+    parser.add_argument("command", choices=("inspect", "prepare", "update"))
     return parser
 
 
@@ -300,15 +468,16 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.fetch_upstream:
             fetch_upstream(source_root)
-        payload = (
-            {
+        if args.command == "inspect":
+            payload = {
                 "ok": True,
                 "source": source_contract(source_root),
                 "runtime": runtime_contract(runtime_root),
             }
-            if args.command == "inspect"
-            else prepare_runtime(source_root, runtime_root)
-        )
+        elif args.command == "prepare":
+            payload = prepare_runtime(source_root, runtime_root)
+        else:
+            payload = update_runtime(source_root, runtime_root)
         print(
             json.dumps(
                 payload,

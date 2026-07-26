@@ -693,9 +693,9 @@ function _envHasKey(envText, key) {
 export function _buildServeCmd(f, modelName, backend) {
   // When a venv is configured on the chosen server, use the venv's binaries
   // by absolute path. Bare `vllm` / `python3` relies on PATH, and SSH non-
-  // interactive sessions often leave a user-site install (~/.local/bin/vllm)
-  // ahead of the venv's bin, so the WRONG vllm gets launched even with the
-  // venv activated. Absolute path sidesteps the whole PATH question.
+  // interactive sessions can inherit unrelated PATH entries ahead of the
+  // venv's bin, so the wrong vLLM can otherwise launch even with the venv
+  // activated. Absolute paths keep the inner environment authoritative.
   let _formVenv = (f.venv ?? '').toString().trim();
   if (_venvLooksWrongForPlatform(_formVenv, f.platform)) _formVenv = '';
   const _activeVenvPath = _venvRootFromPath(_formVenv || (_envState.env === 'venv' ? (_envState.envPath || '') : ''));
@@ -705,33 +705,54 @@ export function _buildServeCmd(f, modelName, backend) {
   let cmd = '';
   if (backend === 'colibri_glm' || backend === 'colibri_hy3') {
     const isGlm = backend === 'colibri_glm';
-    const isTuned5090 = String(f.colibri_profile || '') === 'rtx5090-high-ram';
-    const env = isTuned5090 && isGlm
-      ? {
-          COLI_CUDA: '1',
-          CUDA_DENSE: '1',
-          COLI_CUDA_ATTN: '1',
-        }
-      : isTuned5090
-      ? {
-          COLI_CUDA: '1',
-          CUDA_ATTN: '1',
-        }
-      : {};
+    const profileId = String(f.colibri_profile || '');
+    const isUpstreamAuto = profileId === 'upstream-auto';
+    let profileEnv = {};
+    try {
+      profileEnv = JSON.parse(String(f.colibri_profile_env || '{}'));
+    } catch {}
+    const env = isUpstreamAuto ? {} : { ...profileEnv };
+    if (!isUpstreamAuto && !Object.prototype.hasOwnProperty.call(env, 'COLI_CUDA')) {
+      env.COLI_CUDA = '1';
+    }
+    if (!isUpstreamAuto && isGlm) {
+      if (!Object.prototype.hasOwnProperty.call(env, 'CUDA_DENSE')) env.CUDA_DENSE = '1';
+      if (!Object.prototype.hasOwnProperty.call(env, 'COLI_CUDA_ATTN')) env.COLI_CUDA_ATTN = '1';
+    } else if (!isGlm) {
+      env.CUDA_DENSE = f.colibri_cuda_dense ? '1' : '0';
+      env.KV_I8 = f.colibri_kv_i8 ? '1' : '0';
+      env.CUDA_ATTN = (!f.colibri_kv_i8 && f.colibri_cuda_attention) ? '1' : '0';
+      if (f.colibri_verbose) env.PERF = '1';
+      else delete env.PERF;
+    }
     env.DIRECT = f.colibri_direct ? '1' : '0';
     env.PIPE = String(f.colibri_io_pipeline ?? (isGlm ? '1' : '2'));
     env.PIPE_WORKERS = String(parseInt(f.colibri_pipe_workers, 10) || 8);
-    env.PILOT_REAL = f.colibri_pilot_real ? '1' : '0';
-    env.EXPERT_BUDGET = '0';
-    env.CACHE_ROUTE = f.colibri_cache_route ? '1' : '0';
-    const cudaPipe = String(f.colibri_cuda_pipeline ?? (isGlm ? '2' : '0'));
-    if (isGlm || cudaPipe !== '0') env.COLI_CUDA_PIPE = cudaPipe;
-    if (f.colibri_cache_route) {
+    if (isGlm) {
+      env.PILOT_REAL = f.colibri_pilot_real ? '1' : '0';
+      env.EXPERT_BUDGET = '0';
+      env.CACHE_ROUTE = f.colibri_cache_route ? '1' : '0';
+      env.COLI_CUDA_PIPE = String(f.colibri_cuda_pipeline ?? '0');
+      env.URING = f.colibri_uring ? '1' : '0';
+    }
+    if (isGlm && f.colibri_cache_route) {
       env.ROUTE_J = String(parseInt(f.colibri_route_j, 10) || 2);
       env.ROUTE_M = String(parseInt(f.colibri_route_m, 10) || 12);
+      env.ROUTE_ALPHA = String(f.colibri_route_alpha || '0.5');
     }
-    if (f.colibri_cuda_mtp) env.COLI_CUDA_MTP = '1';
-    if (isGlm && f.colibri_tool_salvage) env.COLI_TOOL_SALVAGE = '1';
+    if (isGlm) {
+      env.DRAFT = '0';
+      env.COLI_CUDA_TC_W4A16 = f.colibri_tensor_cores ? '1' : '0';
+      if (f.colibri_cuda_mtp) {
+        delete env.DRAFT;
+        env.COLI_CUDA_MTP = '1';
+      }
+    } else {
+      env.DRAFT = f.colibri_cuda_mtp ? '3' : '0';
+      if (f.colibri_cuda_mtp) env.TREE_DRAFT = env.TREE_DRAFT || '1';
+      else delete env.TREE_DRAFT;
+    }
+    if (f.colibri_tool_salvage) env.COLI_TOOL_SALVAGE = '1';
     const envPrefix = Object.entries(env)
       .sort(([a], [b]) => a.localeCompare(b))
       .map(([key, value]) => `${key}=${_shellWord(value)}`)
@@ -765,7 +786,7 @@ export function _buildServeCmd(f, modelName, backend) {
   } else if (backend === 'prism') {
     // PrismML executable and model paths are catalog-owned. The serve panel
     // replaces this value with /api/odysseus/prism/command output and the
-    // launch route validates that exact command again before execution.
+    // launch route parses and re-quotes the operator-editable command.
     cmd = String(f.prism_command || '').trim();
   } else if (backend === 'vllm') {
     // GPU list comes from the Row-1 button strip (data-field="gpus") —
@@ -1224,6 +1245,7 @@ async function _fetchDependencies() {
         : fetch('/api/odysseus/sandwich', { credentials: 'same-origin' }).catch(() => null),
     ]);
     const data = await resp.json();
+    const _pythonMutation = data.python_mutation || { manager: 'upstream' };
     const _colibriExtras = colibriResp?.ok ? await colibriResp.json() : null;
     const _prismExtra = prismResp?.ok ? await prismResp.json() : null;
     const _hermesExtra = hermesResp?.ok ? await hermesResp.json() : null;
@@ -1257,7 +1279,12 @@ async function _fetchDependencies() {
         const depStyle = pkg.name === 'docker' ? ' style="width:87.7px;justify-content:center;"' : '';
         return `<span class="cookbook-dep-tag cookbook-dep-na" title="${depTip}"${depStyle}>${depLabel}</span>`;
       }
-      return `<button class="cookbook-dep-tag cookbook-dep-install" data-dep-pip="${esc(pkg.pip)}" data-dep-target="${isLocal ? 'local' : 'remote'}">Install</button>`;
+      const managedVllm = pkg.name === 'vllm' && pkg.managed_install?.mode === 'cuda13-nightly';
+      const label = managedVllm ? 'Install CUDA 13' : 'Install';
+      const title = managedVllm
+        ? `Install the current CUDA 13 vLLM nightly and its matching Torch stack with uv inside ${pkg.managed_install.venv || 'the Diogenes .venv'}.`
+        : '';
+      return `<button class="cookbook-dep-tag cookbook-dep-install" data-dep-pip="${esc(pkg.pip)}" data-dep-target="${isLocal ? 'local' : 'remote'}"${title ? ` title="${esc(title)}"` : ''}>${label}</button>`;
     };
 
     // Per-package inline glyphs — same accent-coloured marks used in the
@@ -1296,22 +1323,22 @@ async function _fetchDependencies() {
       // matches the LLM category tag's pill look, and lives to the LEFT of the
       // category tag. llama_cpp uses the /api/cookbook/rebuild-engine flow
       // (clear cached binary so next serve recompiles); vllm/sglang use the
-      // diagnosis-style `_launchServeTask` with `pip install --force-reinstall`
-      // so the user can watch the pip install in the Running tab.
+      // long-running `_launchServeTask` so the user can watch the explicit uv
+      // operation in the Running tab.
       let _rebuildBtn = '';
       if (pkg.name === 'vllm' && pkg.installed) {
         const managedMode = pkg.managed_install?.mode || '';
         const managed = managedMode === 'uv-lock' || managedMode === 'cuda13-nightly';
         const managedData = managed
-          ? ` data-managed-install-mode="${esc(managedMode)}" data-managed-lock="${esc(pkg.managed_install.lock_path || '')}" data-managed-python="${esc(pkg.managed_install.python || '')}" data-managed-venv="${esc(pkg.managed_install.venv || '')}"`
+          ? ` data-managed-install-mode="${esc(managedMode)}" data-managed-lock="${esc(pkg.managed_install.lock_path || '')}" data-managed-python="${esc(pkg.managed_install.python || '')}" data-managed-venv="${esc(pkg.managed_install.venv || '')}" data-managed-command="${esc(pkg.managed_install.install_command || '')}"`
           : '';
         _rebuildBtn = managed
           ? managedMode === 'uv-lock'
             ? `<button type="button" class="cookbook-dep-tag cookbook-dep-rebuild cookbook-dep-reinstall" data-reinstall-pkg="vllm"${managedData} title="Reconcile the explicitly configured frozen vLLM lock in Ɗiogenēs’ inner .venv.">Reconcile</button>`
             : `<button type="button" class="cookbook-dep-tag cookbook-dep-rebuild cookbook-dep-reinstall" data-reinstall-pkg="vllm"${managedData} title="Resolve current vLLM and matching Torch CUDA 13 nightly wheels inside Ɗiogenēs’ inner .venv, then run dependency and import checks.">Update CUDA 13</button>`
-          : `<button type="button" class="cookbook-dep-tag cookbook-dep-rebuild cookbook-dep-reinstall" data-reinstall-pkg="vllm" title="Force-reinstall vLLM (pulls a matching torch). Runs as a tmux task in the Running tab.">Reinstall</button>`;
+          : `<button type="button" class="cookbook-dep-tag cookbook-dep-rebuild cookbook-dep-reinstall" data-reinstall-pkg="vllm" title="Force-reinstall vLLM (pulls a matching torch) with uv in the selected environment.">Reinstall</button>`;
       } else if (pkg.name === 'sglang' && pkg.installed) {
-        _rebuildBtn = `<button type="button" class="cookbook-dep-tag cookbook-dep-rebuild cookbook-dep-reinstall" data-reinstall-pkg="sglang" title="Force-reinstall SGLang (pulls a matching torch). Runs as a tmux task in the Running tab.">Reinstall</button>`;
+        _rebuildBtn = `<button type="button" class="cookbook-dep-tag cookbook-dep-rebuild cookbook-dep-reinstall" data-reinstall-pkg="sglang" title="Force-reinstall SGLang (pulls a matching torch) with uv in the selected environment.">Reinstall</button>`;
       }
       // For backends with a recipe catalog (vllm / sglang / llama_cpp),
       // append a caret button that toggles a per-row recipe panel below.
@@ -1336,7 +1363,11 @@ async function _fetchDependencies() {
       // Install (runs the reinstall in cookbook) or Copy command (paste
       // into a terminal). Same content surfaces whether the user solves
       // it from inside Cookbook or from a shell.
-      const _gpuWheelCmd = 'CMAKE_ARGS="-DGGML_CUDA=on" python3 -m pip install --user --break-system-packages --force-reinstall --no-cache-dir "llama-cpp-python[server]" --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cu124';
+      const _managedGpuPython = _managedRecipeUvPython();
+      const _gpuWheelInstaller = _managedGpuPython
+        ? `uv pip install --python ${_shellQuote(_managedGpuPython)}`
+        : 'uv pip install --python python3';
+      const _gpuWheelCmd = `CMAKE_ARGS="-DGGML_CUDA=on" ${_gpuWheelInstaller} --force-reinstall --no-cache "llama-cpp-python[server]" --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cu124`;
       const _gpuUpgradeBox = (pkg.partial && pkg.partial_action === 'reinstall_llama_cpp_cuda')
         ? `<div class="cookbook-dep-gpu-upgrade" style="margin-top:6px;font-size:11px;display:flex;align-items:center;gap:6px;flex-wrap:wrap;background:color-mix(in srgb, var(--yellow, #f1fa8c) 14%, transparent);border:1px solid color-mix(in srgb, var(--yellow, #f1fa8c) 40%, var(--border));padding:6px 8px;border-radius:6px;">`
           + `<span style="flex:1;min-width:160px;">Installed CPU-only — GPU detected on this target. Upgrade for ~10× faster inference.</span>`
@@ -1348,11 +1379,11 @@ async function _fetchDependencies() {
       const dependencyHelp = pkg.name === 'vllm' && managed.mode === 'uv-lock'
         ? `This local Ɗiogenēs environment uses the explicitly selected frozen lock ${managed.lock_path || ''}. Install and Reconcile target ${managed.python || 'the active inner .venv Python'} and never mutate a system Python.`
         : pkg.name === 'vllm' && managed.mode === 'cuda13-nightly'
-          ? `Install and Update resolve ${managed.package_spec || 'vllm'} plus its compatible Torch stack from the CUDA 13 nightly wheel channel, only inside ${managed.venv || "Ɗiogenēs’ active .venv"}. The task finishes with uv pip check and import/version probes; it does not reuse the old implicit 0.23 lock.`
+          ? `Install and Update resolve ${managed.package_spec || 'vllm'} plus its compatible Torch stack from the CUDA 13 nightly wheel channel, only inside ${managed.venv || "Ɗiogenēs’ active .venv"}. vLLM may intentionally replace Torch, tokenizers, protobuf, and related packages as one compatible stack. The task finishes with uv pip check and import/version probes, then Ɗiogenēs should be restarted. Command: ${managed.install_command || 'server-authored uv plan'}.`
         : pkg.name === 'liburing-dev'
           ? 'This is an operating-system development package, not a Python dependency. Colibri-Hy3 needs its headers at native C/CUDA build time; it is intentionally detected outside .venv.'
           : '';
-      return `<div class="cookbook-dep-row${winBlocked ? ' cookbook-dep-blocked' : ''}" data-pkg-name="${esc(pkg.name)}" data-dep-pip="${esc(pkg.pip || '')}" data-dep-target="${isLocal ? 'local' : 'remote'}" data-dep-kind="${esc(pkg.kind || 'python')}" data-managed-install-mode="${esc(managed.mode || '')}" data-managed-lock="${esc(managed.lock_path || '')}" data-managed-python="${esc(managed.python || '')}" data-managed-venv="${esc(managed.venv || '')}">`
+      return `<div class="cookbook-dep-row${winBlocked ? ' cookbook-dep-blocked' : ''}" data-pkg-name="${esc(pkg.name)}" data-dep-pip="${esc(pkg.pip || '')}" data-dep-target="${isLocal ? 'local' : 'remote'}" data-dep-kind="${esc(pkg.kind || 'python')}" data-managed-install-mode="${esc(managed.mode || '')}" data-managed-lock="${esc(managed.lock_path || '')}" data-managed-python="${esc(managed.python || '')}" data-managed-venv="${esc(managed.venv || '')}" data-managed-command="${esc(managed.install_command || '')}">`
         + `<div class="cookbook-dep-info">`
         + `<div class="memory-item-title">${_depGlyphHtml(pkg.name)}${esc(pkg.name)}${dependencyHelp ? ` <span class="hwfit-help-chip hwfit-help-chip-inline" title="${esc(dependencyHelp)}" aria-label="${esc(dependencyHelp)}">?</span>` : ''}</div>`
         + `<div class="memory-item-meta" style="font-size:10px;opacity:0.5;margin-top:2px;">${esc(pkg.desc)}</div>`
@@ -1368,20 +1399,48 @@ async function _fetchDependencies() {
         + recipePanel;
     };
 
-    // Prepend the configured venv's activate line (pip variant only) so
-    // the user sees a paste-ready sequence; Run keeps using env_prefix to
-    // activate the same venv before the pip command. Docker variant skips
-    // the activate line — `docker pull` doesn't need a venv.
+    function _managedRecipeUvPython() {
+      if (_viewingRemote || _pythonMutation.manager !== 'uv') return '';
+      return String(_pythonMutation.python || '').trim();
+    }
+
+    function _routeRecipeMutationThroughUv(command) {
+      const python = _managedRecipeUvPython();
+      if (!python) return String(command || '');
+      const quotedPython = _shellQuote(python);
+      let routed = String(command || '');
+      // Preserve leading environment assignments such as CMAKE_ARGS while
+      // replacing only the package-manager argv. The server repeats this
+      // canonicalization so stale clients cannot escape the checkout .venv.
+      routed = routed.replace(
+        /(^|\s)uv\s+pip\s+(install|uninstall)\b(?!\s+--python\b)/,
+        `$1uv pip $2 --python ${quotedPython}`,
+      );
+      routed = routed.replace(
+        /(^|\s)(?:python(?:3)?\s+-m\s+pip|pip3?)\s+(install|uninstall)\b/,
+        `$1uv pip $2 --python ${quotedPython}`,
+      );
+      return routed;
+    }
+
+    // Python mutations are always paste-ready uv commands. Local Diogenes
+    // uses its exact inner interpreter; configured remote venvs receive an
+    // explicit --python target rather than relying on ambient pip state.
     function _recipeRuntimeCommands(commands, variant) {
       if (variant === 'docker') return commands;
+      const managedPython = _managedRecipeUvPython();
+      if (managedPython) return commands.map(_routeRecipeMutationThroughUv);
       const envPath = (_envState.envPath || '').replace(/\/+$/, '');
       if (_envState.env !== 'venv' || !envPath) return commands;
       const py = _shellQuote(`${envPath}/bin/python3`);
-      return commands.map(cmd => String(cmd || '').replace(/^python(\s+-m\s+pip\b)/, `${py}$1`));
+      return commands.map(cmd => String(cmd || '')
+        .replace(/^uv\s+pip\s+(install|uninstall)\b(?!\s+--python\b)/, `uv pip $1 --python ${py}`)
+        .replace(/^python(?:3)?\s+-m\s+pip\s+(install|uninstall)\b/, `uv pip $1 --python ${py}`));
     }
     function _recipeDisplayText(commands, variant) {
       const runtimeCommands = _recipeRuntimeCommands(commands, variant);
       if (variant === 'docker') return commands.join('\n');
+      if (_managedRecipeUvPython()) return runtimeCommands.join('\n');
       const envPath = (_envState.envPath || '').replace(/\/+$/, '');
       const activate = envPath
         ? `source ${envPath}${envPath.endsWith('/bin/activate') ? '' : '/bin/activate'}`
@@ -1740,7 +1799,7 @@ async function _fetchDependencies() {
     });
 
     // Shared install/update routine — used by the Install button and the
-    // "Update" item in an installed package's ⋮ menu. `upgrade` adds pip -U;
+    // "Update" item in an installed package's ⋮ menu. `upgrade` adds uv -U;
     // `statusEl`, when given, shows "Installing…/Updating…" and is disabled.
     async function _installDep(pipName, pkgName, isLocalOnly, upgrade, statusEl, managedInstall = null) {
       let targetServer = null;
@@ -1773,19 +1832,8 @@ async function _fetchDependencies() {
       }
       const targetPlatform = isLocalOnly ? (_envState.hostPlatform || _envState.platform || '') : (targetServer?.platform || _envState.platform || '');
       const targetRemoteHost = isLocalOnly ? '' : (targetServer?.host || _envState.remoteHost || '');
-      // Always go through `python -m pip` so the leading token is `python`
-      // — matches the /api/model/serve allow-list (bare `pip` is blocked).
-      // Inside a venv/conda env, `--user` is invalid (pip refuses), so we
-      // only add `--user --break-system-packages` when there's no env —
-      // for PEP-668-locked system pythons (Arch, newer Debian).
-      const _inEnv = targetEnv === 'venv' || targetEnv === 'conda';
-      const _platform = String(targetPlatform || '').toLowerCase();
-      const _isAppleTarget = _platform === 'darwin' || _platform === 'macos' || _platform.includes('mac os');
-      const _pipFlags = (!_isWindows() && !_inEnv) ? (_isAppleTarget ? ' --user' : ' --user --break-system-packages') : '';
-      // Use the venv's python3 by absolute path when configured. Even with the
-      // env_prefix sourcing activate, SSH non-interactive sessions sometimes
-      // pick a `python3` ahead of the venv's bin on PATH, so the install
-      // silently lands in the wrong site-packages.
+      // The server declares the exact inner-venv boundary. Remote,
+      // Windows/macOS, and container targets retain their upstream installer.
       let _py;
       if (_isWindows()) {
         _py = 'python';
@@ -1800,14 +1848,25 @@ async function _fetchDependencies() {
         .filter(Boolean)
         .map(_shellQuote)
         .join(' ');
-      const depTaskId = String(pkgName || pipName || 'dependency').trim().replace(/\s+/g, '_');
+      const depTaskId = String(pkgName || pipName || 'dependency')
+        .trim()
+        .replace(/[^A-Za-z0-9._-]+/g, '_')
+        .replace(/^[_-]+|[_-]+$/g, '') || 'dependency';
       if (_managedVllm && managedInstall.python) _py = managedInstall.python;
-      // The server renders the exact selected vLLM profile. This bounded
-      // trigger keeps indexes, pins, and postflight checks authoritative on
-      // the host instead of duplicating them in a potentially stale browser.
+      // The package probe returns the exact server-authored uv plan so the UI
+      // shows and submits the operation it will actually run. The serve route
+      // re-normalizes it again, keeping stale clients inside this checkout's
+      // .venv and on the configured CUDA/profile lane.
+      const _managedUv = (
+        _managedVllm
+        || (!targetRemoteHost && _pythonMutation.manager === 'uv' && _pythonMutation.python)
+      );
+      if (_managedUv && _pythonMutation.python && !_managedVllm) {
+        _py = _pythonMutation.python;
+      }
       const cmd = _managedVllm
-        ? `${_shellQuote(_py)} -m pip install -U vllm`
-        : `${_shellQuote(_py)} -m pip install${upgrade ? ' -U' : ''}${_pipFlags} ${pipArgs}`;
+        ? (managedInstall.install_command || `uv pip install --python ${_shellQuote(_py)} -U vllm`)
+        : `uv pip install --python ${_shellQuote(_py)}${upgrade ? ' -U' : ''} ${pipArgs}`;
       let envPrefix = '';
       if (_isWindows()) {
         if (targetEnv === 'venv' && targetEnvPath) {
@@ -1852,10 +1911,10 @@ async function _fetchDependencies() {
           });
           return;
         }
-        // _dep flags this as a pip dependency/driver install (not a servable
+        // _dep flags this as a Python dependency/driver install (not a servable
         // model) so the running-task card doesn't offer a "Serve →" button.
         const payload = { repo_id: depTaskId, _cmd: cmd, remote_host: targetRemoteHost || '', _dep: true, env_path: targetEnvPath || '', platform: targetPlatform || '' };
-        _addTask(data.session_id, 'pip ' + pkgName, 'download', payload);
+        _addTask(data.session_id, 'uv ' + pkgName, 'download', payload);
         const verb = _managedVllm
           ? (managedInstall.mode === 'uv-lock' ? 'Reconciling' : (upgrade ? 'Updating' : 'Installing'))
           : (upgrade ? 'Updating' : 'Installing');
@@ -1883,6 +1942,7 @@ async function _fetchDependencies() {
               lock: row.dataset.managedLock || '',
               python: row.dataset.managedPython || '',
               venv: row.dataset.managedVenv || '',
+              install_command: row.dataset.managedCommand || '',
             }
           : null;
         await _installDep(pipName, pkgName, btn.dataset.depTarget === 'local', !!btn.dataset.upgrade, btn, managedInstall);
@@ -1897,7 +1957,7 @@ async function _fetchDependencies() {
     // build-toolchain set the catalog declares.
     // "Partial ▾" upgrade tag: clicking it fires the action-specific
     // install routine (currently only `reinstall_llama_cpp_cuda` —
-    // forces pip install with the abetlen CUDA wheel index to add GPU
+    // forces a uv install with the abetlen CUDA wheel index to add GPU
     // offload). Same install flow used at launch-time auto-fix, but
     // user-initiated here so they don't have to launch + wait + retry.
     list.querySelectorAll('.cookbook-dep-partial').forEach(btn => {
@@ -1911,7 +1971,13 @@ async function _fetchDependencies() {
           if (depsServerSel) _applyServerSelection(depsServerSel.value);
         }
         const targetLabel = isLocal ? 'this server' : (_envState.remoteHost || 'remote');
-        const cmd = 'CMAKE_ARGS="-DGGML_CUDA=on" python3 -m pip install --user --break-system-packages --force-reinstall --no-cache-dir "llama-cpp-python[server]" --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cu124';
+        const managedPython = isLocal && _pythonMutation.manager === 'uv'
+          ? String(_pythonMutation.python || '').trim()
+          : '';
+        const installer = managedPython
+          ? `uv pip install --python ${_shellQuote(managedPython)}`
+          : 'uv pip install --python python3';
+        const cmd = `CMAKE_ARGS="-DGGML_CUDA=on" ${installer} --force-reinstall --no-cache "llama-cpp-python[server]" --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cu124`;
         try {
           const reqBody = {
             repo_id: 'llama-cpp-python-cuda',
@@ -2111,7 +2177,12 @@ async function _fetchDependencies() {
           : '';
         const cmd = installRaw.split('\n').map(s => {
           let line = s.trim();
-          if (recipePy) line = line.replace(/^python(?:3)?\s+-m\s+pip\b/, `${recipePy} -m pip`);
+          if (recipePy) {
+            const quoted = _shellQuote(recipePy);
+            line = line
+              .replace(/^uv\s+pip\s+(install|uninstall)\b(?!\s+--python\b)/, `uv pip $1 --python ${quoted}`)
+              .replace(/^python(?:3)?\s+-m\s+pip\s+(install|uninstall)\b/, `uv pip $1 --python ${quoted}`);
+          }
           return line;
         }).filter(Boolean).join(' && ');
         // Build env_prefix from the configured envPath (matches _installDep).
@@ -2122,8 +2193,15 @@ async function _fetchDependencies() {
         } else if (recipeEnv === 'conda' && _envState.envPath) {
           envPrefix = 'eval "$(conda shell.bash hook)" && conda activate ' + _shellQuote(_envState.envPath);
         }
+        const recipeTaskId = String(backend || 'dependency')
+          .trim()
+          .replace(/[^A-Za-z0-9._-]+/g, '_')
+          .replace(/^[_-]+|[_-]+$/g, '') || 'dependency';
         const reqBody = {
-          repo_id: `${backend} setup`,
+          // /api/model/serve validates dependency task IDs as package tokens;
+          // spaces here made the otherwise-hidden recipe runner fail before
+          // it ever reached uv/pip.
+          repo_id: recipeTaskId,
           cmd: cmd,
           remote_host: _envState.remoteHost || undefined,
           ssh_port: _getPort(_envState.remoteHost) || undefined,
@@ -2141,7 +2219,7 @@ async function _fetchDependencies() {
             uiModule.showToast('Run failed: ' + String(data.detail || data.error || `HTTP ${res.status}`).slice(0, 200));
             return;
           }
-          const payload = { repo_id: `${backend} setup`, _cmd: cmd, remote_host: _envState.remoteHost || '', _dep: true };
+          const payload = { repo_id: recipeTaskId, _cmd: cmd, remote_host: _envState.remoteHost || '', _dep: true };
           _addTask(data.session_id, `${backend} setup`, 'download', payload);
           uiModule.showToast(`Running ${backend} setup on ${targetHost}…`);
         } catch (err) {
@@ -2217,7 +2295,7 @@ async function _fetchDependencies() {
       const it = document.createElement('div');
       it.className = 'dropdown-item-compact';
       it.innerHTML = `<span class="dropdown-icon">${upIco}</span><span>Update</span>`;
-      it.title = `Update ${pkgName} to the latest version (pip install -U)`;
+      it.title = `Update ${pkgName} to the latest version with uv`;
       it.addEventListener('click', async (e) => {
         e.stopPropagation();
         close();
@@ -2227,11 +2305,29 @@ async function _fetchDependencies() {
               lock: row.dataset.managedLock || '',
               python: row.dataset.managedPython || '',
               venv: row.dataset.managedVenv || '',
+              install_command: row.dataset.managedCommand || '',
             }
           : null;
         await _installDep(pipName, pkgName, isLocalOnly, true, null, managedInstall);
       });
       dropdown.appendChild(it);
+      if (rowPkgName === 'vllm' && row.dataset.managedCommand) {
+        const copy = document.createElement('div');
+        copy.className = 'dropdown-item-compact';
+        copy.innerHTML = '<span class="dropdown-icon"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></span><span>Copy uv command</span>';
+        copy.title = `Copy the exact inner-.venv install command: ${row.dataset.managedCommand}`;
+        copy.addEventListener('click', async (e) => {
+          e.stopPropagation();
+          close();
+          try {
+            await navigator.clipboard.writeText(row.dataset.managedCommand);
+            uiModule.showToast('Copied vLLM uv command');
+          } catch {
+            uiModule.showToast('Clipboard unavailable; use the ? tooltip to inspect the command.', 5000);
+          }
+        });
+        dropdown.appendChild(copy);
+      }
       if (rowPkgName === 'llama_cpp') {
         const rebuildIco = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg>';
         const rebuild = document.createElement('div');
@@ -2618,7 +2714,8 @@ function _wireTabEvents(body) {
       if (managed) {
         const python = btn.dataset.managedPython || '';
         const venv = btn.dataset.managedVenv || '';
-        if (!python || !venv || host) {
+        const managedCommand = btn.dataset.managedCommand || '';
+        if (!python || !venv || !managedCommand || host) {
           uiModule.showToast('Managed vLLM actions are available only for this Ɗiogenēs host and its active inner .venv.', 9000);
           return;
         }
@@ -2632,15 +2729,15 @@ function _wireTabEvents(body) {
         _launchServeTask(
           frozen ? 'reconcile-vllm' : 'update-vllm-cuda13',
           frozen ? 'uv-lock-reconcile' : 'cuda13-nightly',
-          `${_shellQuote(python)} -m pip install -U vllm`,
+          managedCommand,
         );
         return;
       }
-      if (!confirm(`Reinstall ${pkg} on ${where}?\n\nRuns "pip install --force-reinstall --no-deps ${pkg}" as a tmux task. Watch progress in the Running tab.`)) return;
+      if (!confirm(`Reinstall ${pkg} on ${where}?\n\nRuns an explicit uv pip reinstall against the selected Python. Watch progress in the Running tab.`)) return;
       const _venvPy = (_envState.env === 'venv' && _envState.envPath)
         ? `${_envState.envPath.replace(/\/+$/, '')}/bin/python3`
         : 'python3';
-      _launchServeTask(`reinstall-${pkg}`, 'pip-reinstall', `${_venvPy} -m pip install --force-reinstall --no-deps ${pkg}`);
+      _launchServeTask(`reinstall-${pkg}`, 'uv-reinstall', `uv pip install --python ${_shellQuote(_venvPy)} --force-reinstall --no-deps ${_shellQuote(pkg)}`);
     }, true);
   }
 

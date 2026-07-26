@@ -1805,8 +1805,8 @@ export function _expandModelRow(row, modelData) {
             if (_out.includes('MISSING')) {
               const _pkg = _qrRunBackend === 'vllm' ? 'vLLM' : 'SGLang';
               const _hint = _qrRunBackend === 'vllm'
-                ? 'uv pip install -U vllm --torch-backend auto'
-                : "pip install -U 'sglang[all]'";
+                ? 'uv pip install --python .venv/bin/python -U vllm --torch-backend auto'
+                : "uv pip install --python .venv/bin/python -U 'sglang[all]' --torch-backend auto";
               uiModule.showError(`Can't launch: ${_pkg} isn't installed${_qrHostStr ? ' on ' + _qrHostStr : ''}. Install it first:\n${_hint}`);
               return;
             }
@@ -1819,8 +1819,8 @@ export function _expandModelRow(row, modelData) {
             if (_minVer && _curVer && _cmpSemver(_curVer, _minVer) < 0) {
               const _pkg = _qrRunBackend === 'vllm' ? 'vLLM' : 'SGLang';
               const _hint = _qrRunBackend === 'vllm'
-                ? 'uv pip install -U vllm --torch-backend auto'
-                : "pip install -U 'sglang[all]'";
+                ? 'uv pip install --python .venv/bin/python -U vllm --torch-backend auto'
+                : "uv pip install --python .venv/bin/python -U 'sglang[all]' --torch-backend auto";
               uiModule.showError(`Can't launch: ${modelData.name} needs ${_pkg} ≥ ${_minVer}, but ${_curVer} is installed${_qrHostStr ? ' on ' + _qrHostStr : ''}. Upgrade:\n${_hint}`);
               return;
             }

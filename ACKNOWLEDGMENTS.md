@@ -36,6 +36,14 @@ The full license texts are kept in [`licenses/`](licenses/).
   Deep Research feature (`services/research/`, `src/research_handler.py`,
   `routes/research_routes.py`, `services/search/`). Full text in
   [`licenses/DeepResearch-Apache-2.0.txt`](licenses/DeepResearch-Apache-2.0.txt).
+- **[Arcane](https://github.com/getarcaneapp/arcane)** by **Kyle Mendell and
+  contributors** — Docker Compose project discovery, compose-file precedence,
+  label-based global container grouping, bounded traversal, project lifecycle,
+  logs, host-wide container/image/volume/network inventory, and revision-safe
+  project-file management patterns adapted for the Diogenes Services Docker
+  manager (`src/diogenes_docker_projects.py`). Source reference: commit
+  `47f679532cc84cfb917d6bee64565ed3c595c09f`. **BSD-3-Clause.** Full text in
+  [`licenses/Arcane-BSD-3-Clause.txt`](licenses/Arcane-BSD-3-Clause.txt).
 
 ---
 

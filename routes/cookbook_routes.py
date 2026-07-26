@@ -31,7 +31,12 @@ from core.platform_compat import (
     safe_chmod,
     which_tool,
 )
-from routes.shell_routes import TMUX_LOG_DIR, _normalize_ulysses_vllm_install
+from routes.shell_routes import (
+    TMUX_LOG_DIR,
+    _diogenes_inner_venv_python,
+    _normalize_diogenes_python_install,
+    _normalize_ulysses_vllm_install,
+)
 from src.host_docker_access import (
     HOST_DOCKER_ACCESS_HINT,
     HOST_DOCKER_SOCKET_PATH,
@@ -53,7 +58,7 @@ from routes.cookbook_helpers import (
     _safe_env_prefix, _local_tooling_path_export, _append_serve_preflight_exit_lines,
     _append_serve_exit_code_lines, _append_llama_cpp_linux_accel_build_lines, _cached_model_scan_script,
     load_stored_hf_token,
-    _append_vllm_linux_preflight_lines, _ollama_bind_from_cmd, _pip_install_fallback_chain,
+    _ollama_bind_from_cmd, _pip_install_fallback_chain,
     _pip_install_no_cache, _user_shell_path_bootstrap, _venv_safe_local_pip_install_cmd,
     _diagnose_serve_output, run_ssh_command_async,
     _append_pip_install_runner_lines, _pip_install_command_without_break_system_packages,
@@ -74,6 +79,7 @@ from src.ulysses_prism_command import (
     PrismCommandError,
     validate_prism_serve_command,
 )
+from src.tmux_ownership import render_tmux_tag_shell
 
 _HF_TOKEN_STATUS_SNIPPET = (
     'if [ -n "$HF_TOKEN" ]; then '
@@ -327,7 +333,15 @@ def _remote_tmux_command(*args: str) -> str:
     return f'{_remote_posix_path_prefix()}{tmux}"$ODYSSEUS_TMUX" {quoted}'
 
 
-def _remote_tmux_launch_command(session_id: str, runner: str) -> str:
+def _remote_tmux_launch_command(
+    session_id: str,
+    runner: str,
+    *,
+    kind: str,
+    identity: str = "",
+    provider: str = "",
+    port: int | str | None = None,
+) -> str:
     """Shell command that chmods a runner and starts it in remote tmux."""
     tmux = (
         'ODYSSEUS_TMUX="$(command -v tmux '
@@ -340,11 +354,20 @@ def _remote_tmux_launch_command(session_id: str, runner: str) -> str:
     sid = shlex.quote(str(session_id))
     runner_q = shlex.quote(str(runner))
     runner_exec = shlex.quote(f"./{runner}")
+    tags = render_tmux_tag_shell(
+        session_id,
+        kind=kind,
+        identity=identity,
+        provider=provider,
+        port=port,
+        tmux_binary='"$ODYSSEUS_TMUX"',
+    )
     return (
         f'{_remote_posix_path_prefix()}{tmux}'
         f'chmod +x {runner_q} && '
         f'"$ODYSSEUS_TMUX" set-option -g history-limit 100000 2>/dev/null; '
-        f'"$ODYSSEUS_TMUX" new-session -d -s {sid} {runner_exec}'
+        f'"$ODYSSEUS_TMUX" new-session -d -E -s {sid} {runner_exec} && '
+        f"{tags}"
     )
 
 
@@ -1200,7 +1223,8 @@ def setup_cookbook_routes() -> APIRouter:
             lines.append(f"export HF_HOME={_dl_hf_home_shell}")
             lines.append(f"export HUGGINGFACE_HUB_CACHE={_dl_hf_home_shell}/hub")
             lines.append(f"export HF_HUB_CACHE={_dl_hf_home_shell}/hub")
-        # Ensure pip-user scripts (e.g. hf CLI installed via --user) are on PATH
+        # Keep user-installed uv/hf launchers visible without ever mutating a
+        # user or system Python.
         lines.append('export PATH="$HOME/.local/bin:$HOME/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"')
         # When Odysseus runs from a venv (e.g. native macOS install), put its bin
         # on PATH so the tmux shell finds the bundled `hf`/`python3` without an
@@ -1210,7 +1234,8 @@ def setup_cookbook_routes() -> APIRouter:
         # Best-effort install the current HF CLI. The default lane uses hf_xet
         # in high-performance mode. Retries switch to the conservative Hub HTTP
         # lane without discarding resumable cache data.
-        # Use `python3 -m pip` not `pip` — macOS has no bare `pip` command.
+        # Local Diogenes package repair is always uv-owned and targets the
+        # exact interpreter that launched the app.
         if is_ollama_download:
             _append_local_ollama_download_command_lines(
                 lines,
@@ -1222,10 +1247,20 @@ def setup_cookbook_routes() -> APIRouter:
             hf_capability_check = shlex.quote(
                 _hf_hub_capability_check(require_xet=not reliable_download)
             )
+            diogenes_python = _diogenes_inner_venv_python()
+            local_hf_install = (
+                f"uv pip install --python {shlex.quote(diogenes_python)} "
+                '-q -U "huggingface_hub[hf_xet]"'
+                if diogenes_python
+                else _pip_install_fallback_chain(
+                    "huggingface_hub[hf_xet]",
+                    upgrade=True,
+                )
+            )
             lines.append(
                 f"( command -v hf >/dev/null 2>&1 && "
                 f"python3 -c {hf_capability_check} >/dev/null 2>&1 ) || "
-                f"{_pip_install_fallback_chain('huggingface_hub[hf_xet]', upgrade=True)}"
+                f"{local_hf_install}"
             )
             lines.extend(_hf_xet_env_lines(reliable=reliable_download))
 
@@ -1266,7 +1301,8 @@ def setup_cookbook_routes() -> APIRouter:
                 ps_lines.append(f"$null | ollama pull '{_ps_squote(req.repo_id)}'")
                 ps_lines.append('if ($LASTEXITCODE -eq 0) { Write-Host ""; Write-Host "DOWNLOAD_OK" } else { Write-Host ""; Write-Host "DOWNLOAD_FAILED (exit $LASTEXITCODE)" }')
             else:
-                # Try hf CLI, fall back to Python huggingface_hub, then auto-install
+                # Try hf CLI, fall back to Python huggingface_hub, then repair
+                # that exact interpreter through uv.
                 ps_lines.append('try {')
                 ps_lines.extend(
                     f"  {line}" for line in _hf_xet_env_lines(
@@ -1280,7 +1316,7 @@ def setup_cookbook_routes() -> APIRouter:
                 ps_lines.append(f'  python -c "{ps_hf_check}" 2>$null')
                 ps_lines.append(
                     '  if ($LASTEXITCODE -ne 0) { '
-                    'python -m pip install -q -U "huggingface_hub[hf_xet]" }'
+                    'uv pip install --python python --no-cache -q -U "huggingface_hub[hf_xet]" }'
                 )
                 ps_lines.append('  $hfPath = Get-Command hf -ErrorAction SilentlyContinue')
                 ps_lines.append('  if ($hfPath) {')
@@ -1293,7 +1329,7 @@ def setup_cookbook_routes() -> APIRouter:
                 ps_lines.append(f"      python -c \"import os; from huggingface_hub import snapshot_download; snapshot_download('{req.repo_id}'{_dl_pyarg}, max_workers=8)\"")
                 ps_lines.append('    } else {')
                 ps_lines.append('      Write-Host "Installing huggingface-hub..."')
-                ps_lines.append('      python -m pip install -q -U "huggingface_hub[hf_xet]"')
+                ps_lines.append('      uv pip install --python python --no-cache -q -U "huggingface_hub[hf_xet]"')
                 ps_lines.append(f"      python -c \"import os; from huggingface_hub import snapshot_download; snapshot_download('{req.repo_id}'{_dl_pyarg}, max_workers=8)\"")
                 ps_lines.append('    }')
                 ps_lines.append('  }')
@@ -1345,13 +1381,12 @@ def setup_cookbook_routes() -> APIRouter:
                     'if [ -f "$p/bin/activate" ]; then source "$p/bin/activate"; break; fi; '
                     'done'
                 )
-            # Ensure pip-user scripts (e.g. hf CLI installed via --user) are on PATH
+            # Keep uv/hf launchers visible. Package mutation remains uv-only.
             runner_lines.append('export PATH="$HOME/.local/bin:$HOME/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"')
             runner_lines.append('ODYSSEUS_PY="$(command -v python3 || command -v python || true)"')
             runner_lines.append('if [ -z "$ODYSSEUS_PY" ]; then echo "ERROR: python3/python not found on this server."; exit 127; fi')
             # Install the current HF CLI and select either the fast Xet lane or
             # the conservative resumable HTTP lane.
-            # Use --break-system-packages on PEP-668 systems (Arch, newer Debian) so it doesn't bail.
             if is_ollama_download:
                 runner_lines.append('if command -v ollama >/dev/null 2>&1; then')
                 runner_lines.append(f'  ODYSSEUS_OLLAMA_PULL_CMD={shlex.quote(ollama_cmd)}')
@@ -1365,7 +1400,7 @@ def setup_cookbook_routes() -> APIRouter:
             else:
                 hf_hub_install = _pip_install_fallback_chain(
                     "huggingface_hub[hf_xet]",
-                    python_cmd='"$ODYSSEUS_PY" -m pip',
+                    python_cmd='"$ODYSSEUS_PY"',
                     upgrade=True,
                 )
                 hf_capability_check = shlex.quote(
@@ -1420,15 +1455,16 @@ def setup_cookbook_routes() -> APIRouter:
             _spf = f"-p {_port} " if _port and _port != "22" else ""
             setup_cmd = (
                 f"scp -O {_pf}-q '{runner_path}' {remote}:{remote_runner} && "
-                f"ssh {_spf}{remote} {shlex.quote(_remote_tmux_launch_command(session_id, remote_runner))}"
+                f"ssh {_spf}{remote} "
+                f"{shlex.quote(_remote_tmux_launch_command(session_id, remote_runner, kind='download', identity=req.repo_id))}"
             )
         else:
             # Local: run hf download in the background (tmux on POSIX, a detached
             # process + logfile on Windows where tmux doesn't exist).
-            if req.env_prefix:
-                lines.append(_safe_env_prefix(req.env_prefix))
-            else:
-                lines.append("deactivate 2>/dev/null; hash -r")
+            # Local tmux is intentionally pinned to Diogenes's inner .venv by
+            # app startup. Environment selectors apply to remote hosts only;
+            # there is no activation/deactivation escape hatch locally.
+            lines.append(": # Diogenes tmux environment inherited")
             # Show whether the HF token reached this run (masked) — tells a gated
             # "not authorized" failure apart from a missing token.
             if not is_ollama_download:
@@ -1452,7 +1488,15 @@ def setup_cookbook_routes() -> APIRouter:
                 lines.append('exec "${SHELL:-/bin/bash}"')
                 wrapper_script.write_text("\n".join(lines) + "\n", encoding="utf-8")
                 wrapper_script.chmod(0o755)
-            setup_cmd = None if IS_WINDOWS else f"tmux set-option -g history-limit 100000 2>/dev/null; tmux new-session -d -s {session_id} {shlex.quote(str(wrapper_script))}"
+            setup_cmd = None if IS_WINDOWS else (
+                "tmux set-option -g history-limit 100000 2>/dev/null; "
+                f"tmux new-session -d -E -s {session_id} {shlex.quote(str(wrapper_script))} && "
+                + render_tmux_tag_shell(
+                    session_id,
+                    kind="download",
+                    identity=req.repo_id,
+                )
+            )
 
         logger.info(f"Model download: {req.repo_id} (backend={'ollama' if is_ollama_download else 'hf'}, include={req.include}, session={session_id}, remote={remote})")
         logger.info(f"Download setup_cmd: {setup_cmd}")
@@ -2097,7 +2141,7 @@ def setup_cookbook_routes() -> APIRouter:
         `repo_id` is dual-purpose: a HuggingFace repo (`<org>/<name>`) for
         model-serve commands, a cached local-model id (the folder name reported
         by `/api/model/cached`) for models scanned from a custom model dir, OR a
-        bare pip package name when the cmd is a `python -m pip install …`. We
+        bare Python package name when the command is a dependency install. We
         keep strict validation, but serving local cached models must not require
         a fake org/name wrapper.
         """
@@ -2138,23 +2182,34 @@ def setup_cookbook_routes() -> APIRouter:
             )
             if not provider_report:
                 raise HTTPException(400, "Unknown Colibri runtime")
-            if not provider_report.get("actions", {}).get("start_available"):
-                reasons = [
-                    str(item.get("summary"))
-                    for item in provider_report.get("findings", [])
-                    if item.get("summary")
-                ]
+            source_ready = bool(provider_report.get("source", {}).get("ready"))
+            build_ready = bool(provider_report.get("build", {}).get("ready"))
+            model_ready = bool(provider_report.get("model", {}).get("present"))
+            if not (source_ready and build_ready and model_ready):
+                reasons = []
+                if not source_ready:
+                    reasons.append("source checkout is not ready")
+                if not build_ready:
+                    reasons.append("CUDA build is not ready")
+                if not model_ready:
+                    reasons.append("exact checkpoint is not present")
                 raise HTTPException(
                     409,
-                    "Colibri runtime is not launchable: "
-                    + (
-                        "; ".join(reasons)
-                        if reasons
-                        else "build, model, or port preflight failed"
-                    ),
+                    "Colibri runtime is not launchable: " + "; ".join(reasons),
+                )
+            submitted_port = int(_serve_port_from_cmd(req.cmd))
+            endpoint = provider_report.get("endpoint", {})
+            if (
+                submitted_port == int(endpoint.get("port") or 0)
+                and endpoint.get("port_open")
+            ):
+                raise HTTPException(
+                    409,
+                    f"Colibri launch port {submitted_port} is already in use; "
+                    "stop the existing runtime or edit --port.",
                 )
             req.served_model_id = str(
-                provider_report.get("endpoint", {}).get("model_id") or ""
+                endpoint.get("model_id") or ""
             )
         elif req.runtime_id == PRISM_PROVIDER_ID:
             if req.remote_host:
@@ -2207,21 +2262,25 @@ def setup_cookbook_routes() -> APIRouter:
             if not model_report.get("ready"):
                 reasons.append("the exact selected GGUF is missing or incomplete")
             endpoint = provider_report.get("endpoint", {})
-            requested_port = int(
-                req.runtime_settings.get("port") or endpoint.get("port") or 0
-            )
+            requested_port = int(_serve_port_from_cmd(req.cmd))
             if (
                 endpoint.get("port_open")
                 and requested_port == int(endpoint.get("port") or 0)
             ):
                 reasons.append("the configured PrismML port is already occupied")
-            if bool(req.runtime_settings.get("speculative")) and not model_report.get(
-                "drafter", {}
-            ).get("complete"):
+            prism_argv = shlex.split(req.cmd)
+            uses_drafter = any(
+                token in {"-md", "--model-draft"}
+                or token.startswith("--model-draft=")
+                for token in prism_argv
+            )
+            uses_projector = any(
+                token == "--mmproj" or token.startswith("--mmproj=")
+                for token in prism_argv
+            )
+            if uses_drafter and not model_report.get("drafter", {}).get("complete"):
                 reasons.append("DSpark was enabled but its exact drafter is not ready")
-            if bool(req.runtime_settings.get("vision")) and not model_report.get(
-                "mmproj", {}
-            ).get("complete"):
+            if uses_projector and not model_report.get("mmproj", {}).get("complete"):
                 reasons.append("vision was enabled but its exact projector is not ready")
             if reasons:
                 raise HTTPException(
@@ -2249,14 +2308,24 @@ def setup_cookbook_routes() -> APIRouter:
             local=not bool(req.remote_host),
             in_venv=sys.prefix != sys.base_prefix,
         )
+        req.cmd = _normalize_diogenes_python_install(
+            req.cmd,
+            remote_host=req.remote_host,
+        )
         req.cmd, managed_vllm_reconcile = _normalize_ulysses_vllm_install(
             req.cmd,
             remote_host=req.remote_host,
         )
         is_pip_install = bool(req.cmd and "pip install" in req.cmd)
         if is_pip_install:
+            if not re.search(r"(?:^|\s)uv\s+pip\s+install(?:\s|$)", req.cmd):
+                raise HTTPException(
+                    400,
+                    "Python dependency changes must use uv pip with an explicit "
+                    "interpreter.",
+                )
             # Keep big dependency wheel builds (vLLM, …) off the home filesystem's
-            # pip cache so they don't fail mid-build with "No space left" (#1219)
+            # uv cache so they don't fail mid-build with "No space left" (#1219)
             # and leave the dep installed-but-unusable (#1459).
             req.cmd = _pip_install_no_cache(req.cmd)
             # Accept common aliases and enforce server extras for llama-cpp so
@@ -2362,7 +2431,7 @@ def setup_cookbook_routes() -> APIRouter:
                 ps_lines.append('try { python -c "import llama_cpp" 2>$null } catch {}')
                 ps_lines.append('if ($LASTEXITCODE -ne 0) {')
                 ps_lines.append('  Write-Host "Installing llama-cpp-python..."')
-                ps_lines.append('  python -m pip install llama-cpp-python[server]')
+                ps_lines.append('  uv pip install --python python --no-cache "llama-cpp-python[server]"')
                 ps_lines.append('}')
             elif "vllm" in req.cmd:
                 ps_lines.append('Write-Host "ERROR: vLLM is not supported on Windows. Use Ollama or llama.cpp instead."')
@@ -2422,10 +2491,10 @@ def setup_cookbook_routes() -> APIRouter:
                 runner_lines.append(f"export HF_TOKEN='{_bash_squote(req.hf_token)}'")
             if req.gpus:
                 runner_lines.append(f"export CUDA_VISIBLE_DEVICES='{req.gpus}'")
-            if req.env_prefix:
-                runner_lines.append(_safe_env_prefix(req.env_prefix))
-            else:
-                runner_lines.append("deactivate 2>/dev/null; hash -r")
+            # Local serves always use the repository's uv-owned environment.
+            # Separate native engines are invoked by absolute executable path,
+            # not by activating a second Python environment inside tmux.
+            runner_lines.append(": # Diogenes tmux environment inherited")
             if managed_vllm_reconcile:
                 runner_lines.append(
                     'echo "[ulysses] Replacing an unconstrained vLLM/Torch/Triton '
@@ -2434,16 +2503,26 @@ def setup_cookbook_routes() -> APIRouter:
             _append_venv_nvidia_library_path_lines(runner_lines, cmd=req.cmd)
             if (
                 req.runtime_id == PRISM_PROVIDER_ID
+                or (req.runtime_id or "").startswith("colibri.")
                 or "sglang.launch_server" in req.cmd
                 or "mlx_lm.server" in req.cmd
                 or re.search(r"\bvllm\s+serve\b", req.cmd or "")
             ):
-                _append_openai_port_preflight_lines(runner_lines, cmd=req.cmd, expected_model=req.repo_id)
+                _append_openai_port_preflight_lines(
+                    runner_lines,
+                    cmd=req.cmd,
+                    expected_model=req.served_model_id or req.repo_id,
+                )
             # Show whether the HF token reached this server (masked) — a gated
             # model vLLM has to download will be denied without it.
             runner_lines.append(_HF_TOKEN_STATUS_SNIPPET)
             handled_ollama_serve = False
             # Auto-install inference engine if missing
+            diogenes_python = (
+                _diogenes_inner_venv_python()
+                if not remote and not local_windows
+                else None
+            )
             local_windows_llama_cmd = local_windows and ("llama_cpp" in req.cmd or "llama-server" in req.cmd)
             # The managed Prism bundle is already an internally consistent
             # native llama.cpp build. Reuse the long-standing skip guard so it
@@ -2464,8 +2543,8 @@ def setup_cookbook_routes() -> APIRouter:
                 runner_lines.append('  # Termux: no native build — use the Python bindings (CPU).')
                 runner_lines.append('  if ! python3 -c "import llama_cpp" 2>/dev/null; then')
                 runner_lines.append('    pkg install -y cmake 2>/dev/null')
-                runner_lines.append('    pip install numpy diskcache jinja2 2>/dev/null')
-                runner_lines.append('    CMAKE_ARGS="-DGGML_BLAS=OFF -DGGML_LLAMAFILE=OFF" pip install \'llama-cpp-python[server]\' --no-build-isolation --no-cache-dir 2>&1 || true')
+                runner_lines.append('    uv pip install --python python3 --no-cache numpy diskcache jinja2 2>/dev/null')
+                runner_lines.append('    CMAKE_ARGS="-DGGML_BLAS=OFF -DGGML_LLAMAFILE=OFF" uv pip install --python python3 --no-cache \'llama-cpp-python[server]\' --no-build-isolation 2>&1 || true')
                 runner_lines.append('  fi')
                 runner_lines.append('elif ! command -v llama-server &>/dev/null; then')
                 runner_lines.append('  echo "Native llama-server not found — building from source (one-time, may take a few minutes)..."')
@@ -2503,7 +2582,29 @@ def setup_cookbook_routes() -> APIRouter:
                 runner_lines.append('  if command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi -L 2>/dev/null | grep -q "GPU " && python3 -c "import llama_cpp" 2>/dev/null; then')
                 runner_lines.append('    if ! python3 -c "import llama_cpp; import sys; sys.exit(0 if llama_cpp.llama_supports_gpu_offload() else 1)" 2>/dev/null; then')
                 runner_lines.append('      echo "[odysseus] NVIDIA detected but installed llama-cpp-python is CPU-only — reinstalling with CUDA wheel index for GPU offload..."')
-                runner_lines.append('      python3 -m pip install --user --break-system-packages --force-reinstall --no-cache-dir "llama-cpp-python[server]" --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cu124 2>&1 | tail -8 || echo "[odysseus] WARNING: CUDA wheel reinstall failed — Python server will stay CPU-only (slow). Manual fix: pip install --user --force-reinstall \'llama-cpp-python[server]\' --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cu124"')
+                if diogenes_python:
+                    cuda_llama_install = shlex.join(
+                        [
+                            "uv",
+                            "pip",
+                            "install",
+                            "--python",
+                            diogenes_python,
+                            "--force-reinstall",
+                            "--no-cache",
+                            "llama-cpp-python[server]",
+                            "--extra-index-url",
+                            "https://abetlen.github.io/llama-cpp-python/whl/cu124",
+                        ]
+                    )
+                    runner_lines.append(
+                        f'      {cuda_llama_install} 2>&1 || '
+                        'echo "[odysseus] WARNING: CUDA wheel reinstall failed — '
+                        'Python server will stay CPU-only. Retry the same uv command '
+                        'shown above after resolving its reported error."'
+                    )
+                else:
+                    runner_lines.append('      uv pip install --python python3 --force-reinstall --no-cache "llama-cpp-python[server]" --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cu124 2>&1 | tail -8 || echo "[odysseus] WARNING: CUDA wheel reinstall failed — Python server will stay CPU-only. Retry the same uv command after resolving its reported error."')
                 runner_lines.append('      if python3 -c "import llama_cpp; import sys; sys.exit(0 if llama_cpp.llama_supports_gpu_offload() else 1)" 2>/dev/null; then')
                 runner_lines.append('        echo "[odysseus] llama-cpp-python now supports GPU offload."')
                 runner_lines.append('      fi')
@@ -2516,7 +2617,7 @@ def setup_cookbook_routes() -> APIRouter:
                 # underscore-style flags. The user's serve command stays
                 # `llama-server ...` and "just works" — no build, no cmake,
                 # no second install. This is the path that unblocks every
-                # remote where pip-installed llama-cpp-python is already
+                # remote where uv-installed llama-cpp-python is already
                 # working but Cookbook used to insist on a native binary.
                 runner_lines.append('  if ! command -v llama-server >/dev/null 2>&1 && python3 -c "import llama_cpp" 2>/dev/null; then')
                 runner_lines.append('    mkdir -p ~/bin')
@@ -2525,7 +2626,7 @@ def setup_cookbook_routes() -> APIRouter:
                 runner_lines.append('# Auto-generated by Odysseus Cookbook: a `llama-server` lookalike')
                 runner_lines.append('# that translates the native CLI to `python -m llama_cpp.server`.')
                 runner_lines.append('# Lets cookbook-generated launch commands run unchanged on hosts')
-                runner_lines.append('# where only the pip llama-cpp-python package is installed.')
+                runner_lines.append('# where only the uv-managed llama-cpp-python package is installed.')
                 runner_lines.append('ARGS=()')
                 runner_lines.append('while [ $# -gt 0 ]; do')
                 runner_lines.append('  case "$1" in')
@@ -2555,7 +2656,26 @@ def setup_cookbook_routes() -> APIRouter:
                 runner_lines.append('  # If the native build failed, fall back to the Python bindings.')
                 runner_lines.append('  if ! command -v llama-server &>/dev/null && ! python3 -c "import llama_cpp" 2>/dev/null; then')
                 runner_lines.append('    echo "llama-server build failed — installing Python bindings as fallback..."')
-                runner_lines.append(f"    {_pip_install_fallback_chain('llama-cpp-python[server]', python_cmd='pip')} || true")
+                if diogenes_python:
+                    runner_lines.append(
+                        "    "
+                        + shlex.join(
+                            [
+                                "uv",
+                                "pip",
+                                "install",
+                                "--python",
+                                diogenes_python,
+                                "--no-cache",
+                                "llama-cpp-python[server]",
+                                "--extra-index-url",
+                                "https://abetlen.github.io/llama-cpp-python/whl/cu124",
+                            ]
+                        )
+                        + " || true"
+                    )
+                else:
+                    runner_lines.append(f"    {_pip_install_fallback_chain('llama-cpp-python[server]', python_cmd='python3')} || true")
                 runner_lines.append('  fi')
                 runner_lines.append('  if ! command -v llama-server &>/dev/null && ! python3 -c "import llama_cpp" 2>/dev/null; then')
                 runner_lines.append('    echo "ERROR: llama.cpp serving is not available after install/build attempts."')
@@ -2610,10 +2730,9 @@ def setup_cookbook_routes() -> APIRouter:
                 runner_lines.append('  echo "ERROR: vLLM does not run on macOS. Use Ollama or llama.cpp (Metal) instead."')
                 runner_lines.append('  ODYSSEUS_PREFLIGHT_EXIT=1')
                 runner_lines.append('fi')
-                # Put ~/.local/bin on PATH first — without a venv, vllm installs
-                # there via --user and the non-login serve shell otherwise can't
-                # find the `vllm` CLI ("command not found"). Mirrors llama.cpp above.
-                runner_lines.append('export PATH="$HOME/.local/bin:$PATH"')
+                # The tmux server owns Diogenes' inner .venv. Never prepend a
+                # user-site bin directory here: a stale external vLLM must not
+                # shadow the managed executable selected by Cookbook.
                 runner_lines.append('if ! command -v vllm &>/dev/null; then')
                 runner_lines.append('  echo "ERROR: vLLM is not installed."')
                 runner_lines.append('  ODYSSEUS_PREFLIGHT_EXIT=127')
@@ -2877,19 +2996,19 @@ def setup_cookbook_routes() -> APIRouter:
                 runner_lines.append('if printf "%s" "$ODYSSEUS_MLX_IMAGE_MODEL" | grep -qi hidream; then')
                 runner_lines.append('  if ! "$ODYSSEUS_MLX_IMAGE_CMD_PY" -c "import mlx, mlx_vlm, transformers, huggingface_hub, safetensors, numpy, PIL" >/dev/null 2>&1; then')
                 runner_lines.append('    echo "ERROR: HiDream MLX serving needs the model requirements in the launch Python: $ODYSSEUS_MLX_IMAGE_CMD_PY."')
-                runner_lines.append('    echo "Install with: $ODYSSEUS_MLX_IMAGE_CMD_PY -m pip install -U fastapi uvicorn python-multipart mlx mlx-vlm \'transformers>=4.57.0,<6.0\' \'huggingface_hub[hf_xet]\' safetensors numpy pillow tqdm sentencepiece"')
+                runner_lines.append('    echo "Install with: uv pip install --python $ODYSSEUS_MLX_IMAGE_CMD_PY -U fastapi uvicorn python-multipart mlx mlx-vlm \'transformers>=4.57.0,<6.0\' \'huggingface_hub[hf_xet]\' safetensors numpy pillow tqdm sentencepiece"')
                 runner_lines.append('    ODYSSEUS_PREFLIGHT_EXIT=127')
                 runner_lines.append('  fi')
                 runner_lines.append('elif printf "%s" "$ODYSSEUS_MLX_IMAGE_MODEL" | grep -qi boogu; then')
                 runner_lines.append('  if ! "$ODYSSEUS_MLX_IMAGE_CMD_PY" -c "import boogu_image_mlx, mlx, huggingface_hub, safetensors, numpy, PIL" >/dev/null 2>&1; then')
                 runner_lines.append('    echo "ERROR: Boogu MLX serving needs boogu-image-mlx in the launch Python: $ODYSSEUS_MLX_IMAGE_CMD_PY."')
-                runner_lines.append('    echo "Install with: $ODYSSEUS_MLX_IMAGE_CMD_PY -m pip install -U git+https://github.com/xocialize/boogu-image-mlx.git fastapi uvicorn python-multipart pillow"')
+                runner_lines.append('    echo "Install with: uv pip install --python $ODYSSEUS_MLX_IMAGE_CMD_PY -U git+https://github.com/xocialize/boogu-image-mlx.git fastapi uvicorn python-multipart pillow"')
                 runner_lines.append('    ODYSSEUS_PREFLIGHT_EXIT=127')
                 runner_lines.append('  fi')
                 runner_lines.append('elif printf "%s" "$ODYSSEUS_MLX_IMAGE_MODEL" | grep -Eqi "ddcolor"; then')
                 runner_lines.append('  if ! "$ODYSSEUS_MLX_IMAGE_CMD_PY" -c "import PIL" >/dev/null 2>&1; then')
                 runner_lines.append('    echo "ERROR: DDColor MLX serving needs Pillow in the launch Python: $ODYSSEUS_MLX_IMAGE_CMD_PY."')
-                runner_lines.append('    echo "Install with: $ODYSSEUS_MLX_IMAGE_CMD_PY -m pip install -U fastapi uvicorn python-multipart pillow huggingface_hub"')
+                runner_lines.append('    echo "Install with: uv pip install --python $ODYSSEUS_MLX_IMAGE_CMD_PY -U fastapi uvicorn python-multipart pillow huggingface_hub"')
                 runner_lines.append('    ODYSSEUS_PREFLIGHT_EXIT=127')
                 runner_lines.append('  fi')
                 runner_lines.append('  if ! command -v odysseus-mlx-colorize >/dev/null 2>&1 && ! command -v mlx-ddcolor-serve >/dev/null 2>&1; then')
@@ -2909,7 +3028,7 @@ def setup_cookbook_routes() -> APIRouter:
                 runner_lines.append('elif printf "%s" "$ODYSSEUS_MLX_IMAGE_MODEL" | grep -Eqi "mi-gan|migan|lama"; then')
                 runner_lines.append('  if ! "$ODYSSEUS_MLX_IMAGE_CMD_PY" -c "import PIL" >/dev/null 2>&1; then')
                 runner_lines.append('    echo "ERROR: LaMa / MI-GAN MLX serving needs Pillow in the launch Python: $ODYSSEUS_MLX_IMAGE_CMD_PY."')
-                runner_lines.append('    echo "Install with: $ODYSSEUS_MLX_IMAGE_CMD_PY -m pip install -U fastapi uvicorn python-multipart pillow huggingface_hub"')
+                runner_lines.append('    echo "Install with: uv pip install --python $ODYSSEUS_MLX_IMAGE_CMD_PY -U fastapi uvicorn python-multipart pillow huggingface_hub"')
                 runner_lines.append('    ODYSSEUS_PREFLIGHT_EXIT=127')
                 runner_lines.append('  fi')
                 runner_lines.append('  if ! command -v odysseus-mlx-inpaint >/dev/null 2>&1 && ! command -v mlx-lama-serve >/dev/null 2>&1; then')
@@ -2928,7 +3047,7 @@ def setup_cookbook_routes() -> APIRouter:
                 runner_lines.append('  fi')
                 runner_lines.append('elif ! command -v mflux-generate >/dev/null 2>&1 && ! command -v mflux-generate-qwen >/dev/null 2>&1; then')
                 runner_lines.append('  echo "ERROR: mflux-compatible MLX image serving requires mflux-generate or mflux-generate-qwen in PATH for launch Python: $ODYSSEUS_MLX_IMAGE_CMD_PY."')
-                runner_lines.append('  echo "Install with: $ODYSSEUS_MLX_IMAGE_CMD_PY -m pip install -U mflux fastapi uvicorn python-multipart"')
+                runner_lines.append('  echo "Install with: uv pip install --python $ODYSSEUS_MLX_IMAGE_CMD_PY -U mflux fastapi uvicorn python-multipart"')
                 runner_lines.append('  ODYSSEUS_PREFLIGHT_EXIT=127')
                 runner_lines.append('fi')
             elif "scripts/diffusion_server.py" in req.cmd or ".diffusion_server.py" in req.cmd:
@@ -3003,6 +3122,18 @@ def setup_cookbook_routes() -> APIRouter:
             # chmod is a no-op on Windows; bash on Windows runs the script
             # regardless of the executable bit.
             safe_chmod(runner_path, 0o755)
+            _owned_kind = "dependency" if is_pip_install else "model"
+            _owned_provider = str(req.runtime_id or "")
+            _owned_port_match = re.search(
+                r"(?:^|\s)--port(?:=|\s+)(\d{1,5})(?:\s|$)",
+                req.cmd or "",
+            )
+            _owned_port = (
+                int(_owned_port_match.group(1))
+                if _owned_port_match
+                and 1024 <= int(_owned_port_match.group(1)) <= 65535
+                else None
+            )
 
             if local_windows:
                 # LOCAL Windows: launch the bash runner detached (tmux replacement).
@@ -3028,10 +3159,21 @@ def setup_cookbook_routes() -> APIRouter:
                 setup_cmd = (
                     f"{scp_extras}"
                     f"scp -O {_Pf}-q '{runner_path}' {remote}:{remote_runner} && "
-                    f"ssh {_pf}{remote} {shlex.quote(_remote_tmux_launch_command(session_id, remote_runner))}"
+                    f"ssh {_pf}{remote} "
+                    f"{shlex.quote(_remote_tmux_launch_command(session_id, remote_runner, kind=_owned_kind, identity=req.repo_id, provider=_owned_provider, port=_owned_port))}"
                 )
             else:
-                setup_cmd = f"tmux set-option -g history-limit 100000 2>/dev/null; tmux new-session -d -s {session_id} {shlex.quote(str(runner_path))}"
+                setup_cmd = (
+                    "tmux set-option -g history-limit 100000 2>/dev/null; "
+                    f"tmux new-session -d -E -s {session_id} {shlex.quote(str(runner_path))} && "
+                    + render_tmux_tag_shell(
+                        session_id,
+                        kind=_owned_kind,
+                        identity=req.repo_id,
+                        provider=_owned_provider,
+                        port=_owned_port,
+                    )
+                )
 
         if setup_cmd is None:
             # LOCAL Windows: launch the bash runner detached; no tmux setup_cmd.
@@ -3140,30 +3282,29 @@ def setup_cookbook_routes() -> APIRouter:
             platform = "linux"
 
         if platform == "windows":
-            # Windows setup: ensure Python + pip + huggingface-hub via PowerShell
+            # Windows setup: require Python + uv and repair the exact interpreter.
             # Also create the session directory for background tasks
             setup_script = (
                 'powershell -Command "'
                 "New-Item -ItemType Directory -Force -Path $env:TEMP\\odysseus-sessions | Out-Null; "
                 "try { python --version } catch { Write-Host 'ERROR: Python not found — install from python.org'; exit 1 }; "
-                "python -m pip install -q huggingface-hub 2>$null; "
+                "try { uv --version } catch { Write-Host 'ERROR: uv not found — install from https://docs.astral.sh/uv/'; exit 1 }; "
+                "uv pip install --python python --no-cache -q huggingface-hub 2>$null; "
                 "python -c \\\"from huggingface_hub import snapshot_download; print('OK')\\\""
                 '"'
             )
             cmd = f'ssh {pf}{host} {setup_script}'
         elif platform == "termux":
             setup_script = (
-                "pkg install -y python tmux 2>/dev/null; "
-                "pip install --no-deps -q huggingface-hub 2>/dev/null; "
-                "pip install -q filelock fsspec packaging pyyaml tqdm typer httpx requests 2>/dev/null; "
+                "pkg install -y python tmux uv 2>/dev/null; "
+                "uv pip install --python python3 --no-cache --no-deps -q huggingface-hub 2>/dev/null; "
+                "uv pip install --python python3 --no-cache -q filelock fsspec packaging pyyaml tqdm typer httpx requests 2>/dev/null; "
                 "python3 -c 'from huggingface_hub import snapshot_download; print(\"OK\")'"
             )
             cmd = f"ssh {pf}{host} '{setup_script}'"
         else:
-            # Linux: auto-install tmux (via whichever package manager is available)
-            # and the current Hugging Face Hub/Xet client (falling back to
-            # --user/--break-system-packages
-            # on PEP-668 locked distros like Arch / newer Debian).
+            # Linux: install tmux when possible, require uv, and mutate only the
+            # selected Python through uv.
             setup_script = (
                 # Install tmux if missing — try common package managers; skip if no sudo
                 "if ! command -v tmux >/dev/null 2>&1; then "
@@ -3175,10 +3316,8 @@ def setup_cookbook_routes() -> APIRouter:
                 "  fi; "
                 "fi; "
                 "command -v tmux >/dev/null 2>&1 || echo 'WARNING: tmux missing and auto-install failed (need passwordless sudo). Install manually.'; "
-                # Install Python bits. Try system install first; fall back to --user --break-system-packages on PEP 668 systems.
-                "pip install -q huggingface_hub hf_xet 2>/dev/null || "
-                "pip install --user --break-system-packages -q huggingface_hub hf_xet 2>/dev/null || "
-                "pip3 install --user --break-system-packages -q huggingface_hub hf_xet 2>/dev/null; "
+                "command -v uv >/dev/null 2>&1 || { echo 'ERROR: uv is required on the remote server. Install it from https://docs.astral.sh/uv/'; exit 127; }; "
+                "uv pip install --python python3 --no-cache -q huggingface_hub hf_xet 2>/dev/null; "
                 "python3 -c 'from huggingface_hub import snapshot_download; print(\"OK\")'"
             )
             cmd = f"ssh {pf}{host} '{setup_script}'"
@@ -4155,7 +4294,7 @@ def setup_cookbook_routes() -> APIRouter:
                     return {"ok": False, "files": [], "error": f"HF API HTTP {resp.status_code}"}
                 data = resp.json()
         except Exception:
-            logger.exception("HF GGUF file scan failed for %s", repo)
+            logger.exception("HF GGUF file scan failed for %s", repo_id)
             return {"ok": False, "files": [], "error": "HF API request failed"}
         files = [
             str(s.get("rfilename") or "")

@@ -11,7 +11,7 @@
       "id": "retrieval",
       "directory": "retrieval",
       "source": "https://github.com/CommanderTurtle/retrieval.git",
-      "role": "Chroma-backed skill, workflow, session, and context retrieval MCP"
+      "role": "Durable chronological Hermes/context-mode archive, exact neighbor recall, and skill-file catalog"
     },
     {
       "id": "context-mode",

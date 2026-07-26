@@ -9,6 +9,7 @@ import re
 import shlex
 import shutil
 import subprocess
+import sys
 import uuid
 import tempfile
 from collections import namedtuple
@@ -22,6 +23,7 @@ from src.host_docker_access import (
     running_in_container as _running_in_container,
 )
 from src.optional_deps import prepare_optional_dependency_import
+from src.tmux_ownership import render_tmux_tag_shell
 
 # POSIX-only: `pty`/`fcntl` transitively import `termios`, which does NOT exist
 # on Windows, so importing them unconditionally crashed app startup there
@@ -153,6 +155,24 @@ def _local_cuda13_profile_applicable() -> bool:
     return False
 
 
+def _diogenes_inner_venv_python() -> str | None:
+    """Return the exact managed interpreter, never an ambient Python."""
+    if sys.prefix == sys.base_prefix:
+        return None
+    # Keep the invocation path rather than resolving its uv-managed symlink.
+    python_path = Path(sys.executable).absolute()
+    venv_path = Path(sys.prefix).resolve()
+    venv_bin = venv_path / ("Scripts" if IS_WINDOWS else "bin")
+    if (
+        venv_path != _DIOGENES_VENV
+        or not python_path.is_file()
+        or python_path.parent.resolve() != venv_bin.resolve()
+        or not (venv_path / "pyvenv.cfg").is_file()
+    ):
+        return None
+    return str(python_path)
+
+
 def _ulysses_vllm_lock_contract(*, remote_host: str | None = None) -> dict | None:
     """Describe the local Diogenes vLLM installation contract.
 
@@ -169,27 +189,15 @@ def _ulysses_vllm_lock_contract(*, remote_host: str | None = None) -> dict | Non
     """
     if (remote_host or "").strip():
         return None
-    import sys
-
     # A managed install must never target the base interpreter or merely
     # whichever virtual environment happened to launch the process. Diogenes
     # owns exactly <checkout>/.venv; the isolated model-downloader environment
     # and unrelated activated environments must never receive its CUDA stack.
-    if sys.prefix == sys.base_prefix:
+    python = _diogenes_inner_venv_python()
+    if python is None:
         return None
-    # Preserve the venv executable path. uv-created environments commonly make
-    # ``.venv/bin/python`` a symlink into uv's managed interpreter store; resolving
-    # that symlink would make the install target look like the base runtime.
-    python_path = Path(sys.executable).absolute()
-    venv_path = Path(sys.prefix).resolve()
-    venv_bin = venv_path / ("Scripts" if IS_WINDOWS else "bin")
-    if (
-        venv_path != _DIOGENES_VENV
-        or not python_path.is_file()
-        or python_path.parent.resolve() != venv_bin.resolve()
-        or not (venv_path / "pyvenv.cfg").is_file()
-    ):
-        return None
+    python_path = Path(python)
+    venv_path = _DIOGENES_VENV
     configured = os.getenv("ULYSSES_VLLM_LOCK", "").strip()
     profile = os.getenv("ULYSSES_VLLM_PROFILE", "auto").strip().lower()
     if configured.lower() in {"disabled", "off", "latest", "unmanaged"}:
@@ -219,6 +227,10 @@ def _ulysses_vllm_lock_contract(*, remote_host: str | None = None) -> dict | Non
             "torch_backend": "cu130",
             "index_url": _ULYSSES_VLLM_NIGHTLY_INDEX,
             "exact": "==" in spec,
+            "documentation": {
+                "vllm": "https://docs.vllm.ai/en/latest/getting_started/installation/gpu/",
+                "uv": "https://docs.astral.sh/uv/pip/environments/",
+            },
         }
 
     lock_path = Path(configured).expanduser()
@@ -247,6 +259,9 @@ def _ulysses_vllm_lock_contract(*, remote_host: str | None = None) -> dict | Non
         "venv": str(venv_path),
         "versions": required,
         "exact": True,
+        "documentation": {
+            "uv": "https://docs.astral.sh/uv/pip/environments/",
+        },
     }
 
 
@@ -326,6 +341,104 @@ def _normalize_ulysses_vllm_install(
         return command, False
     managed = _ulysses_vllm_install_command(contract)
     return managed, managed != command
+
+
+def _normalize_diogenes_python_install(
+    command: str,
+    *,
+    remote_host: str | None = None,
+) -> str:
+    """Pin inner-venv package mutations to uv and its exact interpreter."""
+
+    python = _diogenes_inner_venv_python()
+    if "pip" not in (command or ""):
+        return command
+    try:
+        tokens = shlex.split(command)
+    except ValueError:
+        return command
+    env_count = 0
+    while (
+        env_count < len(tokens)
+        and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*=.*", tokens[env_count])
+    ):
+        env_count += 1
+    executable = tokens[env_count] if env_count < len(tokens) else ""
+    base = Path(executable).name.lower()
+    mutation_start = -1
+    operation = ""
+    if (
+        base == "uv"
+        and tokens[env_count + 1 : env_count + 2] == ["pip"]
+        and tokens[env_count + 2 : env_count + 3] in (["install"], ["uninstall"])
+    ):
+        operation = tokens[env_count + 2]
+        mutation_start = env_count + 3
+    elif (
+        (base.startswith("python") or base in {"pypy", "pypy3"})
+        and tokens[env_count + 1 : env_count + 3] == ["-m", "pip"]
+        and tokens[env_count + 3 : env_count + 4] in (["install"], ["uninstall"])
+    ):
+        operation = tokens[env_count + 3]
+        mutation_start = env_count + 4
+    elif (
+        base in {"pip", "pip3"}
+        and tokens[env_count + 1 : env_count + 2] in (["install"], ["uninstall"])
+    ):
+        operation = tokens[env_count + 1]
+        mutation_start = env_count + 2
+    if mutation_start < 0:
+        return command
+
+    arguments: list[str] = []
+    index = mutation_start
+    while index < len(tokens):
+        token = tokens[index]
+        if token == "--python":
+            index += 2
+            continue
+        if token.startswith("--python="):
+            index += 1
+            continue
+        if token in {"--user", "--break-system-packages"}:
+            index += 1
+            continue
+        if operation == "uninstall" and token in {"-y", "--yes"}:
+            index += 1
+            continue
+        arguments.append(token)
+        index += 1
+    # Current remote clients already provide their configured venv through
+    # ``uv pip --python``. Preserve that explicit target. A stale remote client
+    # is normalized to its python3 rather than being allowed to invoke pip
+    # directly. Local mutations require the exact Diogenes inner environment.
+    explicit_python = ""
+    for index, token in enumerate(tokens):
+        if token == "--python" and index + 1 < len(tokens):
+            explicit_python = tokens[index + 1]
+            break
+        if token.startswith("--python="):
+            explicit_python = token.split("=", 1)[1]
+            break
+    if remote_host:
+        python = explicit_python or "python3"
+    elif python is None:
+        raise HTTPException(
+            409,
+            "Diogenes package changes require the checkout's active .venv. "
+            "Start the app with startwithuv.sh, then retry.",
+        )
+    return shlex.join(
+        [
+            *tokens[:env_count],
+            "uv",
+            "pip",
+            operation,
+            "--python",
+            python,
+            *arguments,
+        ]
+    )
 
 
 def _ssh_base_argv(host: str, ssh_port: str | None) -> list[str]:
@@ -628,36 +741,8 @@ def _package_pip_update_status(
         )
 
     return PackageUpdateStatus(
-        True, "Update uses pip in the selected Python environment."
+        True, "Update uses uv pip against the selected Python environment."
     )
-
-
-def _prepend_user_install_bins_to_path() -> None:
-    """Make pip --user console scripts visible to dependency probes.
-
-    Docker Cookbook installs vLLM with `python -m pip install --user`, which
-    drops the `vllm` CLI in /app/.local/bin. The running app process does not
-    inherit that PATH update, so `shutil.which("vllm")` can report missing even
-    after a successful install.
-    """
-    try:
-        import site
-
-        candidates = [os.path.join(site.USER_BASE, "bin")]
-    except Exception:
-        candidates = []
-    candidates.append(os.path.expanduser("~/.local/bin"))
-
-    parts = (
-        os.environ.get("PATH", "").split(os.pathsep) if os.environ.get("PATH") else []
-    )
-    changed = False
-    for path in reversed([p for p in candidates if p]):
-        if path not in parts:
-            parts.insert(0, path)
-            changed = True
-    if changed:
-        os.environ["PATH"] = os.pathsep.join(parts)
 
 
 def _package_probe_script(names: list[str]) -> str:
@@ -668,7 +753,6 @@ import importlib.metadata as md
 import json
 import os
 import shutil
-import site
 
 names=[{names_lit}]
 dist_names={{
@@ -695,12 +779,8 @@ bin_names={{
     'tmux':['tmux'],
 }}
 
-def add_user_install_bins_to_path():
+def add_native_cli_bins_to_path():
     candidates = []
-    try:
-        candidates.append(os.path.join(site.USER_BASE, 'bin'))
-    except Exception:
-        pass
     candidates.append(os.path.expanduser('~/bin'))
     candidates.append(os.path.expanduser('~/llama.cpp/build/bin'))
     candidates.append(os.path.expanduser('~/llama.cpp/build-vulkan/bin'))
@@ -716,7 +796,7 @@ def add_user_install_bins_to_path():
     if changed:
         os.environ['PATH'] = os.pathsep.join(parts)
 
-add_user_install_bins_to_path()
+add_native_cli_bins_to_path()
 
 def mod_status(n):
     spec = importlib.util.find_spec(n)
@@ -1045,6 +1125,8 @@ async def _generate_tmux(cmd: str, request: Request):
         f'  ODYSSEUS_USER_PATH="$("$ODYSSEUS_USER_SHELL" -ic \'printf "__ODYSSEUS_PATH__%s\\n" "$PATH"\' 2>/dev/null | sed -n \'s/^__ODYSSEUS_PATH__//p\' | tail -n 1 || true)"\n'
         f'  if [ -n "$ODYSSEUS_USER_PATH" ]; then export PATH="$ODYSSEUS_USER_PATH:$PATH"; fi\n'
         f"fi\n"
+        f'if [ -n "${{VIRTUAL_ENV:-}}" ]; then export PATH="$VIRTUAL_ENV/bin:$PATH"; fi\n'
+        f"hash -r\n"
         f"{cmd} 2>&1 | tee '{log_path}'\n"
         f"EC=${{PIPESTATUS[0]}}\n"
         f"echo ':::EXIT_CODE:::'$EC >> '{log_path}'\n"
@@ -1057,7 +1139,14 @@ async def _generate_tmux(cmd: str, request: Request):
         "tmux wrapper script created: session=%s path=%s", session_id, script_path
     )
 
-    tmux_cmd = f"tmux new-session -d -s {session_id} {shlex.quote(str(script_path))}"
+    tmux_cmd = (
+        f"tmux new-session -d -E -s {session_id} {shlex.quote(str(script_path))} && "
+        + render_tmux_tag_shell(
+            session_id,
+            kind="shell",
+            identity=session_id,
+        )
+    )
 
     proc = await asyncio.create_subprocess_shell(
         tmux_cmd,
@@ -1490,8 +1579,6 @@ def setup_shell_routes() -> APIRouter:
         import importlib.metadata as importlib_metadata
         import shlex
         import json as _json
-        import site
-        import sys
 
         platform_l = (platform or "").strip().lower()
         model_hint_l = (model_hint or "").strip().lower()
@@ -1501,25 +1588,7 @@ def setup_shell_routes() -> APIRouter:
             for key in ("lama", "mi-gan", "migan", "inpainting-mlx")
         )
         has_ddcolor_mlx_model = "ddcolor" in model_hint_l
-        _prepend_user_install_bins_to_path()
         importlib.invalidate_caches()
-        try:
-            user_site = site.getusersitepackages()
-            if user_site and os.path.isdir(user_site):
-                # Use addsitedir(), NOT a bare sys.path.append(). When a package
-                # is `pip install --user`'d at runtime (Cookbook → Install) the
-                # long-lived server process started before the user-site existed,
-                # so site never processed it — including its `.pth` hooks. On
-                # Python 3.12+ `distutils` is gone from stdlib and is only
-                # restored by setuptools' `distutils-precedence.pth`, which ships
-                # in user-site. basicsr (a realesrgan dep) does `import distutils`
-                # at import time, so a plain append left the package importable
-                # but `import distutils` failing → realesrgan probed as
-                # not-installed until a full process restart. addsitedir() replays
-                # the `.pth` files so the shim is active.
-                site.addsitedir(user_site)
-        except Exception:
-            pass
         if ssh_port and str(ssh_port).strip() not in ("", "22"):
             _port = str(ssh_port).strip()
             if not _SSH_PORT_RE.match(_port) or not (1 <= int(_port) <= 65535):
@@ -1717,7 +1786,7 @@ def setup_shell_routes() -> APIRouter:
                 if p.get("name") != "mlx_ddcolor_swift"
             ]
         # Remote check: for remote-target packages, probe the selected server's
-        # venv over SSH so a remote `pip install` actually reflects here.
+        # configured interpreter so its uv-managed install is reflected here.
         remote_status: dict = {}
         remote_details: dict = {}
         remote_probe_error = ""
@@ -1857,6 +1926,19 @@ def setup_shell_routes() -> APIRouter:
             target_os_id = "macos"
 
         managed_vllm = _ulysses_vllm_lock_contract(remote_host=host)
+        if managed_vllm:
+            # Browser actions display and submit the same server-authored uv
+            # plan. The launch route still re-normalizes stale clients, so no
+            # browser bundle can redirect this mutation outside .venv.
+            managed_vllm = dict(managed_vllm)
+            managed_vllm["install_command"] = _ulysses_vllm_install_command(
+                managed_vllm,
+                postflight=False,
+            )
+            managed_vllm["full_command"] = _ulysses_vllm_install_command(
+                managed_vllm,
+                postflight=True,
+            )
         for pkg in packages:
             if pkg["name"] == "vllm" and managed_vllm:
                 pkg["managed_install"] = managed_vllm
@@ -1926,13 +2008,49 @@ def setup_shell_routes() -> APIRouter:
                     "dists": {},
                 }
             elif pkg["name"] == "vllm":
-                _vllm_cli = shutil.which("vllm")
-                pkg["installed"] = _vllm_cli is not None
+                _vllm_cli = None
+                _vllm_version = None
+                if managed_vllm and not host:
+                    _managed_venv = Path(str(managed_vllm["venv"]))
+                    _managed_python = Path(str(managed_vllm["python"]))
+                    _managed_cli = _managed_venv / (
+                        "Scripts/vllm.exe" if IS_WINDOWS else "bin/vllm"
+                    )
+                    if _managed_python.is_file() and _managed_cli.is_file():
+                        try:
+                            _probe_proc = await asyncio.create_subprocess_exec(
+                                str(_managed_python),
+                                "-c",
+                                (
+                                    "from importlib.metadata import version; "
+                                    "print(version('vllm'))"
+                                ),
+                                stdout=asyncio.subprocess.PIPE,
+                                stderr=asyncio.subprocess.PIPE,
+                            )
+                            _probe_out, _ = await asyncio.wait_for(
+                                _probe_proc.communicate(),
+                                timeout=8,
+                            )
+                            if _probe_proc.returncode == 0:
+                                _vllm_version = _probe_out.decode(
+                                    "utf-8",
+                                    errors="replace",
+                                ).strip()
+                                _vllm_cli = str(_managed_cli)
+                        except (OSError, asyncio.TimeoutError):
+                            _vllm_cli = None
+                else:
+                    _vllm_cli = shutil.which("vllm")
+                pkg["installed"] = bool(_vllm_cli)
                 if pkg["installed"]:
-                    try:
-                        _vllm_version = importlib_metadata.version(_pip_dist_name(pkg))
-                    except importlib_metadata.PackageNotFoundError:
-                        _vllm_version = None
+                    if _vllm_version is None:
+                        try:
+                            _vllm_version = importlib_metadata.version(
+                                _pip_dist_name(pkg)
+                            )
+                        except importlib_metadata.PackageNotFoundError:
+                            _vllm_version = None
                     probe = {
                         "binaries": {"vllm": _vllm_cli},
                         "dists": {"vllm": _vllm_version} if _vllm_version else {},
@@ -2075,19 +2193,26 @@ def setup_shell_routes() -> APIRouter:
                 )
                 pkg["applicable"] = status.applicable
                 pkg["install_hint"] = status.install_hint
-        return {"packages": packages}
+        managed_python = None if host else _diogenes_inner_venv_python()
+        return {
+            "packages": packages,
+            "python_mutation": (
+                {"manager": "uv", "python": managed_python}
+                if managed_python
+                else {"manager": "upstream"}
+            ),
+        }
 
     @router.post("/api/cookbook/packages/install")
     async def install_package(request: Request):
-        """Install a package via pip. Admin only — pip install is effectively code exec."""
+        """Install an allowlisted package with uv into this exact environment."""
         _require_admin(request)
-        import sys as _sys
 
         body = await request.json()
         pip_name = body.get("pip")
         if not pip_name:
             return {"ok": False, "error": "No package specified"}
-        # Validate against known packages to prevent arbitrary pip install
+        # Validate against known packages to prevent arbitrary package installs.
         known = {
             "rembg[gpu]",
             "huggingface_hub[hf_xet]",
@@ -2127,7 +2252,29 @@ def setup_shell_routes() -> APIRouter:
                     ),
                     "managed_install": managed_vllm,
                 }
-        cmd = [_sys.executable, "-m", "pip", "install", pip_name]
+        managed_python = _diogenes_inner_venv_python()
+        if not managed_python:
+            return {
+                "ok": False,
+                "error": (
+                    "Diogenes package changes require the checkout's active "
+                    ".venv. Start the app with startwithuv.sh, then retry."
+                ),
+            }
+        uv_executable = shutil.which("uv")
+        if not uv_executable:
+            return {
+                "ok": False,
+                "error": "uv is required for Diogenes dependency installation.",
+            }
+        cmd = [
+            uv_executable,
+            "pip",
+            "install",
+            "--python",
+            managed_python,
+            pip_name,
+        ]
         proc = await asyncio.create_subprocess_exec(
             *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
         )

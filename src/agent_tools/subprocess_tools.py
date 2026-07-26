@@ -7,6 +7,7 @@ import time
 import collections
 from typing import Optional, Callable, Awaitable, Tuple, Dict
 from src.constants import MAX_OUTPUT_CHARS
+from src.tmux_ownership import tmux_tag_argv
 
 DEFAULT_BASH_TIMEOUT = 60 * 60     # 1 hour
 DEFAULT_PYTHON_TIMEOUT = 60 * 60
@@ -66,7 +67,7 @@ async def _ensure_tmux_session(name: str, cwd: str, env: Optional[dict]) -> None
         await _run_exec("tmux", "send-keys", "-t", name, "stty -echo", "C-m", timeout=5)
         return
     await _run_exec(
-        "tmux", "new-session", "-d", "-s", name, "-c", cwd,
+        "tmux", "new-session", "-d", "-E", "-s", name, "-c", cwd,
         "env",
         f"TERM={env.get('TERM', 'xterm-256color') if env else 'xterm-256color'}",
         f"COLUMNS={env.get('COLUMNS', '120') if env else '120'}",
@@ -78,6 +79,12 @@ async def _ensure_tmux_session(name: str, cwd: str, env: Optional[dict]) -> None
     )
     if not await _tmux_has_session(name):
         raise RuntimeError(f"failed to create tmux session {name}")
+    for argv in tmux_tag_argv(name, kind="agent", identity=name):
+        _, err, rc = await _run_exec(*argv, timeout=5)
+        if rc != 0:
+            raise RuntimeError(
+                f"failed to tag tmux session {name}: {err.strip() or rc}"
+            )
     await _run_exec("tmux", "send-keys", "-t", name, "stty -echo", "C-m", timeout=5)
 
 

@@ -247,7 +247,7 @@ class McpManager:
             return True
 
         except ImportError:
-            logger.warning("MCP package not installed. Install with: pip install mcp")
+            logger.warning("MCP package not installed. Install with: uv pip install --python .venv/bin/python mcp")
             self._connections[server_id] = {
                 "status": "error",
                 "error": "mcp package not installed",
@@ -305,7 +305,7 @@ class McpManager:
                     await stack.aclose()
 
         except ImportError:
-            logger.warning("MCP package not installed. Install with: pip install mcp")
+            logger.warning("MCP package not installed. Install with: uv pip install --python .venv/bin/python mcp")
             self._connections[server_id] = {"status": "error", "error": "mcp package not installed", "name": name}
             return False
 
@@ -383,7 +383,7 @@ class McpManager:
             logger.info(f"MCP server connected: {name} ({server_id}) - {len(tools)} tools via http")
             return True
         except ImportError:
-            logger.warning("MCP package not installed. Install with: pip install mcp")
+            logger.warning("MCP package not installed. Install with: uv pip install --python .venv/bin/python mcp")
             self._connections[server_id] = {"status": "error", "error": "mcp package not installed", "name": name}
             return False
         except Exception as e:

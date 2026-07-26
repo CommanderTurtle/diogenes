@@ -44,16 +44,13 @@ After cloning the Diogenes `dev` branch, install
 ```bash
 cd Diogenes
 ./uvsetup.sh
-source .venv/bin/activate
-uv run --active --no-sync python -m uvicorn app:app --host 127.0.0.1 --port 7000
+./startwithuv.sh
 ```
 
-The script creates uv-managed CPython 3.13.12 environments at `.venv` and
-`.venv-model-download`, resolves the services root, detects the standalone
-Sandwich installation, and starts no service unless `--with-chroma` is
-explicitly supplied. Cookbook also needs `tmux` for background model downloads
-and serves. Use `--host 0.0.0.0` only when you intentionally want trusted
-LAN/reverse-proxy access.
+The setup script creates the uv-managed CPython 3.13.12 environment at
+`.venv`, installs `requirements.txt`, and runs `setup.py`. The start script
+launches the web application on `0.0.0.0:7000`. Cookbook also needs `tmux` for
+background model downloads and model servers.
 
 For macOS, use the upstream Apple Silicon flow below; `uvsetup.sh` is the
 GNU/Linux/WSL workstation contract.
@@ -400,8 +397,8 @@ If `chromadb-client` (the lightweight HTTP-only package) is installed alongside 
 
 **Fix:** uninstall `chromadb-client` and force-reinstall the full package:
 ```bash
-.venv/bin/python -m pip uninstall chromadb-client -y
-.venv/bin/python -m pip install --force-reinstall chromadb
+uv pip uninstall --python .venv/bin/python chromadb-client
+uv pip install --python .venv/bin/python --force-reinstall chromadb
 ```
 
 ### HTTPS + LAN/Tailscale exposure
@@ -452,8 +449,9 @@ uv pip sync --python .venv/bin/python requirements.lock
 ```
 
 `requirements.lock` is gitignored and platform-specific. Regenerate it
-deliberately after reviewed updates. The normal `./uvsetup.sh` flow keeps
-following the unpinned requirements and then runs `uv pip check`.
+deliberately after reviewed updates. The normal `./uvsetup.sh` flow follows the
+unpinned requirements; run `uv pip check --python .venv/bin/python` explicitly
+when auditing the resolved environment.
 
 ### Outlook / Office 365 email
 Odysseus email accounts currently use IMAP/SMTP username-password auth. Outlook

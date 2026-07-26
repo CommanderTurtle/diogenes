@@ -24,6 +24,7 @@ from core.platform_compat import detached_popen_kwargs, pid_alive
 JOB_SCHEMA = "ulysses.runtime-job.v1"
 TERMINAL_STATES = {"succeeded", "failed", "cancelled"}
 PUBLIC_HIDDEN_FIELDS = {"confirmation_hash"}
+ENVIRONMENT_MODES = {"diogenes", "host", "tmux"}
 
 
 class RuntimeJobError(RuntimeError):
@@ -48,6 +49,61 @@ def _public(record: dict[str, Any]) -> dict[str, Any]:
         for key, value in record.items()
         if key not in PUBLIC_HIDDEN_FIELDS
     }
+
+
+def native_host_environment() -> dict[str, str]:
+    """Build the native user environment for non-Diogenes executables.
+
+    The API worker itself is launched from Diogenes's Python environment.
+    Passing that activation to Hermes, Bun, Git, Docker, or a service-owned
+    interpreter makes host commands accidentally resolve Diogenes packages.
+    """
+
+    environment = dict(os.environ)
+    for key in (
+        "VIRTUAL_ENV",
+        "VIRTUAL_ENV_PROMPT",
+        "PYTHONHOME",
+        "PYTHONPATH",
+        "UV_ACTIVE",
+        "_OLD_VIRTUAL_PATH",
+    ):
+        environment.pop(key, None)
+    home = Path.home().resolve()
+    bun_install = home / ".bun"
+    environment["PATH"] = os.pathsep.join(
+        (
+            str(home / ".local" / "bin"),
+            str(bun_install / "bin"),
+            "/usr/local/sbin",
+            "/usr/local/bin",
+            "/usr/sbin",
+            "/usr/bin",
+            "/sbin",
+            "/bin",
+        )
+    )
+    environment.setdefault("BUN_INSTALL", str(bun_install))
+    environment.setdefault("BUN_INSTALL_BIN", str(bun_install / "bin"))
+    environment.setdefault(
+        "BUN_INSTALL_GLOBAL_DIR",
+        str(bun_install / "install" / "global"),
+    )
+    environment["DO_NOT_TRACK"] = "1"
+    return environment
+
+
+def _invocation_path(value: str) -> str:
+    """Normalize an executable spelling without following venv symlinks."""
+
+    return os.path.normcase(os.path.abspath(os.path.expanduser(value)))
+
+
+def _is_diogenes_interpreter(value: str) -> bool:
+    # uv-managed environments can point multiple venv Python symlinks at the
+    # same base interpreter. Resolving either path would erase the ownership
+    # boundary between Diogenes and a service's private environment.
+    return _invocation_path(value) == _invocation_path(sys.executable)
 
 
 class RuntimeJobStore:
@@ -117,6 +173,25 @@ class RuntimeJobStore:
                 raise RuntimeJobError("runtime job argv values must be strings")
             if step.get("shell"):
                 raise RuntimeJobError("shell runtime steps are not accepted")
+            mode = step.get("environment_mode")
+            if mode is None:
+                # Only scripts intentionally launched through this exact
+                # interpreter belong to the Diogenes Python environment.
+                # Absolute service interpreters and every host tool run clean.
+                mode = "diogenes" if _is_diogenes_interpreter(argv[0]) else "host"
+                step["environment_mode"] = mode
+            if mode not in ENVIRONMENT_MODES:
+                raise RuntimeJobError(
+                    "runtime job environment mode must be diogenes, host, or tmux"
+                )
+            if mode == "diogenes" and not _is_diogenes_interpreter(argv[0]):
+                raise RuntimeJobError(
+                    "Diogenes environment mode requires its exact Python invocation"
+                )
+            if mode == "tmux" and Path(argv[0]).name != "tmux":
+                raise RuntimeJobError(
+                    "tmux environment mode requires a tmux executable"
+                )
             expected_output = step.get("expected_output_contains")
             if expected_output is not None and (
                 not isinstance(expected_output, str)
@@ -369,10 +444,16 @@ def run_persisted_job(
                 log.flush()
                 started = time.time()
                 try:
+                    environment = (
+                        dict(os.environ)
+                        if step.get("environment_mode") in {"diogenes", "tmux"}
+                        else native_host_environment()
+                    )
+                    environment.update(step.get("environment", {}))
                     result = run(
                         step["argv"],
                         cwd=step.get("cwd") or None,
-                        env={**os.environ, **step.get("environment", {})},
+                        env=environment,
                         capture_output=True,
                         text=True,
                         timeout=int(step.get("timeout", 300)),

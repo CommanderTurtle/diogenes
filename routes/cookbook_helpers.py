@@ -180,36 +180,28 @@ def _local_tooling_path_export(executable: str) -> str:
 
 
 def _pip_install_no_cache(cmd: str) -> str:
-    """Add ``--no-cache-dir`` to a pip install command.
+    """Disable uv's package cache for a dependency install.
 
     Cookbook dependency installs (vLLM, llama-cpp-python, …) build large wheels;
-    pip's default cache lives under ``$HOME/.cache/pip`` and these builds can fill
-    a small home filesystem with ``[Errno 28] No space left on device`` mid-build
-    (issue #1219), leaving the dependency "installed" but unusable (#1459).
-    Disabling the cache for these one-off installs keeps them off the home disk
-    (the maintainer's suggested ``PIP_CACHE_DIR=`` workaround, made the default).
-    Idempotent; leaves non-pip-install commands untouched."""
+    a cache can fill a small home filesystem mid-build. Diogenes owns Python
+    mutations through ``uv pip`` only, so current commands receive uv's
+    ``--no-cache`` switch. A non-uv command is returned unchanged: the
+    server-side normalizer owns conversion of stale browser payloads and this
+    helper must never manufacture a second raw-pip execution path."""
     if not cmd or "pip install" not in cmd:
         return cmd
     if re.search(r"(?:^|\s)uv\s+pip\s+install(?:\s|$)", cmd):
         if "--no-cache" in cmd:
             return cmd
         return cmd.replace("pip install", "pip install --no-cache", 1)
-    if "--no-cache-dir" in cmd:
-        return cmd
-    return cmd.replace("pip install", "pip install --no-cache-dir", 1)
+    return cmd
 
 
 def _pip_install_attempt(pip_cmd: str) -> str:
-    """Wrap a single pip install command so its exit status survives the
-    fallback chain and its stderr is visible in the tmux log on failure.
+    """Wrap one uv install so its exit status and diagnostics survive.
 
-    Without this wrapper, `pip … 2>&1 | tail -5` returns ``tail``'s exit
-    code (0), masking pip's real failure and preventing the next fallback
-    from running.  The generated snippet captures all output to a temp
-    file, prints the last 5 lines on failure (so the Cookbook log panel
-    shows useful diagnostics), cleans up, and exits with pip's original
-    status.
+    A direct ``... | tail`` reports tail's status instead of uv's. The wrapper
+    preserves the actual status while retaining concise task output.
     """
     return (
         "bash -c '"
@@ -219,82 +211,44 @@ def _pip_install_attempt(pip_cmd: str) -> str:
     )
 
 
-def _pip_command(python_cmd: str) -> str:
-    """Return a pip command for either a pip executable or a Python executable."""
+def _uv_python_target(python_cmd: str) -> str:
+    """Resolve a legacy Python/pip spelling to an explicit uv target."""
     cmd = python_cmd.strip()
-    if " -m pip" in cmd or cmd in {"pip", "pip3"}:
-        return python_cmd
-    if cmd in {"python", "python3", "python.exe"} or cmd.endswith(("/python", "/python3", "\\python.exe")):
-        return f"{python_cmd} -m pip"
-    return python_cmd
-
-
-def _pip_break_system_packages_check(pip_cmd: str) -> str:
-    return f"{pip_cmd} install --help 2>/dev/null | grep -q -- --break-system-packages"
+    if cmd.endswith(" -m pip"):
+        cmd = cmd[: -len(" -m pip")].strip()
+    if cmd in {"pip", "pip3", ""}:
+        return "python3"
+    return cmd
 
 
 def _pip_install_fallback_chain(package: str, *, python_cmd: str = "python3 -m pip", upgrade: bool = False) -> str:
-    """Build a bash pip install fallback chain that surfaces errors.
+    """Build the legacy-call-compatible, uv-only install command.
 
-    Try the active interpreter/environment first. ``--user`` is invalid
-    inside many venvs, so only attempt the ``--user`` fallback when NOT
-    inside a venv.
-
-    Each attempt is wrapped via :func:`_pip_install_attempt` so pip's real
-    exit code is preserved (no ``| tail`` masking) and the last 5 lines of
-    pip output appear in the Cookbook log on failure.
+    The function name remains stable for upstream call sites, but there is no
+    pip/user/system fallback in Diogenes. Every install has one explicit Python
+    target, and a missing uv executable is a clear setup error.
     """
-    from core.platform_compat import IS_WINDOWS
     upgrade_flag = " -U" if upgrade else ""
-    # Shell-quote the package spec: an extras spec like ``llama-cpp-python[server]``
-    # contains brackets that bash would treat as a glob, so it must be quoted
-    # before being embedded in the install command. Plain names (e.g.
-    # ``huggingface_hub``) are returned unchanged by ``shlex.quote``.
     pkg = shlex.quote(package)
-    # llama-cpp-python source builds are brittle on older distro pip/packaging
-    # stacks (common on WSL images). Prefer the prebuilt wheel index whenever
-    # this package is requested so dependency-install tasks are reliable.
     if "llama-cpp-python" in package:
         pkg += " --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu"
-
-    pip_cmd = _pip_command(python_cmd)
-    base = _pip_install_attempt(f"{pip_cmd} install -q{upgrade_flag} {pkg}")
-    user = _pip_install_attempt(f"{pip_cmd} install --user -q{upgrade_flag} {pkg}")
-    user_break_system = _pip_install_attempt(f"{pip_cmd} install --user --break-system-packages -q{upgrade_flag} {pkg}")
-    user_fallback = f"( {user} || {{ {_pip_break_system_packages_check(pip_cmd)} && {user_break_system}; }} )"
-    # Derive the python executable for the venv detection check.
-    # Must use the same interpreter that pip belongs to; hardcoding
-    # python3 breaks when pip lives in a venv that only has "python".
-    if " -m pip" in pip_cmd:
-        python_exe = pip_cmd.replace(" -m pip", "")
-    elif pip_cmd.strip() == "pip":
-        python_exe = "python"
-    elif pip_cmd.strip() == "pip3":
-        python_exe = "python3"
-    else:
-        python_exe = "python3"
-    venv_check = f'{python_exe} -c "import sys; sys.exit(0 if sys.prefix != sys.base_prefix else 1)"'
-    # Negated: `! venv_check` succeeds (exit 0) when NOT in a venv -> `&&` tries
-    # --user. When IN a venv `! venv_check` fails -> `&&` skips --user and the
-    # group exits non-zero, propagating the base-install failure instead of
-    # masking it as success (the `|| { venv_check || … }` shape from #903
-    # swallowed the exit code because venv_check's exit-0 became the group's
-    # result). `--break-system-packages` is only attempted when the active pip
-    # supports it; older pip versions abort with "no such option" otherwise.
-    return f"{base} || {{ ! {venv_check} && {user_fallback}; }}"
+    python_target = _uv_python_target(python_cmd)
+    command = (
+        f"uv pip install --python {python_target} --no-cache -q"
+        f"{upgrade_flag} {pkg}"
+    )
+    return _pip_install_attempt(command)
 
 
 def _venv_safe_local_pip_install_cmd(cmd: str, *, local: bool, in_venv: bool) -> str:
-    """Drop pip user-install flags that are invalid for local venv installs.
+    """Strip stale global-install flags before the uv-only normalizer runs.
 
     Cookbook dependency installs run through the model-serve task path so users
-    can watch progress in the same log UI. For local POSIX runs, that task
-    prepends Odysseus' own interpreter directory to PATH. If Odysseus itself is
-    running from a venv, `python3` resolves to the venv Python and pip rejects
-    `--user` with "User site-packages are not visible in this virtualenv".
-
-    Keep remote and non-venv installs unchanged: remotes may intentionally use
-    system Python, and Docker/non-venv installs still need user-site fallback.
+    can watch progress in the same log UI. Current clients already emit
+    ``uv pip --python``; this compatibility step only removes ``--user`` and
+    ``--break-system-packages`` from an older local payload before the route
+    pins it to Diogenes' exact inner interpreter. Remote targets retain their
+    explicit configured interpreter.
     """
     if not local or not in_venv:
         return cmd
@@ -337,28 +291,18 @@ def _pip_install_help_check_from_cmd(cmd: str) -> str | None:
 
 
 def _append_pip_install_runner_lines(runner_lines: list[str], cmd: str) -> None:
-    """Append a pip install command, guarding --break-system-packages support.
+    """Append the already server-normalized uv command.
 
-    The Dependencies UI may submit ``python3 -m pip install --user
-    --break-system-packages ...`` for non-venv installs. That flag is useful on
-    PEP-668-locked distros, but older pip (including Ubuntu 22.04's apt pip in
-    the NVIDIA CUDA base image) aborts with "no such option". Branch at runner
-    time so stale browser JS and remote targets are handled by the server too.
+    Stale non-uv payloads are rejected rather than reaching a system package
+    installer. Current clients and the server normalizer always provide both
+    ``uv pip`` and an explicit ``--python`` target.
     """
-    if "--break-system-packages" not in (cmd or ""):
-        runner_lines.append(cmd)
+    if not re.search(r"(?:^|\s)uv\s+pip\s+(?:install|uninstall)\b", cmd or ""):
+        runner_lines.append(
+            'echo "ERROR: Diogenes rejected a non-uv Python mutation."; exit 127'
+        )
         return
-    help_check = _pip_install_help_check_from_cmd(cmd)
-    without_break = _pip_install_command_without_break_system_packages(cmd)
-    if not help_check or without_break == cmd:
-        runner_lines.append(cmd)
-        return
-    runner_lines.append(f"if {help_check}; then")
-    runner_lines.append(f"  {cmd}")
-    runner_lines.append("else")
-    runner_lines.append('  echo "[odysseus] pip does not support --break-system-packages; installing without it."')
-    runner_lines.append(f"  {without_break}")
-    runner_lines.append("fi")
+    runner_lines.append(cmd)
 
 
 def _user_shell_path_bootstrap() -> list[str]:
@@ -368,6 +312,10 @@ def _user_shell_path_bootstrap() -> list[str]:
         '  ODYSSEUS_USER_PATH="$("$ODYSSEUS_USER_SHELL" -ic \'printf "__ODYSSEUS_PATH__%s\\n" "$PATH"\' 2>/dev/null | sed -n \'s/^__ODYSSEUS_PATH__//p\' | tail -n 1 || true)"',
         '  if [ -n "$ODYSSEUS_USER_PATH" ]; then export PATH="$ODYSSEUS_USER_PATH:$PATH"; fi',
         'fi',
+        # The interactive shell may report a native PATH. A local tmux server
+        # is pinned to Diogenes's uv environment, which must remain first.
+        'if [ -n "${VIRTUAL_ENV:-}" ]; then export PATH="$VIRTUAL_ENV/bin:$PATH"; fi',
+        'hash -r',
         # Windows can expose python3 as a Microsoft Store App Execution Alias
         # under WindowsApps. Git Bash sees that stub as present, but it exits
         # before running Python. A Windows venv usually has python.exe, not
@@ -834,21 +782,6 @@ def _append_serve_preflight_exit_lines(runner_lines: list[str], *, keep_shell_op
         runner_lines.append('  exit "$ODYSSEUS_PREFLIGHT_EXIT"')
     runner_lines.append('fi')
 
-
-def _append_vllm_linux_preflight_lines(runner_lines: list[str]) -> None:
-    """Append Linux vLLM readiness lines that identify the runtime being used."""
-    # Keep the user install bin visible for Odysseus-managed `pip install --user`
-    # installs, but then report the actual CLI path so external runtimes are clear.
-    runner_lines.append('export PATH="$HOME/.local/bin:$PATH"')
-    runner_lines.append('ODYSSEUS_VLLM_BIN="$(command -v vllm 2>/dev/null || true)"')
-    runner_lines.append('if [ -z "$ODYSSEUS_VLLM_BIN" ]; then')
-    runner_lines.append('  echo "ERROR: vLLM is not installed."')
-    runner_lines.append('  ODYSSEUS_PREFLIGHT_EXIT=127')
-    runner_lines.append('else')
-    runner_lines.append('  echo "[odysseus] vLLM CLI: $ODYSSEUS_VLLM_BIN"')
-    runner_lines.append('  ODYSSEUS_VLLM_VERSION="$("$ODYSSEUS_VLLM_BIN" --version 2>&1 | head -n 1 || true)"')
-    runner_lines.append('  if [ -n "$ODYSSEUS_VLLM_VERSION" ]; then echo "[odysseus] vLLM version: $ODYSSEUS_VLLM_VERSION"; fi')
-    runner_lines.append('fi')
 
 def _append_serve_exit_code_lines(
     runner_lines: list[str],

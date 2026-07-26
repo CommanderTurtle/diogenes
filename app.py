@@ -1011,6 +1011,36 @@ app.router.lifespan_context = _lifespan
 async def _startup_event():
     global upload_cleanup_task
     logger.info("Application starting up...")
+    # A native Diogenes deployment has one Python boundary: the repository's
+    # inner .venv.  tmux copies its server-global environment into every new
+    # session, so pin it before Cookbook, agent, or Interactive sessions can be
+    # created. Host maintenance deliberately uses separate argv-only jobs that
+    # strip this environment.
+    try:
+        from src.tmux_ownership import synchronize_diogenes_tmux_environment
+
+        tmux_environment = await asyncio.to_thread(
+            synchronize_diogenes_tmux_environment
+        )
+        if tmux_environment["status"] == "wrong_interpreter":
+            raise RuntimeError(tmux_environment["reason"])
+        if tmux_environment["status"] == "configured":
+            logger.info(
+                "tmux pinned to Diogenes venv %s",
+                tmux_environment["venv"],
+            )
+        elif tmux_environment["status"] not in {
+            "not_applicable",
+            "not_configured",
+        }:
+            logger.warning(
+                "tmux environment was not configured: %s",
+                tmux_environment.get("reason") or tmux_environment["status"],
+            )
+    except RuntimeError:
+        raise
+    except Exception as exc:
+        logger.warning("tmux environment setup failed: %s", exc)
     webhook_manager.set_loop(asyncio.get_running_loop())
     # Wipe any leftover incognito sessions from previous process — they're
     # ephemeral by design and must not survive a restart.

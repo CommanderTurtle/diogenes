@@ -173,12 +173,30 @@ function _pythonForDiagnosisPanel(panel) {
     : 'python3';
 }
 
+function _diagShellWord(value) {
+  return `'${String(value || '').replace(/'/g, `'\"'\"'`)}'`;
+}
+
+function _usesLocalDiogenesUv(panel) {
+  const task = _taskForDiagnosisPanel(panel);
+  const platform = String(_envState.hostPlatform || _envState.platform || '').toLowerCase();
+  return !task?.remoteHost && (platform === 'linux' || platform === 'wsl');
+}
+
+function _pythonMutationCommand(panel, operation, args) {
+  const python = _pythonForDiagnosisPanel(panel);
+  if (_usesLocalDiogenesUv(panel)) {
+    return `uv pip ${operation} --python ${_diagShellWord(python)} ${args}`.trim();
+  }
+  return `${_diagShellWord(python)} -m pip ${operation} ${args}`.trim();
+}
+
 function _sglangKernelRepairCommand(panel) {
-  return `${_pythonForDiagnosisPanel(panel)} -m pip install -U --force-reinstall --no-cache-dir sglang-kernel`;
+  return _pythonMutationCommand(panel, 'install', '-U --force-reinstall --no-cache-dir sglang-kernel');
 }
 
 function _mlxLmInstallCommand(panel) {
-  return `${_pythonForDiagnosisPanel(panel)} -m pip install -U mlx-lm`;
+  return _pythonMutationCommand(panel, 'install', '-U mlx-lm');
 }
 
 async function _repairSglangKernel(panel) {
@@ -543,7 +561,7 @@ export const ERROR_PATTERNS = [
     message: 'SGLang is not installed or not in PATH.',
     fixes: [
       { label: 'Open Dependencies', action: () => _openCookbookDependencies('sglang') },
-      { label: 'Copy install command', action: () => _copyText('python3 -m pip install "sglang[all]"') },
+      { label: 'Copy install command', action: (panel) => _copyText(_pythonMutationCommand(panel, 'install', '-U "sglang[all]" --torch-backend auto')) },
     ],
   },
   {
@@ -553,7 +571,7 @@ export const ERROR_PATTERNS = [
     fixes: [
       { label: 'Install MLX LM', action: (panel) => _installMlxLm(panel) },
       { label: 'Open Dependencies', action: () => _openCookbookDependencies('mlx_lm') },
-      { label: 'Copy install command', action: () => _copyText('python3 -m pip install -U mlx-lm') },
+      { label: 'Copy install command', action: (panel) => _copyText(_pythonMutationCommand(panel, 'install', '-U mlx-lm')) },
     ],
   },
   {
@@ -562,7 +580,7 @@ export const ERROR_PATTERNS = [
     suggestion: 'Suggested action: install mflux in the selected Python environment. This is for MLX image generation, not text MLX-LM.',
     fixes: [
       { label: 'Open Dependencies', action: () => _openCookbookDependencies('mflux') },
-      { label: 'Copy install command', action: () => _copyText('python3 -m pip install -U mflux fastapi uvicorn') },
+      { label: 'Copy install command', action: (panel) => _copyText(_pythonMutationCommand(panel, 'install', '-U mflux fastapi uvicorn')) },
     ],
   },
   {
@@ -593,7 +611,6 @@ export const ERROR_PATTERNS = [
     message: 'FlashInfer version mismatch.',
     fixes: [
       { label: 'Auto-fix: bypass version check', action: (panel) => _serveAutoFix(panel, 'FLASHINFER_DISABLE_VERSION_CHECK=1'), autofix: true },
-      { label: 'Fix properly: pip install matching version', action: () => {} },
     ],
   },
   {
@@ -641,12 +658,8 @@ export const ERROR_PATTERNS = [
     message: 'Model architecture too new for installed vLLM/transformers.',
     fixes: [
       { label: 'Try --trust-remote-code', action: (panel) => _serveAutoRetry(panel, '--trust-remote-code'), autofix: true },
-      { label: 'Update vLLM on server', action: () => {
-        // Use the venv's python3 by absolute path when configured (SSH non-
-        // interactive sessions often pick user-site Python over the venv).
-        const _vp = (_envState.env === 'venv' && _envState.envPath)
-          ? `${_envState.envPath.replace(/\/+$/, '')}/bin/python3` : 'python3';
-        _launchServeTask('update-vllm', 'pip-update', `${_vp} -m pip install -U vllm transformers`);
+      { label: 'Update vLLM on server', action: (panel) => {
+        _launchServeTask('update-vllm', 'pip-update', _pythonMutationCommand(panel, 'install', '-U vllm transformers'));
       }},
     ],
   },
@@ -654,10 +667,8 @@ export const ERROR_PATTERNS = [
     pattern: /Either a revision or a version must be specified|transformers\.integrations\.hub_kernels|kernels\/layer/i,
     message: 'Transformers/kernels package mismatch.',
     fixes: [
-      { label: 'Repair kernel package', action: () => {
-        const _vp = (_envState.env === 'venv' && _envState.envPath)
-          ? `${_envState.envPath.replace(/\/+$/, '')}/bin/python3` : 'python3';
-        _launchServeTask('repair-kernels', 'pip-update', `${_vp} -m pip install --user --break-system-packages "kernels<0.15"`);
+      { label: 'Repair kernel package', action: (panel) => {
+        _launchServeTask('repair-kernels', 'pip-update', _pythonMutationCommand(panel, 'install', '"kernels<0.15"'));
       }},
       { label: 'Open Dependencies', action: () => _openCookbookDependencies('sglang') },
     ],
@@ -705,10 +716,10 @@ export const ERROR_PATTERNS = [
   },
   {
     pattern: /llama-server.*command not found|llama\.cpp.*not found|No module named.*llama_cpp|No module named 'starlette_context'/i,
-    message: 'llama-cpp-python server is not installed. Run: pip install "llama-cpp-python[server]"',
+    message: 'llama-cpp-python server is not installed. Install it from Cookbook → Dependencies.',
     fixes: [
       { label: 'Open Dependencies', action: () => _openCookbookDependencies('llama_cpp') },
-      { label: 'Copy install command', action: () => _copyText('pip install "llama-cpp-python[server]"') },
+      { label: 'Copy install command', action: (panel) => _copyText(_pythonMutationCommand(panel, 'install', '"llama-cpp-python[server]"')) },
     ],
   },
   {
@@ -734,17 +745,15 @@ export const ERROR_PATTERNS = [
     message: 'Diffusion serving needs PyTorch, Torchvision, Diffusers, Accelerate, and SciPy. Install Diffusers image deps from Cookbook → Dependencies.',
     fixes: [
       { label: 'Open Dependencies', action: () => _openCookbookDependencies('diffusers') },
-      { label: 'Copy install command', action: () => _copyText('python3 -m pip install "diffusers[torch]" torchvision accelerate scipy python-multipart') },
+      { label: 'Copy install command', action: (panel) => _copyText(_pythonMutationCommand(panel, 'install', '"diffusers[torch]" torchvision accelerate scipy python-multipart')) },
     ],
   },
   {
     pattern: /Triton kernels.*Failed to import|cannot import name '\w+' from 'triton_kernels/i,
     message: 'Triton kernels version mismatch. Non-fatal warning — model will still run, just without optimized MoE kernels.',
     fixes: [
-      { label: 'Update triton on server', action: () => {
-        const _vp = (_envState.env === 'venv' && _envState.envPath)
-          ? `${_envState.envPath.replace(/\/+$/, '')}/bin/python3` : 'python3';
-        _launchServeTask('update-triton', 'pip-update', `${_vp} -m pip install -U triton triton-kernels`);
+      { label: 'Update triton on server', action: (panel) => {
+        _launchServeTask('update-triton', 'pip-update', _pythonMutationCommand(panel, 'install', '-U triton triton-kernels'));
       }},
     ],
   },
@@ -766,10 +775,8 @@ export const ERROR_PATTERNS = [
     pattern: /attention_sink|sliding.window.*not supported|sliding_window.*incompatible/i,
     message: 'Model uses attention features unsupported in this vLLM version.',
     fixes: [
-      { label: 'Update vLLM on server', action: () => {
-        const _vp = (_envState.env === 'venv' && _envState.envPath)
-          ? `${_envState.envPath.replace(/\/+$/, '')}/bin/python3` : 'python3';
-        _launchServeTask('update-vllm', 'pip-update', `${_vp} -m pip install -U vllm`);
+      { label: 'Update vLLM on server', action: (panel) => {
+        _launchServeTask('update-vllm', 'pip-update', _pythonMutationCommand(panel, 'install', '-U vllm'));
       }},
     ],
   },
@@ -785,13 +792,11 @@ export const ERROR_PATTERNS = [
     suggestion: 'Suggested action: relaunch with VLLM_USE_FLASHINFER_SAMPLER=0 prepended. (Confirmed on the QuantTrio/Qwen3.5 model card as the canonical workaround.)',
     fixes: [
       { label: 'Retry with VLLM_USE_FLASHINFER_SAMPLER=0', action: (panel) => _serveAutoRetryReplace(panel, '', 'VLLM_USE_FLASHINFER_SAMPLER=0 ', { prepend: true }) },
-      { label: 'Uninstall flashinfer-python', action: () => {
+      { label: 'Uninstall flashinfer-python', action: (panel) => {
         // Hard fallback: vLLM 0.22 reaches into flashinfer for sampling kernels
         // even with VLLM_USE_FLASHINFER_SAMPLER=0 in some configs. Removing
         // the package forces it onto the native sampler.
-        const _vp = (_envState.env === 'venv' && _envState.envPath)
-          ? `${_envState.envPath.replace(/\/+$/, '')}/bin/python3` : 'python3';
-        _launchServeTask('uninstall-flashinfer', 'pip-update', `${_vp} -m pip uninstall flashinfer-python -y`);
+        _launchServeTask('uninstall-flashinfer', 'pip-update', _pythonMutationCommand(panel, 'uninstall', 'flashinfer-python'));
       }},
       { label: 'Edit serve', action: (panel) => _openServeEditFromDiagnosis(panel) },
     ],
@@ -803,19 +808,13 @@ export const ERROR_PATTERNS = [
     // any server code runs. Fix is to reinstall vllm (which pulls a matching
     // torch) or upgrade torch directly.
     pattern: /ImportError: cannot import name '[^']+' from 'torch(\.\w+)+'/i,
-    message: 'vLLM was built against a newer torch than what is installed. Reinstall vLLM so pip pulls a compatible torch (or upgrade torch directly).',
+    message: 'vLLM was built against a newer torch than what is installed. Reconcile the vLLM stack so uv resolves a compatible torch (or upgrade torch directly).',
     fixes: [
-      { label: 'Reinstall vLLM (pulls matching torch)', action: () => {
-        // Absolute path to the venv's python3 — bare `python3` lands in the
-        // wrong site-packages over SSH when ~/.local/bin precedes the venv.
-        const _vp = (_envState.env === 'venv' && _envState.envPath)
-          ? `${_envState.envPath.replace(/\/+$/, '')}/bin/python3` : 'python3';
-        _launchServeTask('reinstall-vllm', 'pip-reinstall', `${_vp} -m pip install --force-reinstall vllm`);
+      { label: 'Reinstall vLLM (pulls matching torch)', action: (panel) => {
+        _launchServeTask('reinstall-vllm', 'pip-reinstall', _pythonMutationCommand(panel, 'install', '--force-reinstall vllm'));
       }},
-      { label: 'Upgrade torch only', action: () => {
-        const _vp = (_envState.env === 'venv' && _envState.envPath)
-          ? `${_envState.envPath.replace(/\/+$/, '')}/bin/python3` : 'python3';
-        _launchServeTask('upgrade-torch', 'pip-update', `${_vp} -m pip install -U torch`);
+      { label: 'Upgrade torch only', action: (panel) => {
+        _launchServeTask('upgrade-torch', 'pip-update', _pythonMutationCommand(panel, 'install', '-U torch'));
       }},
     ],
   },

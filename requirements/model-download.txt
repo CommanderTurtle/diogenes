@@ -1,4 +1,4 @@
-# Kept outside Diogenes' serving environment. uvsetup.sh creates
+# Kept outside Diogenes' serving environment. Cookbook creates
 # .venv-model-download from this file so large model transfers cannot change
 # the vLLM/Torch/tokenizers/protobuf resolution in .venv.
 huggingface_hub>=1.0,<2
