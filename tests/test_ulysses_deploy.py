@@ -140,3 +140,37 @@ def test_source_contract_rejects_wrong_upstream_remote(tmp_path):
 
     with pytest.raises(deploy.DeployError, match="must resolve to"):
         deploy.source_contract(source)
+
+
+def test_fetch_upstream_uses_a_fully_qualified_forced_tracking_ref(
+    monkeypatch,
+    tmp_path,
+):
+    deploy = _load()
+    source = tmp_path / "Diogenes"
+    source.mkdir()
+    calls: list[list[str]] = []
+
+    monkeypatch.setattr(
+        deploy,
+        "_validated_upstream_url",
+        lambda root: deploy.EXPECTED_UPSTREAM_URL,
+    )
+
+    def capture(argv, *, cwd=None, check=True):
+        calls.append(argv)
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    monkeypatch.setattr(deploy, "_run", capture)
+
+    deploy.fetch_upstream(source)
+
+    assert calls == [[
+        "git",
+        "-C",
+        str(source),
+        "fetch",
+        "--prune",
+        "upstream",
+        "+refs/heads/dev:refs/remotes/upstream/dev",
+    ]]
