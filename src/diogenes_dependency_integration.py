@@ -1,9 +1,10 @@
 """Reproduce Diogenes' verified Hermes integrations through native commands.
 
-Hermes owns its profiles, gateway, MCP registry, plugins, and skills.  This
-module never serializes or writes ``config.yaml``.  It observes configuration
-through ``hermes config get`` and applies changes through the public Hermes CLI
-or through the integration command shipped by the dependency itself.
+Hermes owns its profiles, gateway, MCP registry, plugins, and skills. This
+module never serializes or writes ``config.yaml``. It observes configuration
+through ``hermes config get`` and applies changes through the public Hermes CLI,
+Hermes' own skills configuration API, or the integration command shipped by
+the dependency itself.
 """
 
 from __future__ import annotations
@@ -696,9 +697,22 @@ def _set_list_config_value(profile: str, key: str, values: list[str]) -> bool:
     if current == values:
         print(f"Hermes {profile} {key}: current. Nothing to do.")
         return False
-    _hermes(profile, "config", "unset", key)
-    for index, value in enumerate(values):
-        _hermes(profile, "config", "set", f"{key}.{index}", value)
+    if key != "skills.disabled":
+        raise IntegrationError(f"unsupported Hermes list setting: {key}")
+    python = DEFAULT_HERMES_HOME / "hermes-agent" / "venv" / "bin" / "python"
+    helper = ROOT / "scripts" / "hermes-skills-policy.py"
+    if not python.is_file() or not helper.is_file():
+        raise IntegrationError("Hermes skills policy helper is unavailable")
+    _run(
+        [
+            str(python),
+            str(helper),
+            "--profile-home",
+            str(_profile_home(profile)),
+        ],
+        input_text=json.dumps(values) + "\n",
+        timeout=300,
+    )
     retained = _config_value(profile, key)
     if retained != values:
         raise IntegrationError(f"Hermes did not retain {profile} {key}")
