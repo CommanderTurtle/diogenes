@@ -9,6 +9,7 @@ or through the integration command shipped by the dependency itself.
 from __future__ import annotations
 
 import argparse
+import ast
 import hashlib
 import json
 import os
@@ -879,26 +880,138 @@ def _integrate_camofox_mcp() -> None:
     _ensure_skill_links("camofox-mcp")
 
 
+def _embedded_codebase_skill() -> str:
+    """Read Codebase Memory's own embedded skill from its source of truth."""
+    source = _services_root() / "codebase-memory-mcp" / "src" / "cli" / "cli.c"
+    try:
+        lines = source.read_text(encoding="utf-8").splitlines()
+    except OSError as exc:
+        raise IntegrationError(
+            f"Codebase Memory embedded skill source is unavailable: {source}"
+        ) from exc
+    marker = "static const char skill_content[] ="
+    collecting = False
+    parts: list[str] = []
+    for line in lines:
+        stripped = line.strip()
+        if not collecting:
+            if stripped == marker:
+                collecting = True
+            continue
+        finished = stripped.endswith(";")
+        literal = stripped[:-1] if finished else stripped
+        if literal:
+            try:
+                value = ast.literal_eval(literal)
+            except (SyntaxError, ValueError) as exc:
+                raise IntegrationError(
+                    "Codebase Memory embedded skill has an unsupported source format"
+                ) from exc
+            if not isinstance(value, str):
+                raise IntegrationError("Codebase Memory embedded skill is not text")
+            parts.append(value)
+        if finished:
+            break
+    content = "".join(parts)
+    if not collecting or not content.startswith("---\nname: codebase-memory\n"):
+        raise IntegrationError("Codebase Memory embedded skill was not found")
+    return content
+
+
+def _ensure_codebase_skill() -> None:
+    content = _embedded_codebase_skill()
+    for profile in _shared_profiles():
+        target = (
+            _profile_home(profile)
+            / "skills"
+            / "codebase-memory"
+            / "SKILL.md"
+        )
+        if target.is_file() and target.read_text(encoding="utf-8") == content:
+            print(f"Hermes {profile} skill codebase-memory: current. Nothing to do.")
+            continue
+        target.parent.mkdir(parents=True, exist_ok=True)
+        descriptor, temporary = tempfile.mkstemp(
+            prefix=".SKILL.md.",
+            dir=target.parent,
+            text=True,
+        )
+        try:
+            with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+                stream.write(content)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.chmod(temporary, 0o600)
+            os.replace(temporary, target)
+        finally:
+            try:
+                os.unlink(temporary)
+            except FileNotFoundError:
+                pass
+        print(f"Hermes {profile} skill codebase-memory: synchronized.")
+
+
+def _ensure_codebase_hook() -> None:
+    expected = {
+        "id": "codebase-memory-mcp",
+        "type": "command",
+        "command": (
+            f"{Path.home() / '.local' / 'bin' / 'codebase-memory-mcp'} "
+            "hook-augment --dialect hermes"
+        ),
+    }
+    for profile in _shared_profiles():
+        current = _config_value(profile, "hooks.pre_llm_call")
+        hooks = current if isinstance(current, list) else []
+        index = next(
+            (
+                offset
+                for offset, value in enumerate(hooks)
+                if isinstance(value, dict)
+                and value.get("id") == expected["id"]
+            ),
+            len(hooks),
+        )
+        for key, value in expected.items():
+            _set_config_value(
+                profile,
+                f"hooks.pre_llm_call.{index}.{key}",
+                value,
+            )
+        retained = _config_value(profile, "hooks.pre_llm_call")
+        if not isinstance(retained, list) or not any(
+            isinstance(value, dict)
+            and all(
+                value.get(key) == expected_value
+                for key, expected_value in expected.items()
+            )
+            for value in retained
+        ):
+            raise IntegrationError(
+                f"Hermes did not retain the {profile} Codebase Memory hook"
+            )
+
+
 def _integrate_codebase_memory() -> None:
     binary = Path.home() / ".local" / "bin" / "codebase-memory-mcp"
     if not binary.is_file():
         raise IntegrationError("Codebase Memory is not installed")
-    # Its own installer is the verified hook/skill integration contract.
-    for profile in _shared_profiles():
-        environment = _host_environment(
-            {"HERMES_HOME": str(_profile_home(profile))}
-        )
-        _run(
-            [
-                str(binary),
-                "install",
-                "--yes",
-                "--force",
-                f"--dir={binary.parent}",
-            ],
-            environment=environment,
-            timeout=900,
-        )
+    # Publish the upstream binary without allowing its broad client detector
+    # to rewrite Zed or Hermes configuration. Diogenes applies the exact
+    # Hermes contracts below through Hermes' own CLI.
+    _run(
+        [
+            str(binary),
+            "install",
+            "--yes",
+            "--force",
+            "--skip-config",
+            f"--dir={binary.parent}",
+        ],
+        timeout=900,
+    )
+    _ensure_codebase_skill()
+    _ensure_codebase_hook()
     _ensure_shared_mcp("codebase-memory-mcp")
 
 
@@ -1002,6 +1115,26 @@ def _codebase_hook_current() -> bool:
     return True
 
 
+def _codebase_skill_current() -> bool:
+    try:
+        expected = _embedded_codebase_skill()
+    except IntegrationError:
+        return False
+    for profile in _shared_profiles():
+        path = (
+            _profile_home(profile)
+            / "skills"
+            / "codebase-memory"
+            / "SKILL.md"
+        )
+        try:
+            if path.read_text(encoding="utf-8") != expected:
+                return False
+        except OSError:
+            return False
+    return True
+
+
 def _workflows_current() -> bool:
     expected = [
         str(value)
@@ -1064,7 +1197,9 @@ def _contract_current(
             return False
         if integration == "retrieval" and not _retrieval_watcher_current():
             return False
-        if integration == "codebase-memory" and not _codebase_hook_current():
+        if integration == "codebase-memory" and not (
+            _codebase_hook_current() and _codebase_skill_current()
+        ):
             return False
         return True
     if integration == "librarian":
