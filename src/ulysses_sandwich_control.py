@@ -73,18 +73,13 @@ class SandwichControl:
                         "-m",
                         "src.ulysses_sandwich_install",
                         "--stage",
-                        "--source",
-                        "git",
                     ],
                     "cwd": str(Path(__file__).resolve().parents[1]),
                     "timeout": 120,
                 },
                 {
-                    "label": "Install Sandwich user shims and shell configuration",
-                    "argv": [
-                        str(target / "scripts" / "install-user.sh"),
-                        "--apply",
-                    ],
+                    "label": "Install Bun and the Sandwich compatibility layer",
+                    "argv": [str(target / "install.sh")],
                     "timeout": 900,
                 },
             ]
@@ -108,6 +103,7 @@ class SandwichControl:
             metadata={
                 "owner": "ulysses",
                 "target_root": str(target),
-                "bundled_version": status.get("bundled_version"),
+                "installed_version": status.get("installed_version"),
+                "repository": status.get("repository"),
             },
         )

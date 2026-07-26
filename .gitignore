@@ -2,19 +2,31 @@
 __pycache__/
 *.pyc
 *.pyo
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.hypothesis/
+.tox/
+.nox/
+.coverage
+coverage.xml
+htmlcov/
 *.egg-info/
 dist/
 build/
 !static/js/editor/build/
 venv/
 .venv/
+.venv-model-download/
+/.bun/
+/uv.lock
 *.egg
 
 # Environment
 .env
 .env.bak.*
 !.env.example
-.ulysses-runtime.json
+.diogenes-runtime.json
 # Local uv lockfile (optional, per-platform — see "Faster installs with uv" in README)
 requirements.lock
 
@@ -27,6 +39,7 @@ secrets.env.*
 
 # Data — all user data stays local
 data/
+backups/
 !services/hwfit/data/
 !services/hwfit/data/hf_models.json
 logs/
@@ -55,6 +68,7 @@ services/data/
 # OS
 .DS_Store
 Thumbs.db
+/NUL
 
 # Build artifacts
 *.cache

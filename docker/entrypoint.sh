@@ -71,7 +71,7 @@ repair_tree_ownership() {
 repair_app_tree_ownership() {
     if [ -d /app ]; then
         find /app -xdev \
-            \( -path /app/data -o -path /app/logs -o -path /app/.ssh -o -path /app/.cache -o -path /app/.local \) -prune \
+            \( -path /app/data -o -path /app/logs -o -path /app/.ssh -o -path /app/.cache -o -path /app/.local -o -path /app/.bun \) -prune \
             -o -not -uid "$PUID" -print0 2>/dev/null \
             | xargs -0 -r chown "$PUID:$PGID" 2>/dev/null || true
     fi
@@ -96,7 +96,7 @@ repair_bind_mount_ownership() {
 # Repair image-owned writable paths without walking into bind-mounted host
 # trees, then repair the app-owned mount roots separately.
 repair_app_tree_ownership
-for dir in /app/data /app/logs /app/.ssh /app/.cache/huggingface /app/.local; do
+for dir in /app/data /app/logs /app/.ssh /app/.cache/huggingface /app/.local /app/.bun; do
     repair_bind_mount_ownership "$dir"
 done
 
@@ -133,7 +133,9 @@ export VLLM_USE_FLASHINFER_SAMPLER="${VLLM_USE_FLASHINFER_SAMPLER:-0}"
 
 # Make Cookbook-installed Python CLIs visible after `pip install --user`.
 # vLLM and helper scripts land here because /app is the non-root user's HOME.
-export PATH="/app/.local/bin:$PATH"
+# Bun global package binaries use the persisted /app/.bun bind mount.
+export HOME=/app
+export PATH="${BUN_INSTALL_BIN:-/app/.bun/bin}:/app/.local/bin:$PATH"
 
 # Run first-time setup as the app user so data/ files get the right ownership.
 # setup.py is idempotent — skips auth.json / .env if they already exist.

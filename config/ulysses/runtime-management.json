@@ -10,7 +10,17 @@
       "depends_on": ["searxng.search"],
       "root": "${ULYSSES_MICROSERVICES_ROOT}/firecrawl/firecrawl",
       "compose": "docker-compose.yaml",
+      "compose_services": ["api"],
+      "lifecycle_services": [],
+      "update_services": [],
       "env_files": [".env"],
+      "bootstrap_files": [
+        {
+          "path": ".env",
+          "mode": "0600",
+          "content": "# Diogenes Firecrawl local search defaults\nPORT=3002\nHOST=0.0.0.0\nUSE_DB_AUTHENTICATION=false\nSEARXNG_ENDPOINT=http://host.docker.internal:7070\n"
+        }
+      ],
       "git_update": true,
       "source_url": "https://github.com/firecrawl/firecrawl",
       "source_branch": "main",
@@ -24,10 +34,30 @@
       "capability_group": "search",
       "role": "Firecrawl search backend",
       "root": "${ULYSSES_MICROSERVICES_ROOT}/SEARXNG/searxng",
-      "compose": "docker-compose.yml",
-      "env_files": [".env"],
+      "compose": "container/docker-compose.yml",
+      "compose_fallbacks": ["docker-compose.yml"],
+      "compose_services": ["core"],
+      "update_services": ["core", "valkey"],
+      "env_files": [".env", "container/.env"],
+      "config_files": [
+        {"path": "container/core-config/settings.yml", "format": "text"}
+      ],
+      "data_directories": ["container/core-config"],
+      "bootstrap_files": [
+        {
+          "path": "container/.env",
+          "mode": "0600",
+          "content": "# Official SearXNG container settings for a loopback workstation\nSEARXNG_VERSION=latest\nSEARXNG_HOST=127.0.0.1\nSEARXNG_PORT=7070\n"
+        },
+        {
+          "path": "container/core-config/settings.yml",
+          "mode": "0644",
+          "content": "# Diogenes enables the JSON format required by Firecrawl while retaining upstream defaults.\nuse_default_settings: true\nsearch:\n  formats:\n    - html\n    - json\n"
+        }
+      ],
       "git_update": true,
-      "source_url": "https://github.com/searxng/searxng-docker.git",
+      "allow_non_git_compose": true,
+      "source_url": "https://github.com/searxng/searxng.git",
       "source_branch": "master",
       "build_on_update": false,
       "ports": [7070]
@@ -59,7 +89,7 @@
         {
           "path": ".env",
           "mode": "0600",
-          "content": "# Camofox browser environment\nCAMOFOX_PORT=9377\n"
+          "content": "# Camofox browser environment\nCAMOFOX_PORT=9377\nCAMOUFOX_INSTALL_DIR=${HOME}/.cache/camoufox\nCAMOFOX_CRASH_REPORT_ENABLED=false\n"
         },
         {
           "path": "start.sh",
@@ -73,6 +103,19 @@
       "source_url": "https://github.com/jo-inc/camofox-browser",
       "source_branch": "master",
       "build_script": "build",
+      "bun_install_mode": "foreign_lock",
+      "setup": {
+        "kind": "bun_script",
+        "value": "fetch-bin"
+      },
+      "setup_on_update": true,
+      "readiness_checks": [
+        {
+          "label": "Camoufox browser engine",
+          "path": "${HOME}/.cache/camoufox/camoufox-bin",
+          "executable": true
+        }
+      ],
       "ports": [9377]
     },
     {
@@ -96,7 +139,7 @@
         {
           "path": "start.sh",
           "mode": "0755",
-          "content": "#!/usr/bin/env bash\nset -Eeuo pipefail\nROOT=\"$(cd -- \"$(dirname -- \"${BASH_SOURCE[0]}\")\" && pwd -P)\"\ncd \"$ROOT\"\nif [[ -f .env ]]; then\n  set -a\n  source .env\n  set +a\nfi\nexec npx -y @maximhq/bifrost@latest -app-dir . -port \"${BIFROST_PORT:-7999}\" -host \"${BIFROST_HOST:-127.0.0.1}\"\n"
+          "content": "#!/usr/bin/env bash\nset -Eeuo pipefail\nROOT=\"$(cd -- \"$(dirname -- \"${BASH_SOURCE[0]}\")\" && pwd -P)\"\ncd \"$ROOT\"\nif [[ -f .env ]]; then\n  set -a\n  source .env\n  set +a\nfi\nexec bun x @maximhq/bifrost@latest -app-dir . -port \"${BIFROST_PORT:-7999}\" -host \"${BIFROST_HOST:-127.0.0.1}\"\n"
         },
         {
           "path": "config.json",
@@ -108,6 +151,10 @@
       "tmux_session": "ulysses-bifrost",
       "package_spec": "@maximhq/bifrost@latest",
       "git_update": false,
+      "dashboard": {
+        "label": "Open Bifrost",
+        "url": "http://127.0.0.1:7999"
+      },
       "ports": [7999]
     },
     {
@@ -124,6 +171,7 @@
       "source_url": "https://github.com/CommanderTurtle/context-mode.git",
       "source_branch": "main",
       "build_script": "build",
+      "bun_install_mode": "frozen",
       "hermes_mcp": true,
       "ports": []
     },
@@ -142,6 +190,7 @@
       "source_url": "https://github.com/redf0x1/camofox-mcp.git",
       "source_branch": "main",
       "build_script": "build",
+      "bun_install_mode": "frozen",
       "hermes_mcp": true,
       "ports": []
     },
@@ -160,6 +209,19 @@
       "source_url": "https://github.com/firecrawl/cli",
       "source_branch": "main",
       "build_script": "build",
+      "bun_install_mode": "pnpm_lock",
+      "setup": {
+        "kind": "bun_global",
+        "value": "."
+      },
+      "setup_on_update": true,
+      "readiness_checks": [
+        {
+          "label": "Firecrawl command",
+          "path": "${HOME}/.bun/bin/firecrawl",
+          "executable": true
+        }
+      ],
       "ports": []
     },
     {
@@ -177,12 +239,29 @@
         {"path": "run.sh", "format": "shell"},
         {"path": "update.sh", "format": "shell"}
       ],
+      "bootstrap_files": [
+        {
+          "path": ".env",
+          "mode": "0600",
+          "content": "# Hermes Workspace local-only defaults\nHOST=127.0.0.1\nPORT=3003\nHERMES_API_URL=http://127.0.0.1:8642\nHERMES_DASHBOARD_URL=http://127.0.0.1:9119\nCOOKIE_SECURE=0\nVITE_HERMESWORLD_ENABLED=0\nVITE_PLAYGROUND_WS_URL=\nVITE_PLAYGROUND_STATS_URL=\n"
+        },
+        {
+          "path": "run.sh",
+          "mode": "0755",
+          "content": "#!/usr/bin/env bash\nset -Eeuo pipefail\nROOT=\"$(cd -- \"$(dirname -- \"${BASH_SOURCE[0]}\")\" && pwd -P)\"\ncd \"$ROOT\"\nif [[ -f .env ]]; then\n  set -a\n  source .env\n  set +a\nfi\nHERMES_HOME=\"${HERMES_HOME:-$HOME/.hermes}\"\nif [[ -z ${HERMES_API_TOKEN:-} && -r \"$HERMES_HOME/.env\" ]]; then\n  HERMES_API_TOKEN=\"$(sed -n 's/^API_SERVER_KEY=//p' \"$HERMES_HOME/.env\" | tail -n 1)\"\n  HERMES_API_TOKEN=\"${HERMES_API_TOKEN%\\\"}\"\n  HERMES_API_TOKEN=\"${HERMES_API_TOKEN#\\\"}\"\n  export HERMES_API_TOKEN\nfi\nexec bun server-entry.js\n"
+        }
+      ],
       "launch": ["bash", "run.sh"],
       "tmux_session": "hermes-workspace",
       "git_update": true,
       "source_url": "https://github.com/outsourc-e/hermes-workspace.git",
       "source_branch": "main",
       "build_script": "build",
+      "bun_install_mode": "pnpm_lock",
+      "dashboard": {
+        "label": "Open Hermes Workspace",
+        "url": "http://127.0.0.1:3003"
+      },
       "ports": [3003]
     },
     {
@@ -201,7 +280,21 @@
       ],
       "launch": ["bash", "start.sh"],
       "tmux_session": "ulysses-librarian-web",
+      "git_update": true,
+      "source_url": "https://github.com/CommanderTurtle/librarian.git",
+      "source_branch": "main",
+      "bun_install_mode": "frozen",
+      "setup": {
+        "kind": "bun_script",
+        "value": "setup"
+      },
+      "setup_on_update": true,
       "hermes_mcp": true,
+      "optional": true,
+      "dashboard": {
+        "label": "Open Librarian",
+        "url": "http://127.0.0.1:3800"
+      },
       "ports": [3800]
     },
     {
@@ -212,12 +305,23 @@
       "capability_group": "knowledge",
       "role": "Chroma-backed session, workflow, and skill retrieval",
       "root": "${ULYSSES_MICROSERVICES_ROOT}/retrieval",
+      "depends_on": ["chroma.vector"],
+      "maintenance_requires_dependencies": true,
       "env_files": [".env"],
       "config_files": [
         {"path": "start.sh", "format": "shell"},
         {"path": "update.sh", "format": "shell"}
       ],
+      "git_update": true,
+      "source_url": "https://github.com/CommanderTurtle/retrieval.git",
+      "source_branch": "main",
+      "setup": {
+        "kind": "shell_script",
+        "value": "setup.sh"
+      },
+      "setup_on_update": true,
       "hermes_mcp": true,
+      "optional": true,
       "ports": []
     },
     {
@@ -232,6 +336,19 @@
       "git_update": true,
       "source_url": "https://github.com/DeusData/codebase-memory-mcp.git",
       "source_branch": "main",
+      "setup": {
+        "kind": "shell_script",
+        "value": "install.sh",
+        "args": ["--skip-config"]
+      },
+      "setup_on_update": true,
+      "readiness_checks": [
+        {
+          "label": "Codebase Memory command",
+          "path": "${HOME}/.local/bin/codebase-memory-mcp",
+          "executable": true
+        }
+      ],
       "hermes_mcp": true,
       "ports": []
     },
@@ -320,7 +437,47 @@
       "update_module": "src.ulysses_signal_update",
       "update_args": ["--install-user"],
       "git_update": false,
+      "readiness_checks": [
+        {
+          "label": "signal-cli command",
+          "path": "${HOME}/.local/bin/signal-cli",
+          "executable": true
+        }
+      ],
       "ports": [8090]
+    },
+    {
+      "id": "n8n.automation",
+      "label": "n8n",
+      "category": "docker",
+      "resource_kind": "service",
+      "capability_group": "automation",
+      "role": "Local workflow and automation service",
+      "root": "${ULYSSES_MICROSERVICES_ROOT}/n8n",
+      "compose": "compose.yml",
+      "compose_services": ["n8n"],
+      "env_files": [".env"],
+      "data_directories": ["data"],
+      "bootstrap_files": [
+        {
+          "path": ".env",
+          "mode": "0600",
+          "content": "# n8n local workstation settings\nN8N_IMAGE=docker.n8n.io/n8nio/n8n:2.31.6\nN8N_BIND_ADDRESS=127.0.0.1\nN8N_PORT=5678\nN8N_HOST=localhost\nN8N_PROTOCOL=http\nN8N_SECURE_COOKIE=false\nN8N_DIAGNOSTICS_ENABLED=false\nN8N_VERSION_NOTIFICATIONS_ENABLED=false\nN8N_TEMPLATES_ENABLED=false\nN8N_PERSONALIZATION_ENABLED=false\nN8N_HIRING_BANNER_ENABLED=false\nN8N_ENFORCE_SETTINGS_FILE_PERMISSIONS=true\nGENERIC_TIMEZONE=UTC\n"
+        },
+        {
+          "path": "compose.yml",
+          "mode": "0644",
+          "content": "services:\n  n8n:\n    image: \"${N8N_IMAGE:-docker.n8n.io/n8nio/n8n:2.31.6}\"\n    restart: unless-stopped\n    ports:\n      - \"${N8N_BIND_ADDRESS:-127.0.0.1}:${N8N_PORT:-5678}:5678\"\n    environment:\n      N8N_HOST: \"${N8N_HOST:-localhost}\"\n      N8N_PORT: \"5678\"\n      N8N_PROTOCOL: \"${N8N_PROTOCOL:-http}\"\n      N8N_SECURE_COOKIE: \"${N8N_SECURE_COOKIE:-false}\"\n      N8N_DIAGNOSTICS_ENABLED: \"${N8N_DIAGNOSTICS_ENABLED:-false}\"\n      N8N_VERSION_NOTIFICATIONS_ENABLED: \"${N8N_VERSION_NOTIFICATIONS_ENABLED:-false}\"\n      N8N_TEMPLATES_ENABLED: \"${N8N_TEMPLATES_ENABLED:-false}\"\n      N8N_PERSONALIZATION_ENABLED: \"${N8N_PERSONALIZATION_ENABLED:-false}\"\n      N8N_HIRING_BANNER_ENABLED: \"${N8N_HIRING_BANNER_ENABLED:-false}\"\n      N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS: \"${N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS:-true}\"\n      GENERIC_TIMEZONE: \"${GENERIC_TIMEZONE:-UTC}\"\n    volumes:\n      - ./data:/home/node/.n8n\n"
+        }
+      ],
+      "git_update": false,
+      "build_on_update": false,
+      "optional": true,
+      "dashboard": {
+        "label": "Open n8n",
+        "url": "http://127.0.0.1:5678"
+      },
+      "ports": [5678]
     }
   ]
 }

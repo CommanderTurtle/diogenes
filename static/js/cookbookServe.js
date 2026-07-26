@@ -12,6 +12,13 @@ import { bindMenuDismiss, dismissOrRemove } from './escMenuStack.js';
 import { openCookbookDependencies } from './cookbook-diagnosis.js';
 import { _hwfitCache } from './cookbook-hwfit.js';
 import { topPortalZ } from './toolWindowZOrder.js';
+import { synchronizeColibriLaunchPort } from './cookbookColibriLaunch.js';
+import {
+  prismModelIdForIdentity,
+  prismSettingsFromFields,
+  renderPrismCommand,
+  synchronizePrismLaunchPort,
+} from './cookbookPrismLaunch.js';
 
 // Shared state/functions injected by init()
 let _envState;
@@ -48,6 +55,8 @@ const SERVE_FAVORITES_KEY = 'cookbook-serve-favorite-models';
 let _cachedAllModels = [];
 let _colibriProvidersCache = null;
 let _colibriProvidersCachedAt = 0;
+let _prismProvidersCache = null;
+let _prismProvidersCachedAt = 0;
 const _CACHED_MODELS_SCAN_KEY = 'cookbook_cached_models_scan_v3_ltx_video';
 const _CACHED_MODELS_SCAN_TTL = 6 * 3600 * 1000;
 const _HIDDEN_LEGACY_COLIBRI_MODELS = [
@@ -82,6 +91,22 @@ async function _colibriProviderForModel(model, force = false) {
     _colibriProvidersCachedAt = Date.now();
   }
   return _colibriProvidersCache.find(item => item.id === runtimeId) || null;
+}
+
+async function _prismProviderForModel(model, force = false) {
+  const modelId = prismModelIdForIdentity(model);
+  if (!modelId) return null;
+  if (force || !_prismProvidersCache || Date.now() - _prismProvidersCachedAt > 15000) {
+    const res = await fetch('/api/odysseus/prism/providers', { credentials: 'same-origin' });
+    if (!res.ok) throw new Error(`PrismML provider observation failed: HTTP ${res.status}`);
+    const data = await res.json();
+    _prismProvidersCache = Array.isArray(data.providers) ? data.providers : [];
+    _prismProvidersCachedAt = Date.now();
+  }
+  const provider = _prismProvidersCache.find(item => item.id === 'prism.llamacpp') || null;
+  if (!provider) return null;
+  const modelReport = (provider.models || []).find(item => item.id === modelId) || null;
+  return modelReport ? { provider, model: modelReport } : null;
 }
 
 function _normalizeCookbookModelDir(dir) {
@@ -368,7 +393,7 @@ function _formatServeCmdPreview(cmd) {
   }).join('\n');
   if (mlxDeepSeekV4Compat) {
     return [
-      '# Odysseus runtime compatibility: using sanitized MLX DeepSeek-V4 shim.',
+      '# Ɗiogenēs runtime compatibility: using sanitized MLX DeepSeek-V4 shim.',
       formatted,
     ].join('\n');
   }
@@ -780,7 +805,12 @@ function _remoteWindowsDiffusersUnsupported(target) {
   return !!(target?.host && target?.platform === 'windows');
 }
 
-function _backendChoicesForTarget(target, model = null, colibriProvider = null) {
+function _backendChoicesForTarget(
+  target,
+  model = null,
+  colibriProvider = null,
+  prismRuntime = null,
+) {
   if (target?.platform === 'windows') {
     if (_remoteWindowsDiffusersUnsupported(target)) return [['llamacpp','llama.cpp']];
     return [['llamacpp','llama.cpp'],['diffusers','Diffusers']];
@@ -788,14 +818,19 @@ function _backendChoicesForTarget(target, model = null, colibriProvider = null) 
   const standard = _isMetal()
     ? [['mlx','MLX'],['mlx_image','MLX Image'],['llamacpp','llama.cpp'],['ollama','Ollama']]
     : [['vllm','vLLM'],['sglang','SGLang'],['llamacpp','llama.cpp'],['ollama','Ollama'],['mlx','MLX'],['mlx_image','MLX Image'],['diffusers','Diffusers']];
-  if (target?.host || target?.platform === 'windows' || !colibriProvider) return standard;
+  if (target?.host || target?.platform === 'windows') return standard;
+  const native = [];
+  if (prismRuntime && prismModelIdForIdentity(model)) {
+    native.push(['prism', 'PrismML']);
+  }
   const runtimeId = _colibriRuntimeIdForModel(model);
   const choice = runtimeId === 'colibri.glm'
     ? ['colibri_glm', 'Colibri · GLM']
     : runtimeId === 'colibri.hy3'
     ? ['colibri_hy3', 'Colibri · Hy3']
     : null;
-  return choice ? [choice, ...standard] : standard;
+  if (choice && colibriProvider) native.push(choice);
+  return native.length ? [...native, ...standard] : standard;
 }
 
 function _dependencyPkgForServeBackend(backend, modelName = '') {
@@ -807,6 +842,7 @@ function _dependencyPkgForServeBackend(backend, modelName = '') {
   const packageByBackend = {
     colibri_glm: 'colibri_glm',
     colibri_hy3: 'colibri_hy3',
+    prism: 'prism',
     vllm: 'vllm',
     sglang: 'sglang',
     llamacpp: 'llama_cpp',
@@ -882,6 +918,44 @@ async function _fetchServeRuntimePackage(panel, backend) {
       target,
     };
   }
+  if (backend === 'prism') {
+    const card = panel.closest('.doclib-card, .memory-item');
+    const runtime = await _prismProviderForModel(
+      { repo_id: card?.dataset?.repo || '' },
+      true,
+    );
+    const target = _selectedServeTarget(panel);
+    if (!runtime) return { pkg: null, target };
+    const { provider, model } = runtime;
+    const exactWeightsReady = !!model.weights?.complete;
+    const selectedPort = Number(panel.querySelector('[data-field="port"]')?.value || 0);
+    const observedPort = Number(provider.endpoint?.port || 0);
+    const portAvailable = !(
+      provider.endpoint?.port_open
+      && selectedPort === observedPort
+    );
+    const effectivePort = selectedPort || observedPort || 'configured';
+    const summary = [
+      provider.source?.ready ? 'official prism source ready' : 'source not ready',
+      provider.build?.ready ? 'CUDA 13 / sm_120a build ready' : 'CUDA 13 / sm_120a build required',
+      exactWeightsReady ? `${model.weights.path} ready` : `${model.weights?.path || 'exact GGUF'} missing or incomplete`,
+      portAvailable ? `port ${effectivePort} available` : `port ${effectivePort} occupied`,
+    ].join('; ');
+    return {
+      pkg: {
+        name: 'prism',
+        installed: !!(
+          provider.source?.ready
+          && provider.build?.ready
+          && exactWeightsReady
+          && portAvailable
+        ),
+        probe_error: false,
+        status_note: summary,
+      },
+      target,
+    };
+  }
   const repo = (panel.closest('.doclib-card, .memory-item')?.dataset?.repo) || '';
   const packageByBackend = {
     vllm: 'vllm',
@@ -909,7 +983,7 @@ async function _fetchServeRuntimePackage(panel, backend) {
 }
 
 function _runtimeNoteText(backend, pkg, target) {
-  const labels = { vllm: 'vLLM', sglang: 'SGLang', llamacpp: 'llama.cpp', mlx: 'MLX', mlx_image: 'MLX Image', diffusers: 'Diffusers', colibri_glm: 'Colibri · GLM', colibri_hy3: 'Colibri · Hy3' };
+  const labels = { vllm: 'vLLM', sglang: 'SGLang', llamacpp: 'llama.cpp', mlx: 'MLX', mlx_image: 'MLX Image', diffusers: 'Diffusers', colibri_glm: 'Colibri · GLM', colibri_hy3: 'Colibri · Hy3', prism: 'PrismML' };
   const label = labels[backend] || backend;
   if (!pkg) return `${label} readiness unavailable for ${target.label}.`;
   const note = pkg.status_note || pkg.update_note || '';
@@ -1430,6 +1504,14 @@ function _rerenderCachedModels() {
           console.warn('[cookbook] Colibri provider observation unavailable', error);
         }
       }
+      let _prismRuntime = null;
+      if (prismModelIdForIdentity(m)) {
+        try {
+          _prismRuntime = await _prismProviderForModel(m);
+        } catch (error) {
+          console.warn('[cookbook] PrismML provider observation unavailable', error);
+        }
+      }
 
       // Toggle — close if already open
       if (item.classList.contains('doclib-card-expanded')) {
@@ -1491,6 +1573,7 @@ function _rerenderCachedModels() {
         _serveTarget,
         m,
         _colibriProvider,
+        _prismRuntime,
       );
       const _allowedBackends = new Set(_backendChoices.map(([v]) => v));
       const detectedBackend = _detectBackend(m).backend;
@@ -1529,6 +1612,16 @@ function _rerenderCachedModels() {
       const _colibriProfileOptions = Object.entries(_colibriProfiles).map(([id, profile]) =>
         `<option value="${esc(id)}"${id === _colibriProfileId ? ' selected' : ''}>${esc(profile.label || id)}</option>`
       ).join('');
+      const _prismProvider = _prismRuntime?.provider || null;
+      const _prismModel = _prismRuntime?.model || null;
+      const _prismProfiles = _prismProvider?.profiles || {};
+      const _prismProfileId = String(
+        sv('prism_profile', _prismProvider?.default_profile || 'rtx5090-quality')
+      );
+      const _prismProfile = _prismProfiles[_prismProfileId] || {};
+      const _prismProfileOptions = Object.entries(_prismProfiles).map(([id, profile]) =>
+        `<option value="${esc(id)}"${id === _prismProfileId ? ' selected' : ''}>${esc(profile.label || id)}</option>`
+      ).join('');
       const _ggufChoices = _runnableGgufFiles(m);
       const _savedGguf = String(sv('gguf_file', '') || '');
       const _preferredGgufInclude = String(sv('_preferredGgufInclude', '') || '').replace(/\*/g, '').toLowerCase();
@@ -1544,10 +1637,9 @@ function _rerenderCachedModels() {
       const _ggufOptions = _ggufChoices.map(f =>
         `<option value="${esc(f.rel_path)}"${f.rel_path === _defaultGguf ? ' selected' : ''}>${esc(_ggufFileLabel(f))}</option>`
       ).join('');
-      const _minimaxM3Snapshot = '/home/pewds/.cache/huggingface/hub/models--cyankiwi--MiniMax-M3-AWQ-INT4/snapshots/4082acbbec1236d21828d55b6bb0fe02ade4ab5b';
-      const _defaultServeModel = _isMiniMaxM3 ? _minimaxM3Snapshot : (m.is_local_dir && m.path ? `${m.path}/${repo}` : repo);
+      const _defaultServeModel = m.is_local_dir && m.path ? `${m.path}/${repo}` : repo;
       const _savedModelPath = String(svm('model_path', _defaultServeModel) || '').trim();
-      const _modelPathValue = _isMiniMaxM3 && (!_savedModelPath || _savedModelPath === repo) ? _minimaxM3Snapshot : _savedModelPath;
+      const _modelPathValue = _savedModelPath;
       const _defaultServedModelName = _isMiniMaxM3 ? repo : '';
       // Build save slots
       const _allPresets = _loadPresets();
@@ -1576,6 +1668,13 @@ function _rerenderCachedModels() {
         panelHtml += `<input type="hidden" class="hwfit-sf" data-field="colibri_cli" value="${esc((_colibriProvider.commands?.serve || [])[0] || '')}" />`;
         panelHtml += `<input type="hidden" class="hwfit-sf" data-field="colibri_model_path" value="${esc(_colibriProvider.model?.path || '')}" />`;
         panelHtml += `<input type="hidden" class="hwfit-sf" data-field="colibri_model_id" value="${esc(_colibriProvider.endpoint?.model_id || '')}" />`;
+      }
+      if (_prismProvider && _prismModel) {
+        panelHtml += `<input type="hidden" class="hwfit-sf" data-field="prism_provider_id" value="${esc(_prismProvider.id)}" />`;
+        panelHtml += `<input type="hidden" class="hwfit-sf" data-field="prism_model_id" value="${esc(_prismModel.id)}" />`;
+        panelHtml += `<input type="hidden" class="hwfit-sf" data-field="prism_api_model_id" value="${esc(_prismModel.api_model_id || '')}" />`;
+        panelHtml += `<input type="hidden" class="hwfit-sf" data-field="prism_host" value="0.0.0.0" />`;
+        panelHtml += `<input type="hidden" class="hwfit-sf" data-field="prism_command" value="" />`;
       }
       const _replaceTaskId = String(sv('_replaceTaskId', '') || '');
       if (_replaceTaskId) {
@@ -1607,7 +1706,7 @@ function _rerenderCachedModels() {
       // stays as the source-of-truth so every existing change handler
       // (updateBackendVisibility, runtime readiness, command builder)
       // still fires via dispatchEvent('change') on selection.
-      panelHtml += `<label>${_l('Engine','Inference engine: Colibri, MLX, vLLM, SGLang, llama.cpp, Ollama, or Diffusers')}<div class="hwfit-backend-picker" data-backend-picker style="position:relative;width:100%;"><select class="hwfit-sf hwfit-backend-source" data-field="backend" style="display:none;">${backendOpts}</select><button type="button" class="hwfit-backend-btn" data-backend-btn aria-haspopup="listbox" aria-expanded="false" style="display:flex;align-items:center;gap:6px;width:100%;height:32px;padding:0 8px;background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:4px;font:inherit;font-size:11px;cursor:pointer;text-align:left;position:relative;top:-4px;"><span class="hwfit-backend-btn-icon" data-backend-icon-slot aria-hidden="true" style="display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;color:var(--accent, var(--red));flex-shrink:0;"></span><span class="hwfit-backend-btn-label" data-backend-label style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"></span><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="opacity:0.6;flex-shrink:0;"><polyline points="6 9 12 15 18 9"/></svg></button><div class="hwfit-backend-menu" data-backend-menu role="listbox" hidden style="position:absolute;top:calc(100% + 4px);left:0;right:0;z-index:100;background:var(--panel, var(--bg));border:1px solid var(--border);border-radius:6px;box-shadow:0 6px 20px rgba(0,0,0,0.22);padding:4px;"></div></div></label>`;
+      panelHtml += `<label>${_l('Engine','Inference engine: native PrismML or Colibri when detected, plus MLX, vLLM, SGLang, llama.cpp, Ollama, and Diffusers.')}<div class="hwfit-backend-picker" data-backend-picker style="position:relative;width:100%;"><select class="hwfit-sf hwfit-backend-source" data-field="backend" style="display:none;">${backendOpts}</select><button type="button" class="hwfit-backend-btn" data-backend-btn aria-haspopup="listbox" aria-expanded="false" style="display:flex;align-items:center;gap:6px;width:100%;height:32px;padding:0 8px;background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:4px;font:inherit;font-size:11px;cursor:pointer;text-align:left;position:relative;top:-4px;"><span class="hwfit-backend-btn-icon" data-backend-icon-slot aria-hidden="true" style="display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;color:var(--accent, var(--red));flex-shrink:0;"></span><span class="hwfit-backend-btn-label" data-backend-label style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"></span><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="opacity:0.6;flex-shrink:0;"><polyline points="6 9 12 15 18 9"/></svg></button><div class="hwfit-backend-menu" data-backend-menu role="listbox" hidden style="position:absolute;top:calc(100% + 4px);left:0;right:0;z-index:100;background:var(--panel, var(--bg));border:1px solid var(--border);border-radius:6px;box-shadow:0 6px 20px rgba(0,0,0,0.22);padding:4px;"></div></div></label>`;
       panelHtml += `<input type="hidden" class="hwfit-sf" data-field="host" value="${esc(_es.remoteHost || '')}" />`;
       // Inference mode pill (llama.cpp only) — lives directly to the
       // RIGHT of Backend in Row 1 so the engine and the GPU/CPU choice
@@ -1637,7 +1736,12 @@ function _rerenderCachedModels() {
       if (_colibriProvider) {
         panelHtml += `<label class="hwfit-backend-colibri_glm hwfit-backend-colibri_hy3">${_l('Profile','Official-source launch profile. Presets change only supported Colibri settings.')}<select class="hwfit-sf" data-field="colibri_profile">${_colibriProfileOptions}</select></label>`;
       }
-      const defaultPort = _colibriProvider?.endpoint?.port
+      if (_prismProvider) {
+        panelHtml += `<label class="hwfit-backend-prism">${_l('Profile','Server-validated PrismML launch profile. Experimental DSpark, vision, and KV4 remain explicit opt-ins.')}<select class="hwfit-sf" data-field="prism_profile">${_prismProfileOptions}</select></label>`;
+      }
+      const defaultPort = _prismProvider?.endpoint?.port
+        ? String(_prismProvider.endpoint.port)
+        : _colibriProvider?.endpoint?.port
         ? String(_colibriProvider.endpoint.port)
         : defaultBackend === 'ollama' ? '11434' : _nextAvailablePort();
       panelHtml += `<label>${_l('Port','HTTP port for the API server')}<input type="text" class="hwfit-sf" data-field="port" value="${esc(sv('port', defaultPort))}" /></label>`;
@@ -1711,6 +1815,13 @@ function _rerenderCachedModels() {
         panelHtml += `<label class="hwfit-sf-cb"><input type="checkbox" class="hwfit-sf" data-field="colibri_auto_tier"${sv('colibri_auto_tier', !!_colibriProfile.auto_tier) ? ' checked' : ''} /> Auto tier${_h('Size Colibri RAM and VRAM tiers from memory available at launch.')}</label>`;
         panelHtml += `</div>`;
       }
+      if (_prismProvider && _prismModel) {
+        panelHtml += `<div class="hwfit-serve-row hwfit-serve-row-core hwfit-backend-prism">`;
+        panelHtml += `<label>${_l('Context','PrismML context allocation. RTX 5090 quality defaults to 131072; use the Portable profile for a conservative 8192-token start.')}<input type="text" class="hwfit-sf" data-field="prism_context" value="${esc(sv('prism_context', String(_prismProfile.context ?? 131072)))}" /></label>`;
+        panelHtml += `<label>${_l('GPU Layers','llama.cpp GPU offload layer budget. 999 requests full offload and is the managed CUDA default.')}<input type="text" class="hwfit-sf" data-field="prism_gpu_layers" value="${esc(sv('prism_gpu_layers', String(_prismProfile.gpu_layers ?? 999)))}" /></label>`;
+        panelHtml += `<label>${_l('Parallel','Independent llama-server slots. DSpark speculative decoding requires exactly one.')}<input type="text" class="hwfit-sf" data-field="prism_parallel" value="${esc(sv('prism_parallel', String(_prismProfile.parallel ?? 1)))}" /></label>`;
+        panelHtml += `</div>`;
+      }
       // ── Advanced (collapsed by default) ──
       // Everything below the fold is tuning users only touch occasionally:
       // vLLM kernel/env knobs, llama.cpp fit/cache/split controls, the
@@ -1752,10 +1863,26 @@ function _rerenderCachedModels() {
         panelHtml += `<label>${_l('Route M','Maximum router-rank window in which experimental cache routing may prefer a resident expert.')}<input type="text" class="hwfit-sf" data-field="colibri_route_m" value="${esc(sv('colibri_route_m', '12'))}" /></label>`;
         panelHtml += `</div>`;
       }
+      if (_prismProvider && _prismModel) {
+        panelHtml += `<div class="hwfit-backend-prism" style="font-size:10px;line-height:1.45;color:var(--fg-muted);margin:2px 0 8px;padding:7px 9px;border:1px solid var(--border);border-radius:6px;">${esc(_prismProfile.description || '')}<br><span style="opacity:.8;">Source: ${esc(_prismProvider.source?.commit || 'not observed')} · exact model: ${esc(_prismModel.weights?.path || 'not configured')}</span></div>`;
+        panelHtml += `<div class="hwfit-serve-row hwfit-backend-prism">`;
+        panelHtml += `<label>${_l('Temperature','Sampling temperature accepted by the managed PrismML command renderer (0–2).')}<input type="text" class="hwfit-sf" data-field="prism_temperature" value="${esc(sv('prism_temperature', '0.7'))}" /></label>`;
+        panelHtml += `<label>${_l('Top P','Nucleus sampling cutoff (0–1).')}<input type="text" class="hwfit-sf" data-field="prism_top_p" value="${esc(sv('prism_top_p', '0.95'))}" /></label>`;
+        panelHtml += `<label>${_l('Top K','Maximum top candidates (0–1000).')}<input type="text" class="hwfit-sf" data-field="prism_top_k" value="${esc(sv('prism_top_k', '20'))}" /></label>`;
+        panelHtml += `<label>${_l('Min P','Minimum relative probability cutoff (0–1).')}<input type="text" class="hwfit-sf" data-field="prism_min_p" value="${esc(sv('prism_min_p', '0'))}" /></label>`;
+        panelHtml += `<label>${_l('Reasoning Budget','Optional llama-server reasoning budget. Blank omits the flag; -1 permits the runtime maximum.')}<input type="text" class="hwfit-sf" data-field="prism_reasoning_budget" value="${esc(sv('prism_reasoning_budget', ''))}" placeholder="runtime default" /></label>`;
+        panelHtml += `</div>`;
+        panelHtml += `<div class="hwfit-serve-checks hwfit-backend-prism">`;
+        panelHtml += `<label class="hwfit-sf-cb"><input type="checkbox" class="hwfit-sf" data-field="prism_flash_attention"${sv('prism_flash_attention', _prismProfile.flash_attention !== false) ? ' checked' : ''} /> Flash Attention${_h('Use the Prism CUDA fork Flash Attention path. Enabled in both committed profiles.')}</label>`;
+        panelHtml += `<label class="hwfit-sf-cb"><input type="checkbox" class="hwfit-sf" data-field="prism_kv4"${sv('prism_kv4', !!_prismProfile.kv4) ? ' checked' : ''} /> KV4 Cache${_h('Quantize both K and V caches to q4_0. This reduces KV memory but is an explicit quality trade-off.')}</label>`;
+        panelHtml += `<label class="hwfit-sf-cb"><input type="checkbox" class="hwfit-sf" data-field="prism_speculative"${sv('prism_speculative', !!_prismProfile.speculative) ? ' checked' : ''} /> DSpark${_h('Enable the exact model-matched DSpark drafter. Requires its exact GGUF, one server slot, and at least 16384 context. Disabled by default.')}</label>`;
+        panelHtml += `<label class="hwfit-sf-cb"><input type="checkbox" class="hwfit-sf" data-field="prism_vision"${sv('prism_vision', false) ? ' checked' : ''} /> Vision${_h('Attach the exact model-matched mmproj projector. Disabled by default and launch-gated until that exact file is complete.')}</label>`;
+        panelHtml += `</div>`;
+      }
       // Advanced vLLM/SGLang row (KV Cache, Attention, Swap, Env)
       panelHtml += `<div class="hwfit-serve-row hwfit-backend-vllm hwfit-backend-sglang">`;
       panelHtml += `<label class="hwfit-backend-vllm" style="grid-column:1 / -1;">${_l('Served Name','vLLM --served-model-name. Keeps the OpenAI model id stable when serving from a local snapshot path.')}<input type="text" class="hwfit-sf" data-field="served_model_name" value="${esc(svm('served_model_name', _defaultServedModelName))}" placeholder="${esc(repo)}" style="width:100%;" /></label>`;
-      panelHtml += `<label class="hwfit-backend-vllm" style="grid-column:1 / -1;">${_l('Model Path','Argument passed after `vllm serve`. MiniMax M3 auto-fills the cached snapshot path because the nightly runtime needs the local repo files.')}<input type="text" class="hwfit-sf" data-field="model_path" value="${esc(_modelPathValue)}" placeholder="${esc(repo)}" style="width:100%;" /></label>`;
+      panelHtml += `<label class="hwfit-backend-vllm" style="grid-column:1 / -1;">${_l('Model Path','Argument passed after `vllm serve`. Use a repository ID or an explicit local directory. For MiniMax M3, Ɗiogenēs resolves an existing local Hugging Face snapshot when one is available.')}<input type="text" class="hwfit-sf" data-field="model_path" value="${esc(_modelPathValue)}" placeholder="${esc(repo)}" style="width:100%;" /></label>`;
       panelHtml += `<label class="hwfit-backend-vllm">${_l('KV Cache','vLLM --kv-cache-dtype. auto uses the model/runtime default; fp8 reduces KV memory for long context.')}<select class="hwfit-sf" data-field="vllm_kv_cache_dtype" style="height:32px;">${vllmKvCacheOpts}</select></label>`;
       // Attention backend selector — pin the kernel impl. Default `auto` lets
       // vLLM pick FlashInfer (which JITs on first use and breaks on older
@@ -1844,7 +1971,7 @@ function _rerenderCachedModels() {
       // them without dropping back to the raw command box.
       panelHtml += `<label class="hwfit-sf-cb hwfit-backend-vllm hwfit-backend-sglang"><input type="checkbox" class="hwfit-sf" data-field="reasoning_parser" data-parser="${_rp_name || ''}"${sv('reasoning_parser',_reasoningDefault)?' checked':''} /> Reasoning Parser${_rp_name ? ` <span class="hwfit-parser-tag">${_rp_name}</span>` : ''}${_h('SGLang/vLLM: splits thinking tokens into a reasoning channel using the detected parser.')}</label>`;
       panelHtml += `<label class="hwfit-sf-cb"><input type="checkbox" class="hwfit-sf" data-field="enforce_eager"${sv('enforce_eager',false)?' checked':''} /> Disable CUDA Graphs${_h('vLLM: --enforce-eager. SGLang: --disable-cuda-graph. Slower, but useful for graph-capture crashes.')}</label>`;
-      panelHtml += `<label class="hwfit-sf-cb"><input type="checkbox" class="hwfit-sf" data-field="prefix_cache"${sv('prefix_cache',false)?' checked':''} /> Prefix / Radix Cache${_h('vLLM: prefix caching. SGLang: RadixAttention prefix cache; when off Odysseus adds --disable-radix-cache.')}</label>`;
+      panelHtml += `<label class="hwfit-sf-cb"><input type="checkbox" class="hwfit-sf" data-field="prefix_cache"${sv('prefix_cache',false)?' checked':''} /> Prefix / Radix Cache${_h('vLLM: prefix caching. SGLang: RadixAttention prefix cache; when off Ɗiogenēs adds --disable-radix-cache.')}</label>`;
       // Inline the previously-second vLLM checks row so Expert Parallel /
       // Speculative / MoE Env sit next to Prefix Caching with no gap. All
       // three are vLLM-only — class-gated so they hide on SGLang. Always
@@ -2010,6 +2137,44 @@ function _rerenderCachedModels() {
         if (hostField) hostField.value = f.host;
         const backend = f.backend || 'vllm';
         const serveModel = (f.model_path || '').trim() || (m.is_local_dir && m.path ? `${m.path}/${repo}` : repo);
+        if (backend === 'prism') {
+          const settings = prismSettingsFromFields(f);
+          const previewSeq = (panel._prismPreviewSeq || 0) + 1;
+          panel._prismPreviewSeq = previewSeq;
+          panel._prismPreviewError = '';
+          const prismCommandField = panel.querySelector('[data-field="prism_command"]');
+          const commandBox = panel.querySelector('.hwfit-serve-cmd');
+          const preview = renderPrismCommand(_prismModel?.id || '', settings)
+            .then(command => {
+              if (panel._prismPreviewSeq !== previewSeq) return command;
+              panel._cmd = command;
+              panel._host = f.host || '';
+              panel._prismSettings = settings;
+              panel._prismPreviewError = '';
+              if (prismCommandField) prismCommandField.value = command;
+              if (commandBox) {
+                commandBox.value = _formatServeCmdPreview(command);
+                commandBox.style.height = 'auto';
+                commandBox.style.height = commandBox.scrollHeight + 'px';
+              }
+              return command;
+            })
+            .catch(error => {
+              if (panel._prismPreviewSeq !== previewSeq) return '';
+              const message = error?.message || String(error);
+              panel._cmd = '';
+              panel._prismPreviewError = message;
+              if (prismCommandField) prismCommandField.value = '';
+              if (commandBox) {
+                commandBox.value = `PrismML preview unavailable: ${message}`;
+                commandBox.style.height = 'auto';
+                commandBox.style.height = commandBox.scrollHeight + 'px';
+              }
+              return '';
+            });
+          panel._prismPreviewPromise = preview;
+          return panel._cmd || '';
+        }
         if (backend === 'llamacpp') {
           const ggufChoices = _runnableGgufFiles(m);
           const selectedGguf = ggufChoices.find(file => file.rel_path === f.gguf_file);
@@ -2046,7 +2211,7 @@ function _rerenderCachedModels() {
           f.extra_env = envParts.join(' ');
         }
         let cmd = _buildServeCmd(f, serveModel, backend);
-        if (f.extra && f.extra.trim()) cmd += ' ' + f.extra.trim();
+        if (backend !== 'prism' && f.extra && f.extra.trim()) cmd += ' ' + f.extra.trim();
         const missingVisionProjector = backend === 'llamacpp' && !!f.vision && !f._mmproj_path;
         panel._visionMissingProjector = missingVisionProjector;
         const _visionWarn = panel.querySelector('.hwfit-serve-vision-warn');
@@ -2296,6 +2461,7 @@ function _rerenderCachedModels() {
       const _BACKEND_GLYPHS = {
         colibri_glm: '<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 2h6v2h2v2h6v2h-5v2h5v2h-4v2h-3v2h-2v5h-2v-7H9v-2H2V8h7V6H6V4h2V2z"/></svg>',
         colibri_hy3: '<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 2h6v2h2v2h6v2h-5v2h5v2h-4v2h-3v2h-2v5h-2v-7H9v-2H2V8h7V6H6V4h2V2z"/></svg>',
+        prism: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round" aria-hidden="true"><path d="M12 2 3 20h18L12 2Z"/><path d="M12 2v12M3 20l9-6 9 6"/></svg>',
         vllm:   '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 4l7 16 7-16"/><path d="M14 4l4 9 3-9"/></svg>',
         sglang: '<span aria-hidden="true" style="display:block;width:14px;height:14px;background:currentColor;-webkit-mask:url(/static/icons/sglang-mark.png) center/contain no-repeat;mask:url(/static/icons/sglang-mark.png) center/contain no-repeat;"></span>',
         mlx: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 18V6l4 7 4-7v12"/><path d="M16 6v12"/><path d="M20 6v12"/></svg>',
@@ -2383,6 +2549,8 @@ function _rerenderCachedModels() {
       function updateBackendVisibility() {
         const b = panel.querySelector('[data-field="backend"]')?.value || 'vllm';
         const isColibri = b === 'colibri_glm' || b === 'colibri_hy3';
+        const isPrism = b === 'prism';
+        const isManagedNative = isColibri || isPrism;
         panel.dataset.backendActive = b;
         panel.querySelectorAll('[class*="hwfit-backend-"]').forEach(el => {
           // Skip the entire backend-picker subtree — the picker's own
@@ -2398,18 +2566,40 @@ function _rerenderCachedModels() {
         _setBackendBtnState(b);
         const cmdBox = panel.querySelector('.hwfit-serve-cmd');
         if (cmdBox) {
-          cmdBox.readOnly = isColibri;
-          cmdBox.title = isColibri
-            ? 'Colibri commands are generated from the structured settings and validated exactly before launch.'
+          cmdBox.readOnly = isManagedNative;
+          cmdBox.title = isManagedNative
+            ? `${isPrism ? 'PrismML' : 'Colibri'} commands are generated from structured settings and validated exactly before launch.`
             : '';
         }
         const launchButton = panel.querySelector('.hwfit-serve-launch');
         if (launchButton) {
-          const ready = !isColibri || !!_colibriProvider?.actions?.start_available;
+          const selectedPort = Number(panel.querySelector('[data-field="port"]')?.value || 0);
+          const observedPort = Number(_prismProvider?.endpoint?.port || 0);
+          const prismPortAvailable = !(
+            _prismProvider?.endpoint?.port_open
+            && selectedPort === observedPort
+          );
+          const prismSpecReady = !panel.querySelector('[data-field="prism_speculative"]')?.checked
+            || !!_prismModel?.drafter?.complete;
+          const prismVisionReady = !panel.querySelector('[data-field="prism_vision"]')?.checked
+            || !!_prismModel?.mmproj?.complete;
+          const prismReady = !!(
+            _prismProvider?.source?.ready
+            && _prismProvider?.build?.ready
+            && _prismModel?.weights?.complete
+            && prismPortAvailable
+            && prismSpecReady
+            && prismVisionReady
+          );
+          const ready = isColibri
+            ? !!_colibriProvider?.actions?.start_available
+            : isPrism
+            ? prismReady
+            : true;
           launchButton.disabled = !ready;
           launchButton.title = ready
             ? ''
-            : 'Complete the Colibri source, CUDA build, model download, and port preflight in Dependencies before launch.';
+            : `Complete the ${isPrism ? 'PrismML' : 'Colibri'} source, CUDA build, exact model, and port preflight in Dependencies before launch.`;
         }
       }
       updateBackendVisibility();
@@ -2429,7 +2619,7 @@ function _rerenderCachedModels() {
         const backend = panel.querySelector('[data-field="backend"]')?.value || 'vllm';
         const noteText = note.querySelector('.hwfit-serve-runtime-text');
         const _writeNote = (s) => { if (noteText) noteText.textContent = s; else note.textContent = s; };
-        if (!['vllm', 'sglang', 'llamacpp', 'mlx', 'mlx_image', 'diffusers', 'colibri_glm', 'colibri_hy3'].includes(backend)) {
+        if (!['vllm', 'sglang', 'llamacpp', 'mlx', 'mlx_image', 'diffusers', 'colibri_glm', 'colibri_hy3', 'prism'].includes(backend)) {
           note.style.display = 'none';
           _writeNote('');
           return;
@@ -2537,6 +2727,29 @@ function _rerenderCachedModels() {
       }
       panel.querySelector('[data-field="colibri_profile"]')?.addEventListener('change', event => {
         _applyColibriProfile(event.currentTarget.value);
+      });
+
+      function _applyPrismProfile(profileId) {
+        const profile = _prismProfiles[String(profileId || '')];
+        if (!profile) return;
+        const setValue = (field, value) => {
+          const el = panel.querySelector(`[data-field="${field}"]`);
+          if (el) el.value = String(value ?? '');
+        };
+        const setChecked = (field, value) => {
+          const el = panel.querySelector(`[data-field="${field}"]`);
+          if (el) el.checked = !!value;
+        };
+        setValue('prism_context', profile.context ?? 8192);
+        setValue('prism_gpu_layers', profile.gpu_layers ?? 999);
+        setValue('prism_parallel', profile.parallel ?? 1);
+        setChecked('prism_flash_attention', profile.flash_attention !== false);
+        setChecked('prism_kv4', !!profile.kv4);
+        setChecked('prism_speculative', !!profile.speculative);
+        updateCmd();
+      }
+      panel.querySelector('[data-field="prism_profile"]')?.addEventListener('change', event => {
+        _applyPrismProfile(event.currentTarget.value);
       });
 
       // Wire save slots
@@ -3321,7 +3534,7 @@ function _rerenderCachedModels() {
             const extraEl = panel.querySelector('[data-field="extra"]');
             if (extraEl) extraEl.value = '';
             const selectedBackend = String(e.target.value || '');
-            if (selectedBackend === 'colibri_glm' || selectedBackend === 'colibri_hy3') {
+            if (selectedBackend === 'colibri_glm' || selectedBackend === 'colibri_hy3' || selectedBackend === 'prism') {
               _cmdManuallyEdited = false;
             }
             updateBackendVisibility();
@@ -3329,6 +3542,12 @@ function _rerenderCachedModels() {
           }
           if (e.target.dataset.field === 'venv') {
             updateRuntimeReadinessNote();
+          }
+          if (
+            e.target.dataset.field === 'port'
+            || String(e.target.dataset.field || '').startsWith('prism_')
+          ) {
+            updateBackendVisibility();
           }
           updateCmd();
           if (['backend', 'tp', 'gpu_mem', 'vllm_kv_cache_dtype', 'gpus'].includes(e.target.dataset.field)) {
@@ -3442,7 +3661,8 @@ function _rerenderCachedModels() {
       const _savedManualCmd = String(svm('_manual_cmd', '') || '').trim();
       const _initialBackend = panel.querySelector('[data-field="backend"]')?.value || '';
       const _initialIsColibri = _initialBackend === 'colibri_glm' || _initialBackend === 'colibri_hy3';
-      if (_cmdTextarea && _savedManualCmd && !_initialIsColibri) {
+      const _initialIsPrism = _initialBackend === 'prism';
+      if (_cmdTextarea && _savedManualCmd && !_initialIsColibri && !_initialIsPrism) {
         panel._cmd = _savedManualCmd;
         _cmdTextarea.value = _formatServeCmdPreview(_savedManualCmd);
         _cmdTextarea.style.height = 'auto';
@@ -3451,7 +3671,7 @@ function _rerenderCachedModels() {
       }
       if (_cmdTextarea) _cmdTextarea.addEventListener('input', () => {
         const backend = panel.querySelector('[data-field="backend"]')?.value || '';
-        if (backend !== 'colibri_glm' && backend !== 'colibri_hy3') _cmdManuallyEdited = true;
+        if (backend !== 'colibri_glm' && backend !== 'colibri_hy3' && backend !== 'prism') _cmdManuallyEdited = true;
       });
 
       // Cancel button — collapses the serve config panel (same effect as
@@ -3545,6 +3765,7 @@ function _rerenderCachedModels() {
         });
         serveState.backend = serveState.backend || (_detectBackend(m).backend) || 'vllm';
         const _isColibriLaunch = serveState.backend === 'colibri_glm' || serveState.backend === 'colibri_hy3';
+        const _isPrismLaunch = serveState.backend === 'prism';
         if (_isColibriLaunch) {
           serveState._colibri_settings = {
             profile: serveState.colibri_profile,
@@ -3575,6 +3796,34 @@ function _rerenderCachedModels() {
             queue_timeout: serveState.colibri_queue_timeout,
             kv_slots: serveState.colibri_kv_slots,
           };
+        }
+        if (_isPrismLaunch) {
+          serveState._prism_settings = prismSettingsFromFields(serveState);
+          try {
+            launchCmd = _normalizeServeCmdForLaunch(
+              await renderPrismCommand(
+                serveState.prism_model_id || _prismModel?.id || '',
+                serveState._prism_settings,
+              )
+            );
+            panel._cmd = launchCmd;
+            panel._prismSettings = serveState._prism_settings;
+            panel._prismPreviewError = '';
+            const prismCommandField = panel.querySelector('[data-field="prism_command"]');
+            if (prismCommandField) prismCommandField.value = launchCmd;
+            if (_cmdTextarea) {
+              _cmdTextarea.value = _formatServeCmdPreview(launchCmd);
+              _cmdTextarea.style.height = 'auto';
+              _cmdTextarea.style.height = _cmdTextarea.scrollHeight + 'px';
+            }
+          } catch (error) {
+            _restoreLaunchBtn();
+            uiModule.showToast(
+              `PrismML launch settings are invalid: ${error?.message || error}`,
+              9000,
+            );
+            return;
+          }
         }
         const launchTarget = _selectedServeTarget(panel);
         if (serveState.backend === 'llamacpp' && serveState.vision && !/(?:^|\s)(?:--mmproj|--clip_model_path)\b/.test(launchCmd)) {
@@ -3621,8 +3870,26 @@ function _rerenderCachedModels() {
                 const _oldPort = _newPort || _serveCmdPort(launchCmd);
                 const _nextPort = _nextServeLaunchPort(_oldPort, _runningMod, _hostStr, _serverKeyStr);
                 if (_oldPort && _nextPort && _nextPort !== _oldPort) {
-                  launchCmd = _replaceServeCmdPort(launchCmd, _nextPort);
-                  serveState.port = _nextPort;
+                  if (_isColibriLaunch) {
+                    const _synced = synchronizeColibriLaunchPort(
+                      launchCmd,
+                      serveState,
+                      _nextPort,
+                    );
+                    launchCmd = _synced.command;
+                  } else if (_isPrismLaunch) {
+                    const _synced = synchronizePrismLaunchPort(
+                      launchCmd,
+                      serveState,
+                      _nextPort,
+                    );
+                    launchCmd = _synced.command;
+                  } else {
+                    launchCmd = _replaceServeCmdPort(launchCmd, _nextPort);
+                    serveState.port = String(_nextPort);
+                  }
+                  const _portField = panel.querySelector('.hwfit-sf[data-field="port"]');
+                  if (_portField) _portField.value = String(_nextPort);
                   panel._cmd = launchCmd;
                   if (_cmdTextarea) _cmdTextarea.value = launchCmd;
                   uiModule.showToast(`Launching anyway on port ${_nextPort}. Existing serve stays on ${_oldPort}.`, 7000);
@@ -3802,7 +4069,7 @@ function _rerenderCachedModels() {
         // on a host where no GPU is visible (driver missing, $CUDA_VISIBLE_DEVICES
         // unset, container without --gpus). Catch it BEFORE the user spends
         // minutes watching the task fail.
-        const _needsGpu = ['vllm', 'sglang', 'colibri_glm', 'colibri_hy3'].includes(serveState.backend)
+        const _needsGpu = ['vllm', 'sglang', 'colibri_glm', 'colibri_hy3', 'prism'].includes(serveState.backend)
           || (serveState.backend === 'diffusers');
         if (_needsGpu) {
           try {
@@ -3900,7 +4167,9 @@ function _rerenderCachedModels() {
         } catch {}
         const origEnv = _envState.env;
         const origEnvPath = _envState.envPath;
-        const venvVal = panel.querySelector('[data-field="venv"]')?.value?.trim();
+        const venvVal = _isPrismLaunch
+          ? ''
+          : panel.querySelector('[data-field="venv"]')?.value?.trim();
         const gpusVal = panel.querySelector('[data-field="gpus"]')?.value?.trim();
         const origGpus = _envState.gpus;
         // Resolve the target host from the visible Server dropdown — the reliable
@@ -3914,8 +4183,16 @@ function _rerenderCachedModels() {
         // The venv field wins; otherwise fall back to the env configured for the
         // selected server in Settings, so the activation isn't silently dropped
         // when the field is left blank (the per-server venv wasn't being applied).
-        if (venvVal) { _envState.env = (_srvEnv === 'conda' ? 'conda' : 'venv'); _envState.envPath = venvVal; }
-        else if (_srvEnvPath) { _envState.env = (_srvEnv === 'conda' ? 'conda' : 'venv'); _envState.envPath = _srvEnvPath; }
+        if (_isPrismLaunch) {
+          _envState.env = '';
+          _envState.envPath = '';
+        } else if (venvVal) {
+          _envState.env = (_srvEnv === 'conda' ? 'conda' : 'venv');
+          _envState.envPath = venvVal;
+        } else if (_srvEnvPath) {
+          _envState.env = (_srvEnv === 'conda' ? 'conda' : 'venv');
+          _envState.envPath = _srvEnvPath;
+        }
         if (gpusVal) _envState.gpus = gpusVal;
         // Preflight: launching a GPU engine (llama.cpp / vLLM / SGLang)
         // against the local-in-container target on a host whose hwfit
@@ -3927,7 +4204,7 @@ function _rerenderCachedModels() {
         // confirm they really meant CPU.
         try {
           const _isLocalInContainer = !serveHost; // empty serveHost == cookbook container's local
-          const _wantsGpu = ['llamacpp', 'vllm', 'sglang', 'diffusers', 'colibri_glm', 'colibri_hy3'].includes(serveState.backend);
+          const _wantsGpu = ['llamacpp', 'vllm', 'sglang', 'diffusers', 'colibri_glm', 'colibri_hy3', 'prism'].includes(serveState.backend);
           const _detectedBackend = String(_hwfitCache?.system?.backend || '').toLowerCase();
           const _gpuBackends = ['cuda', 'rocm', 'vulkan', 'metal', 'mps', 'apple'];
           if (_isLocalInContainer && _wantsGpu && _detectedBackend && !_gpuBackends.includes(_detectedBackend)) {
@@ -4187,7 +4464,9 @@ function _retryCachedModel(repo, m) {
   const envPath = _target.host ? (srv.envPath || '') : (_envState.envPath || '');
   const downloadDir = srv.downloadDir || (m?.is_local_dir && m?.path ? m.path : '');
   if (downloadDir) payload.local_dir = _normalizeCookbookModelDir(downloadDir);
-  payload.disable_hf_transfer = true;
+  // Auto-downloads launched as part of serving favor the conservative lane;
+  // users can start a high-performance Xet download explicitly from Download.
+  payload.reliable_download = true;
   if (platform === 'windows') {
     if (env === 'venv' && envPath) {
       payload.env_prefix = '& ' + _psQuote(envPath.endsWith('\\Scripts\\Activate.ps1') ? envPath : envPath + '\\Scripts\\Activate.ps1');
@@ -4286,7 +4565,7 @@ function _renderCachedModelsData(list, data, host) {
 
   if (!allModels.length) {
     if (!host) {
-      list.innerHTML = '<div class="hwfit-loading" style="flex-direction:column;gap:6px;text-align:center;"><div>No cached models found</div><div style="font-size:11px;opacity:0.55;max-width:420px;line-height:1.4;">Docker Local uses Odysseus’s cache in <code>data/huggingface</code>. Download a model here, or copy an existing host HuggingFace cache into that folder once.</div></div>';
+      list.innerHTML = '<div class="hwfit-loading" style="flex-direction:column;gap:6px;text-align:center;"><div>No cached models found</div><div style="font-size:11px;opacity:0.55;max-width:420px;line-height:1.4;">Docker Local uses Ɗiogenēs’ cache in <code>data/huggingface</code>. Download a model here, or copy an existing host Hugging Face cache into that folder once.</div></div>';
     } else {
       list.innerHTML = '<div class="hwfit-loading" style="flex-direction:column;gap:8px;text-align:center;"><div>No cached models found</div><div style="font-size:11px;opacity:0.55;max-width:420px;line-height:1.4;">No complete model folders were found on this server.</div><button type="button" class="hwfit-gpu-btn serve-empty-scan-btn" style="height:26px;padding:3px 10px;">Refresh</button></div>';
       list.querySelector('.serve-empty-scan-btn')?.addEventListener('click', () => {

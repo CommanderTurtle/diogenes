@@ -1,0 +1,247 @@
+{
+  "schema_version": "diogenes.hermes-stack.v1",
+  "repositories": [
+    {
+      "id": "librarian",
+      "directory": "librarian",
+      "source": "https://github.com/CommanderTurtle/librarian.git",
+      "role": "Hermes-delegated OKF librarian MCP"
+    },
+    {
+      "id": "retrieval",
+      "directory": "retrieval",
+      "source": "https://github.com/CommanderTurtle/retrieval.git",
+      "role": "Chroma-backed skill, workflow, session, and context retrieval MCP"
+    },
+    {
+      "id": "context-mode",
+      "directory": "context-mode",
+      "source": "https://github.com/CommanderTurtle/context-mode.git",
+      "role": "Hermes context protection plugin and MCP"
+    },
+    {
+      "id": "camofox-mcp",
+      "directory": "camofox-mcp",
+      "source": "https://github.com/redf0x1/camofox-mcp.git",
+      "role": "Camofox browser MCP"
+    },
+    {
+      "id": "codebase-memory-mcp",
+      "directory": "codebase-memory-mcp",
+      "source": "https://github.com/DeusData/codebase-memory-mcp.git",
+      "role": "Local structural code graph, MCP, and Hermes hook"
+    }
+  ],
+  "profiles": [
+    "default",
+    "librarian"
+  ],
+  "required_mcp": {
+    "default": [
+      "librarian",
+      "codebase-memory-mcp",
+      "retrieval",
+      "context-mode",
+      "camofox-mcp"
+    ],
+    "librarian": [
+      "librarian-okf",
+      "codebase-memory-mcp",
+      "retrieval",
+      "context-mode",
+      "camofox-mcp"
+    ]
+  },
+  "required_plugins": [
+    "hermes-context-mode"
+  ],
+  "plugin_files": [
+    {
+      "id": "hermes-context-mode",
+      "source": "context-mode/.hermes-plugin",
+      "files": ["README.md", "__init__.py", "plugin.yaml"]
+    }
+  ],
+  "skill_links": [
+    {
+      "name": "sandwich-runtime",
+      "source": "sandwich/skills/sandwich-runtime"
+    },
+    {
+      "name": "camofox-mcp",
+      "source": "camofox-mcp/skill"
+    },
+    {
+      "name": "hermes-mcp-integration",
+      "source": "librarian/skills/hermes-mcp-integration"
+    },
+    {
+      "name": "context-mode",
+      "source": "context-mode/skills/context-mode"
+    },
+    {
+      "name": "ctx-doctor",
+      "source": "context-mode/skills/ctx-doctor"
+    },
+    {
+      "name": "ctx-index",
+      "source": "context-mode/skills/ctx-index"
+    },
+    {
+      "name": "ctx-insight",
+      "source": "context-mode/skills/ctx-insight"
+    },
+    {
+      "name": "ctx-purge",
+      "source": "context-mode/skills/ctx-purge"
+    },
+    {
+      "name": "ctx-search",
+      "source": "context-mode/skills/ctx-search"
+    },
+    {
+      "name": "ctx-stats",
+      "source": "context-mode/skills/ctx-stats"
+    },
+    {
+      "name": "ctx-upgrade",
+      "source": "context-mode/skills/ctx-upgrade"
+    },
+    {
+      "name": "workspace-dispatch",
+      "source": "hermes-workspace/skills/workspace-dispatch"
+    }
+  ],
+  "native_workflows": [
+    "build",
+    "code-reviewer",
+    "code-simplify",
+    "review",
+    "security-auditor",
+    "ship",
+    "spec",
+    "test",
+    "test-engineer",
+    "web-performance-auditor",
+    "webperf"
+  ],
+  "always_enabled_skills": [
+    "build",
+    "camofox-mcp",
+    "codebase-inspection",
+    "codebase-memory",
+    "code-reviewer",
+    "code-simplify",
+    "context-mode",
+    "ctx-doctor",
+    "ctx-index",
+    "ctx-insight",
+    "ctx-purge",
+    "ctx-search",
+    "ctx-stats",
+    "ctx-upgrade",
+    "firecrawl",
+    "hermes-agent",
+    "hermes-agent-skill-authoring",
+    "hermes-api-backend",
+    "hermes-mcp-integration",
+    "mcp-integration",
+    "mcp-registration",
+    "plan",
+    "requesting-code-review",
+    "review",
+    "retrieve-knowledge",
+    "sandwich-runtime",
+    "security-auditor",
+    "ship",
+    "spec",
+    "systematic-debugging",
+    "test",
+    "test-engineer",
+    "web-performance-auditor",
+    "webperf",
+    "workspace-dispatch"
+  ],
+  "rag_only_skills": [
+    "airtable",
+    "architecture-diagram",
+    "arxiv",
+    "ascii-art",
+    "ascii-video",
+    "audiocraft-audio-generation",
+    "baoyu-infographic",
+    "blogwatcher",
+    "browser-extension-docker-config",
+    "claude-code",
+    "claude-design",
+    "cloud-llm-deployment",
+    "codex",
+    "comfyui",
+    "context-mode-enforcement",
+    "context-mode-integration",
+    "design-md",
+    "docker-postgres",
+    "docx",
+    "evaluating-llms-harness",
+    "excalidraw",
+    "firecrawl-agent",
+    "firecrawl-build-interact",
+    "firecrawl-build-onboarding",
+    "firecrawl-build-scrape",
+    "firecrawl-build-search",
+    "firecrawl-crawl",
+    "firecrawl-download",
+    "firecrawl-interact",
+    "firecrawl-map",
+    "firecrawl-monitor",
+    "firecrawl-parse",
+    "firecrawl-research-index",
+    "firecrawl-scrape",
+    "firecrawl-search",
+    "gif-search",
+    "github-auth",
+    "github-issues",
+    "github-repo-management",
+    "google-workspace",
+    "heartmula",
+    "hermes-desktop-plugins",
+    "himalaya",
+    "humanizer",
+    "jupyter-live-kernel",
+    "llm-wiki",
+    "manim-video",
+    "maps",
+    "nano-pdf",
+    "node-to-bun-migration",
+    "node-inspect-debugger",
+    "notion",
+    "obsidian",
+    "ocr-and-documents",
+    "openhue",
+    "opencode",
+    "p5js",
+    "pdf",
+    "petdex",
+    "polymarket",
+    "popular-web-designs",
+    "powerpoint",
+    "pretext",
+    "python-debugpy",
+    "research-paper-writing",
+    "runtime-migration",
+    "secure-routing-stack",
+    "segment-anything-model",
+    "sketch",
+    "songwriting-and-ai-music",
+    "songsee",
+    "teams-meeting-pipeline",
+    "touchdesigner-mcp",
+    "understory-v2-integration",
+    "weights-and-biases",
+    "xlsx",
+    "xurl",
+    "youtube-content",
+    "zed-extension-migration"
+  ],
+  "gateway_restart_required": true
+}

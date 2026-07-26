@@ -1,0 +1,93 @@
+{
+  "schema_version": "ulysses.prism-providers.v1",
+  "providers": [
+    {
+      "id": "prism.llamacpp",
+      "label": "PrismML · llama.cpp",
+      "source_url": "https://github.com/PrismML-Eng/llama.cpp.git",
+      "source_branch": "prism",
+      "source_inspected_commit": "7529fdaaf99ffdc5ca71ace9c7409a56b27ad92f",
+      "source_env": "ULYSSES_PRISM_ROOT",
+      "source_default": "Odysseus/prism-llama.cpp",
+      "model_root_env": "ULYSSES_PRISM_MODEL_ROOT",
+      "model_root_default": "prism-models",
+      "port_env": "ULYSSES_PRISM_PORT",
+      "default_port": 8644,
+      "build_directory": "build-diogenes-cuda13",
+      "server_path": "build-diogenes-cuda13/bin/llama-server",
+      "cuda_architecture": "120a",
+      "cuda_minimum_major": 13,
+      "default_model": "prism.ternary-bonsai-27b",
+      "models": [
+        {
+          "id": "prism.ternary-bonsai-27b",
+          "label": "Ternary Bonsai 27B",
+          "api_model_id": "ternary-bonsai-27b",
+          "repository": "prism-ml/Ternary-Bonsai-27B-gguf",
+          "revision": "abbae723028d71be674e71e1a71201a6f43fab22",
+          "directory": "Ternary-Bonsai-27B-gguf",
+          "filename": "Ternary-Bonsai-27B-Q2_0.gguf",
+          "file_size": 7165121600,
+          "format": "Q2_0_g128",
+          "recommended": true,
+          "drafter_filename": "Ternary-Bonsai-27B-dspark-Q4_1.gguf",
+          "drafter_file_size": 1946393568,
+          "mmproj_filename": "Ternary-Bonsai-27B-mmproj-Q8_0.gguf",
+          "mmproj_file_size": 629246880,
+          "excluded_filenames": [
+            "Ternary-Bonsai-27B-PQ2_0.gguf",
+            "Ternary-Bonsai-27B-Q2_g64.gguf"
+          ],
+          "quality_note": "Quality-first 27B operating point. The Prism CUDA fork consumes the group-128 Q2_0 file directly."
+        },
+        {
+          "id": "prism.bonsai-27b-1bit",
+          "label": "Bonsai 27B · 1-bit",
+          "api_model_id": "bonsai-27b-1bit",
+          "repository": "prism-ml/Bonsai-27B-gguf",
+          "revision": "f10afb355f104535e3e3e98cf7ab7795c72bd292",
+          "directory": "Bonsai-27B-gguf",
+          "filename": "Bonsai-27B-Q1_0.gguf",
+          "file_size": 3803452480,
+          "format": "Q1_0_g128",
+          "recommended": false,
+          "drafter_filename": "Bonsai-27B-dspark-Q4_1.gguf",
+          "drafter_file_size": 1787468768,
+          "mmproj_filename": "Bonsai-27B-mmproj-Q8_0.gguf",
+          "mmproj_file_size": 629246880,
+          "excluded_filenames": [],
+          "quality_note": "Footprint-first 27B operating point. This is a one-bit 27B model, not a one-billion-parameter model."
+        }
+      ],
+      "profiles": {
+        "rtx5090-quality": {
+          "label": "RTX 5090 · quality",
+          "description": "Full CUDA offload, Flash Attention, native tool calls, FP16 KV cache, and no experimental drafter.",
+          "context": 131072,
+          "gpu_layers": 999,
+          "parallel": 1,
+          "flash_attention": true,
+          "kv4": false,
+          "speculative": false
+        },
+        "portable": {
+          "label": "Portable CUDA",
+          "description": "Conservative context with full CUDA offload and no experimental features.",
+          "context": 8192,
+          "gpu_layers": 999,
+          "parallel": 1,
+          "flash_attention": true,
+          "kv4": false,
+          "speculative": false
+        }
+      },
+      "documentation": {
+        "repository": "https://github.com/PrismML-Eng/llama.cpp",
+        "releases": "https://github.com/PrismML-Eng/llama.cpp/releases",
+        "demo": "https://github.com/PrismML-Eng/Bonsai-demo",
+        "ternary_weights": "https://huggingface.co/prism-ml/Ternary-Bonsai-27B-gguf",
+        "binary_weights": "https://huggingface.co/prism-ml/Bonsai-27B-gguf"
+      }
+    }
+  ]
+}

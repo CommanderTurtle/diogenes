@@ -1,0 +1,322 @@
+#!/bin/sh
+#
+# Bun-only compatibility facade for containerized package scripts.
+#
+# The image links node, npm, npx, pnpm, yarn, and corepack to this file. It
+# intentionally does not emulate a second package manager: common lifecycle
+# commands are translated to Bun and everything executes with Bun's runtime.
+set -eu
+
+BUN_BIN="${SANDWICH_BUN:-/usr/local/bin/bun}"
+BUN_INSTALL="${BUN_INSTALL:-/app/.bun}"
+BUN_INSTALL_BIN="${BUN_INSTALL_BIN:-${BUN_INSTALL}/bin}"
+BUN_INSTALL_GLOBAL_DIR="${BUN_INSTALL_GLOBAL_DIR:-${BUN_INSTALL}/install/global}"
+BUN_INSTALL_CACHE_DIR="${BUN_INSTALL_CACHE_DIR:-${BUN_INSTALL}/install/cache}"
+DO_NOT_TRACK="${DO_NOT_TRACK:-1}"
+
+export BUN_INSTALL BUN_INSTALL_BIN BUN_INSTALL_GLOBAL_DIR
+export BUN_INSTALL_CACHE_DIR DO_NOT_TRACK
+
+if [ ! -x "$BUN_BIN" ]; then
+    echo "Bun runtime not found at $BUN_BIN" >&2
+    exit 127
+fi
+
+COMMAND="${0##*/}"
+
+version() {
+    exec "$BUN_BIN" --version
+}
+
+run_script() {
+    if [ "$#" -eq 0 ]; then
+        echo "$COMMAND: missing package script name" >&2
+        exit 2
+    fi
+    if [ -n "${BUN_COMPAT_FILTER:-}" ]; then
+        exec "$BUN_BIN" run --bun --filter "$BUN_COMPAT_FILTER" "$@"
+    fi
+    exec "$BUN_BIN" run --bun "$@"
+}
+
+run_install() {
+    if [ -n "${BUN_COMPAT_FILTER:-}" ]; then
+        exec "$BUN_BIN" install --filter "$BUN_COMPAT_FILTER" "$@"
+    fi
+    exec "$BUN_BIN" install "$@"
+}
+
+run_frozen_install() {
+    # npm ci requires a lock. Bun can import an npm/pnpm lock on first install,
+    # so use a frozen install only after a Bun lock exists.
+    if [ -f bun.lock ] || [ -f bun.lockb ]; then
+        if [ -n "${BUN_COMPAT_FILTER:-}" ]; then
+            exec "$BUN_BIN" install --frozen-lockfile \
+                --filter "$BUN_COMPAT_FILTER" "$@"
+        fi
+        exec "$BUN_BIN" install --frozen-lockfile "$@"
+    fi
+    run_install "$@"
+}
+
+run_bunx() {
+    # npm's -y/--yes only suppresses its own prompt; bunx does not need it.
+    # Keep --no-install because Diogenes uses it for cache-only probes.
+    case "${1:-}" in
+        -v|--version|version)
+            version
+            ;;
+    esac
+    while [ "$#" -gt 0 ]; do
+        case "$1" in
+            -y|--yes)
+                shift
+                ;;
+            *)
+                break
+                ;;
+        esac
+    done
+    exec "$BUN_BIN" x --bun "$@"
+}
+
+set_working_directory() {
+    directory="$1"
+    if [ -z "$directory" ] || [ ! -d "$directory" ]; then
+        echo "$COMMAND: invalid working directory: $directory" >&2
+        exit 2
+    fi
+    cd -- "$directory"
+}
+
+dispatch_package_manager() {
+    # Peel off workspace/cwd flags commonly placed before pnpm/npm/Yarn verbs.
+    BUN_COMPAT_FILTER=""
+    while [ "$#" -gt 0 ]; do
+        case "$1" in
+            --filter|-F|--workspace)
+                [ "$#" -ge 2 ] || {
+                    echo "$COMMAND: $1 requires a workspace selector" >&2
+                    exit 2
+                }
+                BUN_COMPAT_FILTER="$2"
+                shift 2
+                ;;
+            --filter=*)
+                BUN_COMPAT_FILTER="${1#*=}"
+                shift
+                ;;
+            --workspace=*)
+                BUN_COMPAT_FILTER="${1#*=}"
+                shift
+                ;;
+            --workspaces)
+                BUN_COMPAT_FILTER="*"
+                shift
+                ;;
+            -C|--dir|--cwd)
+                [ "$#" -ge 2 ] || {
+                    echo "$COMMAND: $1 requires a directory" >&2
+                    exit 2
+                }
+                set_working_directory "$2"
+                shift 2
+                ;;
+            --dir=*|--cwd=*)
+                set_working_directory "${1#*=}"
+                shift
+                ;;
+            -r|--recursive)
+                BUN_COMPAT_FILTER="*"
+                shift
+                ;;
+            -w)
+                if [ "$COMMAND" = "npm" ] && [ "$#" -ge 2 ]; then
+                    BUN_COMPAT_FILTER="$2"
+                    shift 2
+                else
+                    shift
+                fi
+                ;;
+            --workspace-root)
+                shift
+                ;;
+            *)
+                break
+                ;;
+        esac
+    done
+    export BUN_COMPAT_FILTER
+
+    if [ "$#" -eq 0 ]; then
+        exec "$BUN_BIN" --help
+    fi
+    verb="$1"
+    shift
+
+    case "$verb" in
+        -v|--version|version)
+            version
+            ;;
+        install|i)
+            run_install "$@"
+            ;;
+        ci|install-ci-test|install-test)
+            run_frozen_install "$@"
+            ;;
+        add)
+            if [ -n "${BUN_COMPAT_FILTER:-}" ]; then
+                exec "$BUN_BIN" add --filter "$BUN_COMPAT_FILTER" "$@"
+            fi
+            exec "$BUN_BIN" add "$@"
+            ;;
+        remove|rm|uninstall)
+            if [ -n "${BUN_COMPAT_FILTER:-}" ]; then
+                exec "$BUN_BIN" remove --filter "$BUN_COMPAT_FILTER" "$@"
+            fi
+            exec "$BUN_BIN" remove "$@"
+            ;;
+        update|upgrade|up)
+            if [ -n "${BUN_COMPAT_FILTER:-}" ]; then
+                exec "$BUN_BIN" update --filter "$BUN_COMPAT_FILTER" "$@"
+            fi
+            exec "$BUN_BIN" update "$@"
+            ;;
+        run|run-script)
+            run_script "$@"
+            ;;
+        start|stop|restart|test)
+            run_script "$verb" "$@"
+            ;;
+        exec|dlx|x)
+            run_bunx "$@"
+            ;;
+        create)
+            exec "$BUN_BIN" create "$@"
+            ;;
+        init)
+            exec "$BUN_BIN" init "$@"
+            ;;
+        audit|outdated|publish|link|unlink|patch)
+            exec "$BUN_BIN" "$verb" "$@"
+            ;;
+        list|ls)
+            exec "$BUN_BIN" pm ls "$@"
+            ;;
+        root)
+            case "${1:-}" in
+                -g|--global)
+                    printf '%s\n' "${BUN_INSTALL_GLOBAL_DIR}/node_modules"
+                    ;;
+                *)
+                    printf '%s\n' "$(pwd -P)/node_modules"
+                    ;;
+            esac
+            ;;
+        prefix)
+            case "${1:-}" in
+                -g|--global) printf '%s\n' "$BUN_INSTALL" ;;
+                *) pwd -P ;;
+            esac
+            ;;
+        bin)
+            case "${1:-}" in
+                -g|--global) printf '%s\n' "$BUN_INSTALL_BIN" ;;
+                *) printf '%s\n' "$(pwd -P)/node_modules/.bin" ;;
+            esac
+            ;;
+        config)
+            if [ "${1:-}" = "get" ] && [ "${2:-}" = "prefix" ]; then
+                printf '%s\n' "$BUN_INSTALL"
+                exit 0
+            fi
+            echo "$COMMAND: use bunfig.toml for package-manager configuration" >&2
+            exit 2
+            ;;
+        workspace)
+            [ "$#" -ge 2 ] || {
+                echo "$COMMAND workspace: expected <workspace> <script>" >&2
+                exit 2
+            }
+            BUN_COMPAT_FILTER="$1"
+            shift
+            run_script "$@"
+            ;;
+        workspaces)
+            # Covers the common Yarn form:
+            #   yarn workspaces foreach [-pt] run <script>
+            [ "${1:-}" = "foreach" ] || {
+                echo "$COMMAND: only 'workspaces foreach ... run' is supported" >&2
+                exit 2
+            }
+            shift
+            while [ "$#" -gt 0 ]; do
+                case "$1" in
+                    run) shift; break ;;
+                    -*) shift ;;
+                    *) break ;;
+                esac
+            done
+            BUN_COMPAT_FILTER="*"
+            run_script "$@"
+            ;;
+        *)
+            if [ "$COMMAND" = "yarn" ] || [ "$COMMAND" = "pnpm" ]; then
+                # Yarn and pnpm treat an unknown first token as a package.json
+                # script, including filtered workspace build shortcuts.
+                run_script "$verb" "$@"
+            fi
+            echo "$COMMAND: unsupported compatibility command '$verb'; use bun directly" >&2
+            exit 2
+            ;;
+    esac
+}
+
+case "$COMMAND" in
+    bun)
+        exec "$BUN_BIN" "$@"
+        ;;
+    node)
+        # Report Bun's declared Node-compatibility version for engine probes.
+        # Reporting Bun's own 1.x release here makes ordinary engines.node
+        # checks incorrectly reject a runtime that exposes Node 24 APIs.
+        case "${1:-}" in
+            -v|--version)
+                exec "$BUN_BIN" -e 'console.log(process.version)'
+                ;;
+        esac
+        # Bun supports node-style flags and file execution.
+        exec "$BUN_BIN" "$@"
+        ;;
+    npx)
+        run_bunx "$@"
+        ;;
+    npm|pnpm|yarn)
+        dispatch_package_manager "$@"
+        ;;
+    corepack)
+        case "${1:-}" in
+            npm|pnpm|yarn|npx)
+                manager="$1"
+                shift
+                exec "/usr/local/bin/$manager" "$@"
+                ;;
+            -v|--version|version)
+                version
+                ;;
+            enable|disable|install|prepare|use|"")
+                # The facades are image-owned and already enabled. No Node
+                # distribution or package-manager download is necessary.
+                exit 0
+                ;;
+            *)
+                echo "corepack: $1 is unnecessary in this Bun-only image" >&2
+                exit 2
+                ;;
+        esac
+        ;;
+    *)
+        echo "Unsupported Bun compatibility facade: $COMMAND" >&2
+        exit 127
+        ;;
+esac

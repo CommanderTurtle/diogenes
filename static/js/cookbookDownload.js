@@ -133,15 +133,21 @@ export function _buildDownloadCmd(model, backend) {
       const repo = ggufSource?.repo || model.name;
       const includePattern = backend === 'llamacpp' ? _ggufIncludePattern(model, ggufSource) : null;
       const includeArg = includePattern ? `, allow_patterns=["${includePattern.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"]` : '';
-      // Reflect the server's download target in the preview (matches the real
-      // download path built server-side). '' = default HF cache.
+      // Reflect the server's resumable Hub-cache target in the preview.
+      // The backend maps a configured download root to <root>/hub; using
+      // snapshot_download(local_dir=...) here would show a different flat
+      // layout with different resume bookkeeping.
       const _dlDir = (_serverByVal?.(_envState.remoteServerKey || _envState.remoteHost || '') || {}).downloadDir || '';
-      const _localDirArg = _dlDir ? `, local_dir=os.path.expanduser('${_dlDir.replace(/\/$/, '')}/${repo.split('/').pop()}')` : '';
+      const _cacheDirArg = _dlDir
+        ? `, cache_dir=os.path.join(os.path.expanduser(${JSON.stringify(_dlDir.replace(/[\\/]+$/, ''))}), 'hub')`
+        : '';
       const _py = _isWindows() ? 'python' : 'python3';
       cmd = `${_py} -u -c "
 import sys, time, os
 os.environ['HF_HUB_DISABLE_PROGRESS_BARS']='0'
 os.environ['TQDM_DISABLE']='0'
+os.environ['HF_HUB_DISABLE_XET']='0'
+os.environ['HF_XET_HIGH_PERFORMANCE']='1'
 _lp={}
 class T:
  def __init__(s,*a,**k):
@@ -187,7 +193,7 @@ from huggingface_hub import snapshot_download
 repo='${repo}'
 print(f'START {repo}',flush=True)
 try:
- path=snapshot_download(repo${includeArg}${_localDirArg})
+ path=snapshot_download(repo${includeArg}${_cacheDirArg})
  print(f'DONE {path}',flush=True)
 except Exception as e:
  print(f'ERROR {e}',file=sys.stderr,flush=True);sys.exit(1)
@@ -520,10 +526,9 @@ export async function _runModelDownload(panel, model, backend, hostOverride) {
 
   const payload = { repo_id: repo, backend };
   if (include) payload.include = include;
-  // Large downloads are where hf_transfer most often dies near the end. Use the
-  // plain HuggingFace downloader up front for big model files; it is slower, but
-  // resumes cached partials more reliably.
-  if ((model.required_gb || 0) >= 10 || backend === 'llamacpp') payload.disable_hf_transfer = true;
+  // Start on the workstation-class Xet lane even for large models. The
+  // Running tab's explicit Retry action switches a failed or stalled task to
+  // the conservative resumable Hub lane without discarding partial files.
   if (_envState.hfToken) payload.hf_token = _envState.hfToken;
   if (host) {
     payload.remote_host = host;
@@ -636,7 +641,7 @@ export async function _runModelDownload(panel, model, backend, hostOverride) {
       return;
     }
     _addTask(data.session_id, taskName, 'download', payload);
-    uiModule.showToast(`Downloading ${taskName}...`);
+    uiModule.showToast(`Downloading ${taskName} with high-performance Xet...`);
   } catch (e) {
     uiModule.showToast('Download failed: ' + e.message, 9000);
   }

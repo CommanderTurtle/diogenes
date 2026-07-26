@@ -3,7 +3,7 @@
 # Why this matters for security: every workflow in this repo pins its GitHub
 # Actions to an exact commit (a SHA), which is safe but freezes them in time.
 # Dependabot opens a small, reviewable pull request whenever a newer version
-# exists -- for Python packages, npm packages, the Docker base image, and the
+# exists -- for Python packages, Bun-managed package manifests, the Docker base image, and the
 # pinned Actions themselves -- so staying patched does not require manual work.
 # Updates are grouped so a week's bumps arrive as one PR per ecosystem, not a
 # flood of separate ones.
@@ -20,14 +20,15 @@ updates:
       python:
         patterns: ["*"]
 
-  # Frontend / tooling npm packages (package.json).
+  # Frontend / tooling packages managed by Bun. GitHub names this ecosystem
+  # "npm" because it reads package.json; no npm runtime is installed or used.
   - package-ecosystem: npm
     directory: "/"
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
     groups:
-      npm:
+      bun:
         patterns: ["*"]
 
   # The pinned action SHAs used across .github/workflows.

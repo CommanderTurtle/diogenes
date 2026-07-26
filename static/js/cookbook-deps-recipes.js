@@ -23,7 +23,7 @@ const _RECIPES = [
     label: 'MiniMax M2 / M2.7',
     match: (m) => /minimax[-_]?m\s?2(\.7)?/i.test(m || ''),
     variants: {
-      pip:    { commands: ['uv pip install -U vllm --torch-backend auto'] },
+      pip:    { commands: ['uv pip install -U vllm --torch-backend=cu130 --extra-index-url https://wheels.vllm.ai/nightly'] },
       docker: { commands: ['docker pull vllm/vllm-openai:latest'] },
     },
   },
@@ -33,7 +33,7 @@ const _RECIPES = [
     label: 'Any vLLM model',
     match: () => true,
     variants: {
-      pip:    { commands: ['uv pip install -U vllm --torch-backend auto'] },
+      pip:    { commands: ['uv pip install -U vllm --torch-backend=cu130 --extra-index-url https://wheels.vllm.ai/nightly'] },
       docker: { commands: ['docker pull vllm/vllm-openai:latest'] },
     },
   },
@@ -79,7 +79,7 @@ const _RECIPES = [
     label: 'MLX image models (HiDream)',
     match: () => true,
     variants: {
-      pip:    { commands: ['python -m pip install -U fastapi uvicorn python-multipart mlx mlx-vlm "transformers>=4.57.0,<6.0" huggingface_hub safetensors numpy pillow tqdm sentencepiece hf_transfer'] },
+      pip:    { commands: ['python -m pip install -U fastapi uvicorn python-multipart mlx mlx-vlm "transformers>=4.57.0,<6.0" "huggingface_hub[hf_xet]" safetensors numpy pillow tqdm sentencepiece'] },
     },
   },
   {

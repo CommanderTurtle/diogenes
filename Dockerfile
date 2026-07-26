@@ -1,3 +1,8 @@
+# Bun is the image's only JavaScript runtime. Copy the versioned binary from
+# the official multi-architecture image instead of installing Node/npm or
+# piping an installer into a root shell.
+FROM oven/bun:1.3.14 AS bun-runtime
+
 # ---- builder: patch + build wheels for Real-ESRGAN's broken-on-3.14 deps ----
 # basicsr/gfpgan/facexlib read their version via exec()+locals()['__version__'],
 # which raises KeyError on Python 3.13+ (PEP 667). Build patched wheels here so
@@ -16,8 +21,6 @@ FROM python:3.14-slim
 # downloads, and serves from Docker installs.
 # git/cmake are required when Cookbook builds llama.cpp on first llama.cpp
 # launch inside Docker.
-# nodejs/npm provide npx for the built-in Browser MCP server.
-# chromium provides the actual browser binary used by that MCP server.
 # gosu lets the entrypoint drop privileges cleanly so signals still reach
 # uvicorn directly (no extra shell layer like `su`/`sudo` would add).
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -25,9 +28,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     cmake \
     curl \
     git \
-    nodejs \
-    npm \
-    chromium \
     tmux \
     openssh-client \
     gosu \
@@ -71,6 +71,31 @@ RUN ARCH="$(dpkg --print-architecture)" \
 
 WORKDIR /app
 
+# Install the pinned Bun runtime and image-local compatibility facades. The
+# facade translates canonical node/npm/npx/pnpm/yarn/corepack invocations into
+# Bun; none of those foreign runtimes or package managers are installed.
+COPY --from=bun-runtime /usr/local/bin/bun /usr/local/bin/bun
+COPY docker/bun-compat /usr/local/libexec/bun-compat
+COPY docker/bunfig.toml /app/.bunfig.toml
+RUN chmod 0755 /usr/local/bin/bun /usr/local/libexec/bun-compat \
+    && for command in node npm npx pnpm yarn corepack; do \
+         ln -s /usr/local/libexec/bun-compat "/usr/local/bin/${command}"; \
+       done \
+    && test "$(bun --version)" = "1.3.14" \
+    && node --version \
+    && npm --version \
+    && npx --version
+
+# Disable Bun crash-report uploads and Hugging Face ecosystem telemetry even
+# when the image is launched without Compose. Bun's global package cache is a
+# writable/persistable app-user path rather than a root-owned image layer.
+ENV BUN_INSTALL=/app/.bun \
+    BUN_INSTALL_BIN=/app/.bun/bin \
+    BUN_INSTALL_GLOBAL_DIR=/app/.bun/install/global \
+    BUN_INSTALL_CACHE_DIR=/app/.bun/install/cache \
+    DO_NOT_TRACK=1 \
+    HF_HUB_DISABLE_TELEMETRY=1
+
 # Install Python deps first (layer cache). Optional extras (PyMuPDF AGPL, etc.)
 # are opt-in so the default image stays MIT-core; see requirements-optional.txt.
 ARG INSTALL_OPTIONAL=false
@@ -95,8 +120,8 @@ RUN pip install --no-cache-dir --no-deps /tmp/odysseus-wheels/*.whl \
 # Copy app code
 COPY . .
 
-# Create data directory (mount a volume here for persistence)
-RUN mkdir -p data logs services/cache/search
+# Create writable directories (mount volumes here for persistence)
+RUN mkdir -p data logs services/cache/search /app/.bun
 
 # Entrypoint that drops to PUID/PGID (default 1000:1000) and repairs
 # ownership on the bind-mounted /app/data and /app/logs. Without this,

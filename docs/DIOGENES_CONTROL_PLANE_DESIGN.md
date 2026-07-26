@@ -30,15 +30,16 @@ Odysseus and Hermes remain separate agents:
   explicitly.
 
 Every runtime definition therefore carries a scope: `host`,
-`odysseus_agent`, or `hermes_agent`. A future context-mode archival bridge may
-use a narrow Chroma storage/retrieval contract, but that does not connect the
-Odysseus and Hermes agent loops.
+`odysseus_agent`, or `hermes_agent`. The optional Retrieval project uses a
+narrow Chroma storage/retrieval contract, but it does not connect the Odysseus
+and Hermes agent loops.
 
-The bridge is owned by the Hermes integration: it may archive explicitly
-approved context-mode compactions into dedicated Chroma collections and expose
-provenance-preserving retrieval to Hermes. It does not register the bridge in
-Odysseus's MCP registry, copy Odysseus-agent MCP settings, or grant either agent
-implicit access to the other's tools.
+Retrieval is owned by the Hermes integration. It archives configured
+context-mode and Hermes session sources into dedicated collections, retains an
+ordered SQLite event archive, and exposes provenance-preserving semantic and
+chronological recall to Hermes. It does not register itself in Odysseus's MCP
+registry, copy Odysseus-agent MCP settings, or grant either agent implicit
+access to the other's tools.
 
 ## The service contract
 
@@ -111,20 +112,20 @@ centralizing unrelated values:
 
 ## UI
 
-Add a Services window/tool using the current Odysseus visual language:
+The Services window uses the current Odysseus visual language:
 
-- Overview: status totals, ports, GPU/RAM, persistence warnings, action items.
-- Services: cards/table for every registered runtime.
-- Service detail: Overview, Config, Ports, Logs, Terminal, Updates, Recovery.
-- JavaScript: Sandwich runtime, globals, project locks, postinstall trust,
-  `bunx`/`npx` tools, consumers, update preview.
-- Activity: durable queued/running/completed/failed actions with cancellation.
-- Recovery: backups, Chroma persistence, Python/CUDA doctor, rollback.
+- Docker: Compose projects, dependency chains, images, ports, configuration,
+  logs, and guarded lifecycle/update jobs.
+- NPX / Bun: Sandwich readiness plus Bun-backed tools and source projects.
+- Native: tmux/native services, repositories, configuration, logs, and health.
+- Hermes: the native install, gateway, MCP registry, lifecycle plans, and the
+  optional Librarian/Retrieval orchestration policy.
+- Chroma: persistence, collection identity, snapshots, and migration gates.
 
 Cookbook Dependencies keeps its Python/system package catalog and adds an
-Extras group for separately installed Sandwich, Hermes, Colibri GLM, and
-Colibri Hy3 runtimes. Sandwich detection/install/doctor is available there;
-service and package operations live in the Services JavaScript view.
+Extras group for separately installed Sandwich, Hermes, Colibri GLM, Colibri
+Hy3, and PrismML runtimes. Sandwich detection/install/doctor is available
+there; service and package operations live in the Services NPX / Bun view.
 
 The existing Cookbook Active view is the implementation precedent: it already
 tracks the vLLM task, readiness, PID, and tmux output. Diogenes generalizes that
@@ -172,13 +173,13 @@ required safety contract.
 - action history is append-only with bounded retained output;
 - every migration and update has a rollback target.
 
-## Initial host mapping
+## Reference runtime mapping
 
-| Runtime | Adapter | Initial state |
+| Runtime | Adapter | Ownership |
 | --- | --- | --- |
 | Diogenes API | native observation | managed |
-| vLLM 0.23.0 / Agents A1 | native model endpoint | external |
-| Chroma | Docker Compose/container | external; persistence repair required |
+| vLLM model endpoint | native/tmux model endpoint | managed per checkout |
+| Chroma | Docker Compose/container | managed per runtime copy |
 | Hermes gateway | systemd user/native | external |
 | Camofox browser | native Bun service | external |
 | Camofox MCP | Sandwich stdio MCP | external |
@@ -187,9 +188,11 @@ required safety contract.
 | SearXNG | Docker Compose | external |
 | Bifrost | Sandwich/native | external |
 | signal-cli | native service | external |
-| Sandwich | native user runtime | managed exact component |
-| Colibri GLM | native CUDA model endpoint | source present; build/model verification gated |
-| Colibri Hy3 | separate native CUDA endpoint | source present; build/model verification gated |
+| Sandwich | native user runtime | independently installed |
+| Colibri GLM | native CUDA model endpoint | independently built |
+| Colibri Hy3 | separate native CUDA endpoint | independently built |
+| PrismML llama.cpp | native CUDA model endpoint | independently built |
+| Librarian and Retrieval | Hermes MCP/native projects | independently installed |
 
 ## Runtime update invariants
 
@@ -205,24 +208,16 @@ required safety contract.
 
 ## Chroma persistence gate
 
-The current production image starts `chroma run /config.yaml`, and its image
-configuration declares `persist_path: /data`. Production Compose instead mounts
-the `odysseus_chromadb-data` volume at `/chroma/chroma`; the mounted directory is
-nearly empty while the active SQLite database and vector segments are under the
-container's unmounted `/data`.
+Diogenes compares the container's effective Chroma persistence path with its
+mounted volume instead of assuming that any named volume is durable. A mismatch
+is reported as degraded and is never repaired automatically.
 
-Diogenes therefore:
+The observer inventories image provenance, mount destinations, collection IDs,
+names, counts, embedding dimensions, models, lanes, and fingerprints. Restore
+candidates must come from explicitly configured snapshot roots; a discovered
+live copy is reference evidence, not an automatic backup.
 
-- reports the live persistence state as degraded without changing it;
-- pins the candidate image to the observed production digest;
-- mounts the candidate volume at `/data`;
-- inventories collection IDs, names, counts, embedding dimensions, models,
-  lanes, and fingerprints;
-- accepts only explicitly configured snapshot roots and treats discovered live
-  copies as reference snapshots, never restore candidates;
-- provides a preview-only migration plan whose apply action remains disabled.
-
-The migration requires a maintenance window, a fresh snapshot after the
+Any migration requires a maintenance window, a fresh snapshot after the
 container stops, candidate restore and recreation validation, representative
 read-only retrievals, and retention of the original container definition,
 image, data, volume, and snapshots as rollback.

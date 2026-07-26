@@ -92,21 +92,89 @@ _ULYSSES_VLLM_MUTATION_RE = re.compile(
     r"(?=$|[\s<>=!~,\[\]])",
     re.IGNORECASE,
 )
+_ULYSSES_VLLM_SPEC_RE = re.compile(
+    r"^vllm(?:==[A-Za-z0-9][A-Za-z0-9.+_-]{0,63})?$",
+    re.IGNORECASE,
+)
+# vLLM's unqualified nightly index currently follows its main CUDA version
+# (CUDA 12.9 as of July 2026). Selecting Torch's cu130 backend alone does not
+# change the CUDA variant of the vLLM wheel, so the CUDA 13 contract must use
+# the explicit variant index as well.
+_ULYSSES_VLLM_NIGHTLY_INDEX = "https://wheels.vllm.ai/nightly/cu130"
+_DIOGENES_VENV = (Path(__file__).resolve().parents[1] / ".venv").resolve()
+
+
+def _local_cuda13_profile_applicable() -> bool:
+    """Conservatively detect a host suited to the CUDA 13 nightly lane."""
+    override = os.getenv("ULYSSES_VLLM_CUDA13", "").strip().lower()
+    if override in {"1", "true", "yes", "on"}:
+        return True
+    if override in {"0", "false", "no", "off"}:
+        return False
+    nvcc = shutil.which("nvcc")
+    if nvcc:
+        try:
+            output = subprocess.run(
+                [nvcc, "--version"],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            if re.search(r"\brelease\s+13(?:\.|\b)", output.stdout + output.stderr):
+                return True
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+    nvidia_smi = shutil.which("nvidia-smi")
+    if not nvidia_smi and Path("/usr/lib/wsl/lib/nvidia-smi").is_file():
+        nvidia_smi = "/usr/lib/wsl/lib/nvidia-smi"
+    if nvidia_smi:
+        try:
+            output = subprocess.run(
+                [
+                    nvidia_smi,
+                    "--query-gpu=compute_cap",
+                    "--format=csv,noheader",
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            capabilities = [
+                float(value.strip())
+                for value in output.stdout.splitlines()
+                if re.fullmatch(r"\d+(?:\.\d+)?", value.strip())
+            ]
+            if any(value >= 12.0 for value in capabilities):
+                return True
+        except (OSError, ValueError, subprocess.TimeoutExpired):
+            pass
+    return False
 
 
 def _ulysses_vllm_lock_contract(*, remote_host: str | None = None) -> dict | None:
-    """Describe the configured, exact Diogenes vLLM environment contract.
+    """Describe the local Diogenes vLLM installation contract.
 
-    The lock belongs to this Diogenes host.  A selected SSH target keeps the
-    upstream generic package flow because a local absolute path has no meaning
+    CUDA 13 nightly is the default because it follows vLLM's matching-wheel
+    resolver and has been proven on the Blackwell workstation.  An exact lock
+    remains available, but only when ``ULYSSES_VLLM_LOCK`` explicitly names
+    one.  This is deliberately different from the old implicit 0.23 lock: a
+    normal Install/Update action must never silently downgrade a working newer
+    stack.
+
+    The contract belongs to this Diogenes host. A selected SSH target keeps the
+    upstream generic package flow because local absolute paths have no meaning
     on another machine.
     """
     if (remote_host or "").strip():
         return None
     import sys
 
-    # A managed lock must never target the base interpreter. Diogenes owns only
-    # the inner environment from which the app is currently running.
+    # A managed install must never target the base interpreter or merely
+    # whichever virtual environment happened to launch the process. Diogenes
+    # owns exactly <checkout>/.venv; the isolated model-downloader environment
+    # and unrelated activated environments must never receive its CUDA stack.
     if sys.prefix == sys.base_prefix:
         return None
     # Preserve the venv executable path. uv-created environments commonly make
@@ -114,18 +182,46 @@ def _ulysses_vllm_lock_contract(*, remote_host: str | None = None) -> dict | Non
     # that symlink would make the install target look like the base runtime.
     python_path = Path(sys.executable).absolute()
     venv_path = Path(sys.prefix).resolve()
-    if not python_path.is_file() or not (venv_path / "pyvenv.cfg").is_file():
+    venv_bin = venv_path / ("Scripts" if IS_WINDOWS else "bin")
+    if (
+        venv_path != _DIOGENES_VENV
+        or not python_path.is_file()
+        or python_path.parent.resolve() != venv_bin.resolve()
+        or not (venv_path / "pyvenv.cfg").is_file()
+    ):
         return None
     configured = os.getenv("ULYSSES_VLLM_LOCK", "").strip()
+    profile = os.getenv("ULYSSES_VLLM_PROFILE", "auto").strip().lower()
     if configured.lower() in {"disabled", "off", "latest", "unmanaged"}:
+        profile = "unmanaged"
+        configured = ""
+    if profile in {"disabled", "off", "latest", "unmanaged"}:
         return None
-    lock_path = (
-        Path(configured).expanduser()
-        if configured
-        else Path(__file__).resolve().parents[1]
-        / "requirements"
-        / "diogenes-vllm-cuda13.lock"
-    )
+    # An explicit lock is already a complete user-selected contract and must
+    # not be gated on CUDA auto-detection. Auto-detection only chooses the
+    # unpinned CUDA 13 nightly lane when no exact lock was supplied.
+    if profile == "auto" and not configured:
+        if not _local_cuda13_profile_applicable():
+            return None
+        profile = "cuda13-nightly"
+    if profile != "cuda13-nightly" and not configured:
+        return None
+    if not configured:
+        spec = os.getenv("ULYSSES_VLLM_SPEC", "vllm").strip() or "vllm"
+        if not _ULYSSES_VLLM_SPEC_RE.fullmatch(spec):
+            spec = "vllm"
+        return {
+            "mode": "cuda13-nightly",
+            "profile": "cuda13-nightly",
+            "python": str(python_path),
+            "venv": str(venv_path),
+            "package_spec": spec,
+            "torch_backend": "cu130",
+            "index_url": _ULYSSES_VLLM_NIGHTLY_INDEX,
+            "exact": "==" in spec,
+        }
+
+    lock_path = Path(configured).expanduser()
     if not lock_path.is_absolute() or not lock_path.is_file():
         return None
 
@@ -154,16 +250,72 @@ def _ulysses_vllm_lock_contract(*, remote_host: str | None = None) -> dict | Non
     }
 
 
+def _ulysses_vllm_install_command(contract: dict, *, postflight: bool = True) -> str:
+    """Render a server-authored vLLM install command for the active inner venv."""
+    mode = str(contract.get("mode") or "")
+    python = str(contract.get("python") or "")
+    if not python:
+        raise ValueError("vLLM contract is missing its inner-venv Python")
+
+    if mode == "uv-lock":
+        install = shlex.join(
+            [
+                "uv",
+                "pip",
+                "install",
+                "--python",
+                python,
+                "-r",
+                str(contract["lock_path"]),
+                "--strict",
+            ]
+        )
+    elif mode == "cuda13-nightly":
+        install = shlex.join(
+            [
+                "uv",
+                "pip",
+                "install",
+                "--python",
+                python,
+                "-U",
+                str(contract.get("package_spec") or "vllm"),
+                f"--torch-backend={contract.get('torch_backend') or 'cu130'}",
+                "--extra-index-url",
+                str(contract.get("index_url") or _ULYSSES_VLLM_NIGHTLY_INDEX),
+            ]
+        )
+    else:
+        raise ValueError(f"Unsupported vLLM install mode: {mode or 'missing'}")
+
+    if not postflight:
+        return install
+
+    check = shlex.join(["uv", "pip", "check", "--python", python])
+    probe_code = (
+        "import torch, vllm; "
+        "print(f'vLLM {vllm.__version__}; Torch {torch.__version__}; "
+        "CUDA {torch.version.cuda}')"
+    )
+    probe = shlex.join([python, "-c", probe_code])
+    cli_dir = "Scripts" if IS_WINDOWS else "bin"
+    cli_name = "vllm.exe" if IS_WINDOWS else "vllm"
+    cli = shlex.join(
+        [str(Path(contract["venv"]) / cli_dir / cli_name), "--version"]
+    )
+    return " && ".join([install, check, probe, cli])
+
+
 def _normalize_ulysses_vllm_install(
     command: str,
     *,
     remote_host: str | None = None,
 ) -> tuple[str, bool]:
-    """Route local vLLM/Torch/Triton pip mutations through the exact uv lock.
+    """Route local vLLM/Torch/Triton mutations through the selected profile.
 
     This is the server-side guard for both current and stale browser bundles:
-    Dependencies, Reinstall, and crash-diagnosis actions all pass through the
-    same model-serve task endpoint.
+    Dependencies, Update, and crash-diagnosis actions all target the active
+    inner venv and use the same CUDA/profile contract.
     """
     contract = _ulysses_vllm_lock_contract(remote_host=remote_host)
     if (
@@ -172,18 +324,7 @@ def _normalize_ulysses_vllm_install(
         or not _ULYSSES_VLLM_MUTATION_RE.search(command)
     ):
         return command, False
-    managed = shlex.join(
-        [
-            "uv",
-            "pip",
-            "install",
-            "--python",
-            contract["python"],
-            "-r",
-            contract["lock_path"],
-            "--strict",
-        ]
-    )
+    managed = _ulysses_vllm_install_command(contract)
     return managed, managed != command
 
 
@@ -312,10 +453,10 @@ def _package_installed_from_probe(name: str, probe: dict) -> bool:
             (dists.get("transformers") or modules.get("transformers", {}).get("real_module"))
             and (dists.get("torch") or modules.get("torch", {}).get("real_module"))
         )
-    if name == "hf_transfer":
+    if name == "hf_xet":
         return bool(
-            dists.get("hf-transfer")
-            or modules.get("hf_transfer", {}).get("real_module")
+            dists.get("hf-xet")
+            or modules.get("hf_xet", {}).get("real_module")
         )
     return bool(dists.get(name) or modules.get(name, {}).get("real_module"))
 
@@ -362,6 +503,13 @@ def _package_status_note(name: str, probe: dict) -> str:
         if _package_installed_from_probe(name, probe):
             return f"SAM object masks: transformers {dists.get('transformers', 'available')} with torch {dists.get('torch', 'available')}"
         return "SAM click/object mask selection needs transformers and torch."
+    if name == "hf_xet":
+        if _package_installed_from_probe(name, probe):
+            return (
+                f"Hugging Face Hub {dists.get('huggingface-hub', 'available')} "
+                f"with hf_xet {dists.get('hf-xet', 'available')}"
+            )
+        return "High-performance downloads need the current Hugging Face Hub client and hf_xet."
     if name == "mlx_lm":
         if _package_installed_from_probe(name, probe):
             return f"MLX LM {dists.get('mlx-lm', 'available')}"
@@ -426,8 +574,19 @@ def _package_pip_update_status(
     if (
         pkg.get("name") == "vllm"
         and isinstance(managed_install, dict)
-        and managed_install.get("mode") == "uv-lock"
     ):
+        if managed_install.get("mode") == "cuda13-nightly":
+            spec = managed_install.get("package_spec") or "vllm"
+            return PackageUpdateStatus(
+                True,
+                (
+                    f"Install/Update uses the CUDA 13 nightly profile ({spec}) "
+                    "inside Diogenes' active .venv, then runs uv pip check and "
+                    "imports the resolved vLLM/Torch stack."
+                ),
+            )
+        if managed_install.get("mode") != "uv-lock":
+            return PackageUpdateStatus(False, "Unsupported managed vLLM profile.")
         versions = managed_install.get("versions") or {}
         pinned = versions.get("vllm")
         return PackageUpdateStatus(
@@ -525,7 +684,7 @@ dist_names={{
     'diffusers':['diffusers','torch'],
     'krea_diffusers':['diffusers','torch'],
     'sam_mask':['transformers','torch'],
-    'hf_transfer':['hf-transfer','hf_transfer'],
+    'hf_xet':['hf-xet','huggingface-hub'],
 }}
 bin_names={{
     'vllm':['vllm'],
@@ -1322,7 +1481,7 @@ def setup_shell_routes() -> APIRouter:
         """Check which optional packages are installed.
 
         Local-target packages are checked in-process. Remote-target packages
-        (vllm, sglang, llama_cpp, diffusers, hf_transfer) are checked on the SELECTED
+        (vllm, sglang, llama_cpp, diffusers, hf_xet) are checked on the SELECTED
         server over SSH, inside its venv — otherwise installing on a remote box
         never reflected because the check only ever looked at the local host.
         """
@@ -1403,9 +1562,9 @@ def setup_shell_routes() -> APIRouter:
             # meaningful product-level dependencies on their own.
             # ── LLM ── installs on GPU servers for model serving/downloading
             {
-                "name": "hf_transfer",
-                "pip": "hf_transfer",
-                "desc": "Fast model downloads from HuggingFace",
+                "name": "hf_xet",
+                "pip": "huggingface_hub[hf_xet]",
+                "desc": "Current Hugging Face Hub client with the high-performance Xet transport",
                 "category": "Tools",
                 "target": "remote",
             },
@@ -1701,11 +1860,17 @@ def setup_shell_routes() -> APIRouter:
         for pkg in packages:
             if pkg["name"] == "vllm" and managed_vllm:
                 pkg["managed_install"] = managed_vllm
-                versions = managed_vllm["versions"]
-                pkg["desc"] = (
-                    f"Verified CUDA stack: vLLM {versions['vllm']}, "
-                    f"Torch {versions['torch']}, Triton {versions['triton']}"
-                )
+                if managed_vllm["mode"] == "uv-lock":
+                    versions = managed_vllm["versions"]
+                    pkg["desc"] = (
+                        f"Frozen CUDA stack: vLLM {versions['vllm']}, "
+                        f"Torch {versions['torch']}, Triton {versions['triton']}"
+                    )
+                else:
+                    pkg["desc"] = (
+                        "CUDA 13 nightly vLLM profile for Blackwell and current "
+                        "model support; isolated to Diogenes' active .venv"
+                    )
             if pkg.get("name") in {"mflux", "boogu_image_mlx", "mlx_vlm", "mlx_lama_swift", "mlx_ddcolor_swift"}:
                 is_apple_target = target_os_id == "macos" or (
                     not host and IS_APPLE_SILICON
@@ -1925,7 +2090,7 @@ def setup_shell_routes() -> APIRouter:
         # Validate against known packages to prevent arbitrary pip install
         known = {
             "rembg[gpu]",
-            "hf_transfer",
+            "huggingface_hub[hf_xet]",
             "llama-cpp-python[server]",
             "sglang[all]",
             "diffusers",
@@ -1956,8 +2121,9 @@ def setup_shell_routes() -> APIRouter:
                 return {
                     "ok": False,
                     "error": (
-                        "vLLM is managed by the configured Diogenes uv lock. "
-                        "Use the asynchronous Install/Reconcile action in Cookbook."
+                        "vLLM is managed by the configured Diogenes installation "
+                        "profile. Use the asynchronous Install/Update action in "
+                        "Cookbook so it targets the active inner .venv."
                     ),
                     "managed_install": managed_vllm,
                 }

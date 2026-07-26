@@ -7,10 +7,10 @@
 </p>
 
 <p align="center">
-  <a href="#quick-start">Quick Start</a> ·
+  <a href="#diogenes-native-workstation-setup">Diogenes Native Setup</a> ·
+  <a href="#upstream-docker-quick-start">Upstream Docker</a> ·
   <a href="docs/setup.md">Setup Guide</a> ·
-  <a href="CONTRIBUTING.md">Contributing</a> ·
-  <a href="ROADMAP.md">Roadmap</a>
+  <a href="CONTRIBUTING.md">Contributing</a>
 </p>
 
 <p align="center">
@@ -23,7 +23,35 @@
 
 ---
 
-## Quick Start
+## Diogenes native workstation setup
+
+**Ɗiogenēs** is a `dev`-based extension that keeps Odysseus routes and data
+contracts intact while adding a native, admin-only workstation control plane:
+
+- Docker, Bun/NPX, native, tmux, and Hermes runtimes in the **Services** window;
+- a standalone [Sandwich](https://github.com/CommanderTurtle/sandwich) Bun
+  compatibility layer—system Node, npm, pnpm, and yarn are not required;
+- separate Colibri GLM, Colibri Hy3, and PrismML native model engines;
+- guarded vLLM installation into this checkout's `.venv`, including the current
+  CUDA 13 nightly lane;
+- isolated high-throughput model downloads and confirmation-gated Git, build,
+  configuration, lifecycle, and update jobs;
+- optional Hermes Librarian/Retrieval orchestration without merging the
+  Odysseus and Hermes agents or their MCP registries.
+
+From a reviewed `dev` checkout:
+
+```bash
+./uvsetup.sh
+source .venv/bin/activate
+uv run --active --no-sync python -m uvicorn app:app --host 127.0.0.1 --port 7000
+```
+
+`uvsetup.sh` creates the canonical inner virtual environment and starts nothing
+unless explicitly requested. Development and runtime-copy instructions are in
+[`docs/DIOGENES_DEPLOYMENT.md`](docs/DIOGENES_DEPLOYMENT.md).
+
+## Upstream Docker Quick Start
 
 > `dev` is the default branch and gets the newest changes first. Use [`main`](https://github.com/odysseus-dev/odysseus/tree/main) if you want the more curated branch.
 
@@ -55,7 +83,9 @@ A full hover-to-play tour lives on the landing page: [`docs/index.html`](docs/in
 
 ## Contributing
 
-Help is welcome. The best entry points are fresh-install testing, provider setup bugs, mobile/editor polish, docs, and small focused refactors. See [CONTRIBUTING.md](CONTRIBUTING.md) and [ROADMAP.md](ROADMAP.md).
+Help is welcome. The best entry points are fresh-install testing, provider
+setup bugs, mobile/editor polish, docs, and small focused refactors. See
+[CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Security
 

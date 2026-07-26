@@ -71,9 +71,14 @@ def test_services_window_preserves_agent_and_mcp_boundaries() -> None:
     assert "/api/odysseus/topology" in services
     assert "/api/odysseus/chroma/persistence" in services
     assert "/api/odysseus/hermes/adoption" in services
+    assert "/api/odysseus/hermes/stack" in services
     assert "/api/odysseus/readiness" in services
     assert "Diogenes never relocates Hermes into its own virtual environment" in services
     assert "authenticated management view shows each configured command" in services
+    assert (
+        "Ɗiogenēs observes the committed MCP, plugin, hook, workflow, and skill policy"
+        in services
+    )
 
 
 def test_services_window_uses_planned_confirmed_runtime_jobs() -> None:
@@ -85,6 +90,9 @@ def test_services_window_uses_planned_confirmed_runtime_jobs() -> None:
     assert "Create plan" in services
     assert "Confirm lifecycle plan" in services
     assert "/api/odysseus/hermes/jobs/plan" in services
+    assert "/api/odysseus/hermes/stack/jobs/plan" in services
+    assert "Apply orchestration" in services
+    assert "Confirm Hermes orchestration" in services
     assert "/api/odysseus/jobs/${encodeURIComponent(job.id)}/execute" in services
     assert "/api/odysseus/jobs/${encodeURIComponent(jobId)}/log" in services
     assert "The operator controls the maintenance-window stop" in services
@@ -97,6 +105,9 @@ def test_services_window_uses_planned_confirmed_runtime_jobs() -> None:
     assert "Validate & save" in services
     assert "dependencies_unavailable" in services
     assert "active_dependents" in services
+    assert "item.action_details" in services
+    assert "aria-disabled=\"true\"" in services
+    assert "runtimeStateFacets" in services
     assert "Update is gated." in services
     assert "Native model runtimes" in services
     assert "Copy WSL/CUDA launch" in services
@@ -137,3 +148,23 @@ def test_cookbook_extras_include_native_sandwich_installation() -> None:
     assert "/api/odysseus/sandwich/jobs/plan" in cookbook
     assert "sandwich.runtime" in cookbook
     assert "Bun compatibility layer · never installs Node" in cookbook
+
+
+def test_services_exposes_native_sandwich_lifecycle() -> None:
+    services = _read("static/js/ulyssesServices.js")
+
+    assert "renderSandwichControl" in services
+    assert "/api/odysseus/sandwich" in services
+    assert "/api/odysseus/sandwich/jobs/plan" in services
+    assert "Plan Sandwich action" in services
+    assert "It never installs a system Node runtime." in services
+
+
+def test_native_engine_source_failures_are_specific() -> None:
+    cookbook = _read("static/js/cookbook.js")
+
+    assert "Source issue" not in cookbook
+    assert "'Dirty checkout'" in cookbook
+    assert "'Invalid checkout'" in cookbook
+    assert "'Source mismatch'" in cookbook
+    assert "'Revision mismatch'" in cookbook

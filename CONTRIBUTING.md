@@ -31,25 +31,27 @@ cp .env.example .env
 docker compose up -d --build
 ```
 
-Manual development uses Python 3.11+:
+On GNU/Linux or WSL, use the same uv-managed environment as a native
+Ɗiogenēs deployment:
 
 ```bash
-python3 -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
-python -m uvicorn app:app --host 127.0.0.1 --port 7000
+./uvsetup.sh --skip-javascript --skip-model-downloader
+source .venv/bin/activate
+uv run --active --no-sync python -m uvicorn app:app --host 127.0.0.1 --port 7000
 ```
 
-Windows is not actively tested. Docker on Linux or a Linux/macOS manual install is the safer path for now.
+The script creates `.env`, an isolated `.venv`, and the application data
+layout, but starts no service. macOS contributors should follow
+`docs/setup.md`; Windows is not actively tested outside WSL.
 
 ## Running Checks
 
 Run the smallest relevant checks for your change:
 
 ```bash
-python -m pytest
-python -m py_compile app.py routes/*.py src/*.py
-node --check static/js/<file-you-changed>.js
+.venv/bin/python -m pytest
+.venv/bin/python -m py_compile app.py routes/*.py src/*.py
+bun --check static/js/<file-you-changed>.js
 ```
 
 For Docker-related changes:
@@ -130,4 +132,3 @@ Issues with only "help", "does not work", or a screenshot without context may be
 Do not post secrets, API keys, private logs, personal documents, or public IPs in issues or pull requests.
 
 For security reports, follow [SECURITY.md](SECURITY.md).
-

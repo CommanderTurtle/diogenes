@@ -11,16 +11,21 @@ import socket
 import subprocess
 import sys
 import tempfile
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 from core.atomic_io import atomic_write_text
 from src.constants import DATA_DIR
 from src.sandwich_runtime import observe_sandwich_installation
+from src.ulysses_git import canonical_git_remote
 from src.ulysses_jobs import RuntimeJobError, RuntimeJobStore
 
-
 SCHEMA = "ulysses.runtime-management.v1"
+GIT_CHECK_TTL_SECONDS = 300.0
 KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 SECRET_RE = re.compile(
     r"(?:TOKEN|SECRET|PASSWORD|PASSWD|API_KEY|AUTH|CREDENTIAL|PRIVATE_KEY)",
@@ -55,6 +60,8 @@ DISCOVERY_SUFFIXES = {
     ".yaml",
     ".yml",
 }
+_GIT_REMOTE_CACHE: dict[tuple[str, str, str, str], tuple[float, dict[str, Any]]] = {}
+_GIT_REMOTE_CACHE_LOCK = threading.Lock()
 
 
 def _run(argv: list[str], *, cwd: Path | None = None, timeout: int = 20) -> subprocess.CompletedProcess[str]:
@@ -210,6 +217,16 @@ def load_runtime_management(
         resource_kind = str(raw.get("resource_kind") or "service")
         if resource_kind not in {"service", "mcp", "repository", "skill_library"}:
             raise RuntimeJobError("invalid runtime management resource kind")
+        for boolean_field in (
+            "optional",
+            "setup_on_update",
+            "maintenance_requires_dependencies",
+            "allow_non_git_compose",
+        ):
+            if boolean_field in raw and not isinstance(raw[boolean_field], bool):
+                raise RuntimeJobError(
+                    f"{runtime_id} {boolean_field} must be a boolean"
+                )
         launch = raw.get("launch") or []
         if (
             not isinstance(launch, list)
@@ -268,12 +285,211 @@ def load_runtime_management(
         item = dict(raw)
         item["resource_kind"] = resource_kind
         item["root"] = root
+        bun_install_mode = str(raw.get("bun_install_mode") or "auto")
+        if bun_install_mode not in {
+            "auto",
+            "frozen",
+            "foreign_lock",
+            "pnpm_lock",
+        }:
+            raise RuntimeJobError(f"{runtime_id} Bun install mode is invalid")
+        item["bun_install_mode"] = bun_install_mode
+        dashboard = raw.get("dashboard")
+        if dashboard is not None:
+            if not isinstance(dashboard, dict):
+                raise RuntimeJobError(f"{runtime_id} dashboard must be an object")
+            label = str(dashboard.get("label") or "").strip()
+            url = str(dashboard.get("url") or "").strip()
+            parsed = urlsplit(url)
+            if (
+                not label
+                or len(label) > 100
+                or parsed.scheme not in {"http", "https"}
+                or not parsed.hostname
+                or parsed.username
+                or parsed.password
+                or parsed.fragment
+                or any(character in url for character in "\r\n\0")
+            ):
+                raise RuntimeJobError(f"{runtime_id} dashboard is invalid")
+            item["dashboard"] = {"label": label, "url": url}
+        setup = raw.get("setup")
+        if setup is not None:
+            if not isinstance(setup, dict):
+                raise RuntimeJobError(f"{runtime_id} setup must be an object")
+            setup_kind = str(setup.get("kind") or "")
+            setup_value = str(setup.get("value") or "")
+            setup_args = setup.get("args") or []
+            if (
+                not isinstance(setup_args, list)
+                or any(
+                    not isinstance(value, str)
+                    or not value
+                    or len(value) > 200
+                    or any(character in value for character in "\r\n\0")
+                    for value in setup_args
+                )
+            ):
+                raise RuntimeJobError(f"{runtime_id} setup args are invalid")
+            if setup_kind == "bun_script":
+                if category != "javascript" or not re.fullmatch(
+                    r"[A-Za-z0-9][A-Za-z0-9:._-]{0,127}",
+                    setup_value,
+                ):
+                    raise RuntimeJobError(
+                        f"{runtime_id} Bun setup script is invalid"
+                    )
+                item["setup"] = {
+                    "kind": setup_kind,
+                    "value": setup_value,
+                    "args": tuple(setup_args),
+                }
+            elif setup_kind == "bun_global":
+                if category != "javascript" or setup_value != ".":
+                    raise RuntimeJobError(
+                        f"{runtime_id} Bun global setup is invalid"
+                    )
+                item["setup"] = {
+                    "kind": setup_kind,
+                    "value": setup_value,
+                    "args": tuple(setup_args),
+                }
+            elif setup_kind == "shell_script":
+                candidate = (root / setup_value).resolve()
+                if (
+                    not setup_value.endswith(".sh")
+                    or candidate == root
+                    or not candidate.is_relative_to(root)
+                ):
+                    raise RuntimeJobError(
+                        f"{runtime_id} shell setup script is invalid"
+                    )
+                item["setup"] = {
+                    "kind": setup_kind,
+                    "value": setup_value,
+                    "path": candidate,
+                    "args": tuple(setup_args),
+                }
+            else:
+                raise RuntimeJobError(f"{runtime_id} setup kind is invalid")
+        raw_readiness_checks = raw.get("readiness_checks") or []
+        if not isinstance(raw_readiness_checks, list):
+            raise RuntimeJobError(
+                f"{runtime_id} readiness checks must be a list"
+            )
+        readiness_checks: list[dict[str, Any]] = []
+        for raw_check in raw_readiness_checks:
+            if not isinstance(raw_check, dict):
+                raise RuntimeJobError(
+                    f"{runtime_id} readiness check must be an object"
+                )
+            label = str(raw_check.get("label") or "").strip()
+            raw_path = str(raw_check.get("path") or "")
+            executable = raw_check.get("executable", False)
+            if (
+                not label
+                or len(label) > 100
+                or not raw_path
+                or not isinstance(executable, bool)
+            ):
+                raise RuntimeJobError(
+                    f"{runtime_id} readiness check is invalid"
+                )
+            readiness_checks.append(
+                {
+                    "label": label,
+                    "path": _expand(
+                        raw_path,
+                        home=resolved_home,
+                        services_root=resolved_services,
+                        repository_root=repo.resolve(),
+                    ),
+                    "executable": executable,
+                }
+            )
+        item["readiness_checks"] = tuple(readiness_checks)
+        raw_data_directories = raw.get("data_directories") or []
+        if not isinstance(raw_data_directories, list) or any(
+            not isinstance(value, str) or not value
+            for value in raw_data_directories
+        ):
+            raise RuntimeJobError(f"{runtime_id} data directories are invalid")
+        data_directories: list[Path] = []
+        for raw_directory in raw_data_directories:
+            candidate = (root / str(raw_directory)).resolve()
+            if candidate == root or not candidate.is_relative_to(root):
+                raise RuntimeJobError(
+                    f"{runtime_id} data directory escapes its root"
+                )
+            data_directories.append(candidate)
+        item["data_directories"] = tuple(data_directories)
         for field in ("compose", "package_json"):
             if raw.get(field):
                 candidate = (root / str(raw[field])).resolve()
                 if not candidate.is_relative_to(root):
                     raise RuntimeJobError(f"{runtime_id} {field} escapes its root")
                 item[field] = candidate
+        raw_compose_fallbacks = raw.get("compose_fallbacks") or []
+        if not isinstance(raw_compose_fallbacks, list) or any(
+            not isinstance(value, str) or not value
+            for value in raw_compose_fallbacks
+        ):
+            raise RuntimeJobError(f"{runtime_id} Compose fallbacks are invalid")
+        compose_fallbacks: list[Path] = []
+        for raw_fallback in raw_compose_fallbacks:
+            candidate = (root / raw_fallback).resolve()
+            if candidate == root or not candidate.is_relative_to(root):
+                raise RuntimeJobError(
+                    f"{runtime_id} Compose fallback escapes its root"
+                )
+            compose_fallbacks.append(candidate)
+        item["compose_fallbacks"] = tuple(compose_fallbacks)
+        if item.get("compose"):
+            item["compose_primary"] = item["compose"]
+            if not item["compose"].is_file():
+                item["compose"] = next(
+                    (
+                        fallback
+                        for fallback in compose_fallbacks
+                        if fallback.is_file()
+                    ),
+                    item["compose"],
+                )
+        raw_compose_overrides = raw.get("compose_overrides") or []
+        if not isinstance(raw_compose_overrides, list) or any(
+            not isinstance(value, str) or not value
+            for value in raw_compose_overrides
+        ):
+            raise RuntimeJobError(f"{runtime_id} Compose overrides are invalid")
+        compose_overrides: list[Path] = []
+        for raw_override in raw_compose_overrides:
+            candidate = (root / raw_override).resolve()
+            if candidate == root or not candidate.is_relative_to(root):
+                raise RuntimeJobError(
+                    f"{runtime_id} Compose override escapes its root"
+                )
+            compose_overrides.append(candidate)
+        item["compose_overrides"] = tuple(compose_overrides)
+        for field in (
+            "compose_services",
+            "lifecycle_services",
+            "update_services",
+        ):
+            if field not in raw:
+                continue
+            values = raw[field]
+            if (
+                not isinstance(values, list)
+                or any(
+                    not isinstance(value, str)
+                    or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", value)
+                    for value in values
+                )
+                or len(set(values)) != len(values)
+            ):
+                raise RuntimeJobError(
+                    f"{runtime_id} {field} contains invalid Compose services"
+                )
         documents: list[dict[str, Any]] = []
         for index, name in enumerate(raw.get("env_files") or []):
             candidate = (root / str(name)).resolve()
@@ -319,14 +535,28 @@ def load_runtime_management(
             )
         item["bootstrap_files"] = tuple(bootstrap_files)
         if item.get("compose"):
-            documents.append(
-                {
-                    "id": "compose",
-                    "path": item["compose"],
-                    "format": "compose",
-                    "label": item["compose"].name,
-                }
-            )
+            compose_documents = [
+                item.get("compose_primary") or item["compose"],
+                *item.get("compose_fallbacks", ()),
+            ]
+            for index, compose_path in enumerate(dict.fromkeys(compose_documents)):
+                documents.append(
+                    {
+                        "id": "compose" if index == 0 else f"compose-fallback-{index}",
+                        "path": compose_path,
+                        "format": "compose",
+                        "label": compose_path.name,
+                    }
+                )
+            for index, override in enumerate(item.get("compose_overrides") or ()):
+                documents.append(
+                    {
+                        "id": f"compose-override-{index}",
+                        "path": override,
+                        "format": "compose",
+                        "label": override.name,
+                    }
+                )
         item["documents"] = tuple(documents)
         items.append(item)
     by_id = {item["id"]: item for item in items}
@@ -360,10 +590,18 @@ def load_runtime_management(
 
 def _git(root: Path) -> dict[str, Any]:
     if not (root / ".git").is_dir():
-        return {"present": False, "dirty": False, "branch": None, "commit": None, "origin": None}
+        return {
+            "present": False,
+            "dirty": False,
+            "branch": None,
+            "commit": None,
+            "origin": None,
+        }
+
     def value(*args: str) -> str:
         result = _run(["git", "-C", str(root), *args])
         return result.stdout.strip() if result.returncode == 0 else ""
+
     return {
         "present": True,
         "dirty": bool(value("status", "--porcelain", "--untracked-files=no")),
@@ -374,7 +612,7 @@ def _git(root: Path) -> dict[str, Any]:
 
 
 def _canonical_git_url(value: object) -> str:
-    return str(value or "").rstrip("/").removesuffix(".git")
+    return canonical_git_remote(value) or ""
 
 
 def _git_contract_matches(item: dict[str, Any], git: dict[str, Any]) -> bool:
@@ -386,6 +624,158 @@ def _git_contract_matches(item: dict[str, Any], git: dict[str, Any]) -> bool:
         and _canonical_git_url(git.get("origin"))
         == _canonical_git_url(item.get("source_url"))
     )
+
+
+def _git_remote_status(
+    item: dict[str, Any],
+    git: dict[str, Any],
+) -> dict[str, Any]:
+    """Check the declared Git source without changing the branch or worktree.
+
+    `ls-remote` discovers the exact branch tip. When the object is not already
+    local, fetch downloads it without writing FETCH_HEAD or a tracking ref.
+    The checkout, index, branch, and configured remotes are never changed.
+    """
+
+    result = dict(git)
+    result.update(
+        {
+            "remote_commit": None,
+            "ahead": None,
+            "behind": None,
+            "update_status": "not_applicable",
+            "check_error": None,
+        }
+    )
+    if not item.get("git_update"):
+        return result
+    if not git.get("present"):
+        result["update_status"] = "missing"
+        return result
+    if git.get("dirty"):
+        result["update_status"] = "dirty"
+        return result
+    if not _git_contract_matches(item, git):
+        result["update_status"] = "blocked"
+        return result
+
+    source_url = str(item["source_url"])
+    source_branch = str(item["source_branch"])
+    commit = str(git.get("commit") or "")
+    key = (str(item["root"]), source_url, source_branch, commit)
+    now = time.monotonic()
+    with _GIT_REMOTE_CACHE_LOCK:
+        cached = _GIT_REMOTE_CACHE.get(key)
+        if cached and now - cached[0] < GIT_CHECK_TTL_SECONDS:
+            return {**result, **cached[1]}
+
+    remote = _run(
+        [
+            "git",
+            "ls-remote",
+            "--heads",
+            source_url,
+            f"refs/heads/{source_branch}",
+        ],
+        timeout=8,
+    )
+    fields = remote.stdout.strip().split()
+    if remote.returncode or len(fields) < 2 or not re.fullmatch(r"[0-9a-fA-F]{40,64}", fields[0]):
+        observed = {
+            "update_status": "unknown",
+            "check_error": "The declared remote branch could not be checked.",
+        }
+        with _GIT_REMOTE_CACHE_LOCK:
+            _GIT_REMOTE_CACHE[key] = (now, observed)
+        return {**result, **observed}
+
+    remote_commit = fields[0].lower()
+    if remote_commit != commit.lower():
+        present = _run(
+            [
+                "git",
+                "-C",
+                str(item["root"]),
+                "cat-file",
+                "-e",
+                f"{remote_commit}^{{commit}}",
+            ],
+            timeout=5,
+        )
+        if present.returncode:
+            fetched = _run(
+                [
+                    "git",
+                    "-C",
+                    str(item["root"]),
+                    "fetch",
+                    "--quiet",
+                    "--no-tags",
+                    "--no-write-fetch-head",
+                    source_url,
+                    source_branch,
+                ],
+                timeout=120,
+            )
+            if fetched.returncode:
+                observed = {
+                    "remote_commit": remote_commit,
+                    "update_status": "unknown",
+                    "check_error": (
+                        "The remote tip was found, but its history could not be "
+                        "downloaded for comparison."
+                    ),
+                }
+                with _GIT_REMOTE_CACHE_LOCK:
+                    _GIT_REMOTE_CACHE[key] = (now, observed)
+                return {**result, **observed}
+
+    counts = _run(
+        [
+            "git",
+            "-C",
+            str(item["root"]),
+            "rev-list",
+            "--left-right",
+            "--count",
+            f"HEAD...{remote_commit}",
+        ],
+        timeout=15,
+    )
+    count_fields = counts.stdout.split()
+    if counts.returncode or len(count_fields) != 2 or any(
+        not value.isdigit() for value in count_fields
+    ):
+        observed = {
+            "remote_commit": remote_commit,
+            "update_status": "unknown",
+            "check_error": "Local and remote Git history could not be compared.",
+        }
+    else:
+        ahead, behind = (int(value) for value in count_fields)
+        update_status = (
+            "diverged"
+            if ahead and behind
+            else "available"
+            if behind
+            else "ahead"
+            if ahead
+            else "current"
+        )
+        observed = {
+            "remote_commit": remote_commit,
+            "ahead": ahead,
+            "behind": behind,
+            "update_status": update_status,
+            "check_error": None,
+        }
+    with _GIT_REMOTE_CACHE_LOCK:
+        _GIT_REMOTE_CACHE[key] = (now, observed)
+    return {**result, **observed}
+
+
+def _git_status(item: dict[str, Any]) -> dict[str, Any]:
+    return _git_remote_status(item, _git(item["root"]))
 
 
 def _port_open(port: int) -> bool:
@@ -461,6 +851,9 @@ def _compose(item: dict[str, Any]) -> dict[str, Any] | None:
     if not isinstance(path, Path) or not path.is_file():
         return None
     base = ["docker", "compose", "-f", str(path)]
+    for override in item.get("compose_overrides") or ():
+        if override.is_file():
+            base.extend(["-f", str(override)])
     services = _run([*base, "config", "--services"], cwd=item["root"])
     images = _run([*base, "config", "--images"], cwd=item["root"])
     rows = _run([*base, "ps", "--format", "json"], cwd=item["root"])
@@ -496,29 +889,183 @@ def _observe_runtime_state(item: dict[str, Any]) -> dict[str, Any]:
         {"port": int(port), "active": _port_open(int(port))}
         for port in item.get("ports") or []
     ]
+    source_exists = item["root"].is_dir()
     session = str(item.get("tmux_session") or "")
     compose = _compose(item)
     managed = _tmux_alive(session)
+    active_port = any(port["active"] for port in ports)
+    process_applicable = bool(
+        item["category"] == "docker"
+        or item.get("launch")
+        or session
+        or ports
+    )
     if item["category"] == "docker":
+        targets = {
+            str(value)
+            for value in item.get("compose_services") or []
+        }
         running = any(
             str(container.get("state") or "").lower() == "running"
             for container in (compose or {}).get("containers") or []
+            if not targets or str(container.get("service") or "") in targets
+        )
+        port_collision = not running and active_port
+        process_state = (
+            "running"
+            if running
+            else "blocked"
+            if port_collision
+            else "stopped"
         )
     else:
-        running = any(port["active"] for port in ports) or managed
-    port_collision = (
-        item["category"] == "docker"
-        and not running
-        and any(port["active"] for port in ports)
-    )
+        running = active_port or managed
+        port_collision = active_port and not source_exists
+        process_state = (
+            "not_applicable"
+            if not process_applicable
+            else "running"
+            if managed
+            else "running_external"
+            if active_port
+            else "stopped"
+        )
     return {
         "ports": ports,
         "session": session,
         "compose": compose,
         "managed": managed,
         "running": running,
+        "process_state": process_state,
+        "source_exists": source_exists,
         "port_collision": port_collision,
     }
+
+
+def _readiness_state(
+    item: dict[str, Any],
+    *,
+    source_exists: bool,
+    git: dict[str, Any],
+    compose: dict[str, Any] | None,
+) -> dict[str, Any]:
+    checks = []
+    for declared in item.get("readiness_checks") or ():
+        path: Path = declared["path"]
+        exists = path.is_file()
+        executable = bool(
+            exists
+            and (
+                not declared.get("executable")
+                or os.access(path, os.X_OK)
+            )
+        )
+        checks.append(
+            {
+                "label": declared["label"],
+                "path": str(path),
+                "exists": exists,
+                "executable": executable,
+                "ready": executable,
+            }
+        )
+    allow_non_git_compose = bool(
+        item.get("allow_non_git_compose")
+        and compose
+        and compose.get("valid")
+    )
+    if item.get("git_update") and not allow_non_git_compose:
+        checks.append(
+            {
+                "label": "Declared Git checkout",
+                "path": str(item["root"] / ".git"),
+                "exists": bool(git.get("present")),
+                "executable": bool(git.get("present")),
+                "ready": bool(git.get("present")),
+            }
+        )
+    package_json = item.get("package_json")
+    if isinstance(package_json, Path):
+        package_ready = package_json.is_file()
+        checks.append(
+            {
+                "label": "JavaScript package manifest",
+                "path": str(package_json),
+                "exists": package_ready,
+                "executable": package_ready,
+                "ready": package_ready,
+            }
+        )
+    if item["category"] == "docker" and item.get("compose"):
+        compose_path: Path = item["compose"]
+        compose_ready = bool(compose and compose.get("valid"))
+        checks.append(
+            {
+                "label": "Valid Compose project",
+                "path": str(compose_path),
+                "exists": compose_path.is_file(),
+                "executable": compose_ready,
+                "ready": compose_ready,
+            }
+        )
+    legacy_compose_layout = bool(
+        allow_non_git_compose
+        and item.get("compose_primary")
+        and item.get("compose") != item.get("compose_primary")
+    )
+    if not legacy_compose_layout:
+        for bootstrap in item.get("bootstrap_files") or ():
+            bootstrap_ready = bootstrap["path"].is_file()
+            checks.append(
+                {
+                    "label": f"Project configuration: {bootstrap['path'].name}",
+                    "path": str(bootstrap["path"]),
+                    "exists": bootstrap_ready,
+                    "executable": bootstrap_ready,
+                    "ready": bootstrap_ready,
+                }
+            )
+    return {
+        "ready": bool(source_exists and all(check["ready"] for check in checks)),
+        "checks": checks,
+    }
+
+
+def _install_path_available(root: Path) -> bool:
+    if not root.exists():
+        return True
+    if not root.is_dir():
+        return False
+    try:
+        return next(root.iterdir(), None) is None
+    except OSError:
+        return False
+
+
+def _integration_state(item: dict[str, Any], *, source_exists: bool) -> str:
+    if not item.get("hermes_mcp"):
+        return "not_applicable"
+    if not source_exists:
+        return "not_installed"
+    # Hermes owns its registry and profiles. Runtime management deliberately
+    # does not infer registration from a source directory or a process port.
+    return "registration_unknown"
+
+
+def _update_state(item: dict[str, Any], git: dict[str, Any]) -> str:
+    if item.get("update_blocked_reason"):
+        return "blocked"
+    if item.get("git_update"):
+        if item.get("allow_non_git_compose") and not git.get("present"):
+            return "image_only"
+        return str(git.get("update_status") or "unknown")
+    if (
+        item.get("package_spec")
+        or item.get("update_module")
+        or item["category"] == "docker"
+    ):
+        return "check_required"
+    return "not_applicable"
 
 
 def collect_managed_runtimes() -> dict[str, Any]:
@@ -528,21 +1075,56 @@ def collect_managed_runtimes() -> dict[str, Any]:
         item["id"]: _observe_runtime_state(item)
         for item in items
     }
+    with ThreadPoolExecutor(max_workers=max(1, min(12, len(items)))) as executor:
+        git_by_id = {
+            item["id"]: git
+            for item, git in zip(items, executor.map(_git_status, items))
+        }
     runtimes = []
     for item in items:
         state = state_by_id[item["id"]]
         ports = state["ports"]
         session = state["session"]
-        git = _git(item["root"])
+        git = git_by_id[item["id"]]
         compose = state["compose"]
         managed = state["managed"]
         running = state["running"]
+        process_state = state["process_state"]
+        source_exists = state["source_exists"]
         port_collision = state["port_collision"]
+        readiness = _readiness_state(
+            item,
+            source_exists=source_exists,
+            git=git,
+            compose=compose,
+        )
+        runtime_ready = readiness["ready"]
         resource_kind = str(item.get("resource_kind") or "service")
-        if running:
+        source_state = (
+            "installed"
+            if runtime_ready
+            else "incomplete"
+            if source_exists
+            else "missing"
+        )
+        integration_state = _integration_state(
+            item,
+            source_exists=source_exists,
+        )
+        update_state = _update_state(item, git)
+        if not source_exists and process_state == "running_external":
+            status = "unmanaged"
+        elif running:
             status = "running"
-        elif resource_kind in {"mcp", "repository", "skill_library"} and item["root"].is_dir():
+        elif (
+            resource_kind in {"mcp", "repository", "skill_library"}
+            and runtime_ready
+        ):
             status = "installed"
+        elif source_exists and not runtime_ready:
+            status = "incomplete"
+        elif not source_exists:
+            status = "not_installed"
         else:
             status = "stopped"
         compose_ready = bool(compose and compose.get("valid"))
@@ -559,6 +1141,237 @@ def collect_managed_runtimes() -> dict[str, Any]:
         ]
         dependencies_ready = not dependencies_unavailable
         git_sync_ready = _git_contract_matches(item, git)
+        non_git_compose_ready = bool(
+            item["category"] == "docker"
+            and item.get("allow_non_git_compose")
+            and not git.get("present")
+        )
+        bootstrap_missing = any(
+            not bootstrap["path"].exists()
+            for bootstrap in item.get("bootstrap_files") or ()
+        )
+        data_directories_missing = any(
+            not path.is_dir()
+            for path in item.get("data_directories") or ()
+        )
+        install_contract = bool(
+            item.get("git_update")
+            or item.get("package_spec")
+            or item.get("update_module")
+            or (
+                item["category"] == "docker"
+                and item.get("compose")
+                and item.get("bootstrap_files")
+            )
+        )
+        actions = {
+            "open": source_exists and shutil.which("zed") is not None,
+            "initialize": (
+                source_exists
+                and (bootstrap_missing or data_directories_missing)
+            ),
+            "install": (
+                _install_path_available(item["root"])
+                and install_contract
+                and (
+                    item["category"] != "javascript"
+                    or sandwich.installed
+                )
+            ),
+            "start": (
+                item["category"] == "docker"
+                and compose_ready
+                and not running
+                and not port_collision
+                and dependencies_ready
+                and runtime_ready
+            ) or (
+                bool(item.get("launch"))
+                and not running
+                and source_exists
+                and runtime_ready
+                and dependencies_ready
+                and not port_collision
+                and (item["category"] != "javascript" or sandwich.installed)
+            ),
+            "stop": (
+                running and compose_ready and not active_dependents
+                if item["category"] == "docker"
+                else bool(session and managed and not active_dependents)
+            ),
+            "restart": (
+                running and compose_ready and dependencies_ready
+                if item["category"] == "docker"
+                else bool(session and managed and dependencies_ready)
+            ),
+            "sync": (
+                git_sync_ready
+                and not running
+            ),
+            "update": (
+                (
+                    item["category"] == "docker"
+                    and compose_ready
+                    and not port_collision
+                    and not item.get("update_blocked_reason")
+                    and (
+                        not item.get("git_update")
+                        or git_sync_ready
+                        or non_git_compose_ready
+                    )
+                    and (not running or dependencies_ready)
+                )
+                or (
+                    item["category"] == "javascript"
+                    and sandwich.installed
+                    and (not running or managed)
+                    and (not running or dependencies_ready)
+                    and (
+                        bool(item.get("package_spec"))
+                        or git_sync_ready
+                    )
+                )
+                or (
+                    item["category"] == "native"
+                    and (
+                        bool(item.get("update_module"))
+                        or git_sync_ready
+                    )
+                    and (not running or managed)
+                    and (not running or dependencies_ready)
+                )
+            ),
+        }
+        if (
+            item.get("maintenance_requires_dependencies")
+            and not dependencies_ready
+        ):
+            actions["sync"] = False
+            actions["update"] = False
+
+        def disabled_reason(action: str) -> str:
+            if action == "open":
+                return (
+                    "Install the project source first."
+                    if not source_exists
+                    else "Zed is not available on the service host PATH."
+                )
+            if action == "initialize":
+                return (
+                    "Install the project source first."
+                    if not source_exists
+                    else "All declared project-local defaults already exist."
+                )
+            if action == "install":
+                if not _install_path_available(item["root"]):
+                    return "The configured project path already exists."
+                if not install_contract:
+                    return "No portable install contract is declared."
+                if item["category"] == "javascript" and not sandwich.installed:
+                    return "Install Sandwich before installing JavaScript projects."
+                return "Installation is not currently available."
+            if action == "start":
+                if not source_exists:
+                    return "Install the project source first."
+                if not runtime_ready:
+                    missing_labels = [
+                        check["label"]
+                        for check in readiness["checks"]
+                        if not check["ready"]
+                    ]
+                    return "Complete or repair setup first: " + ", ".join(
+                        missing_labels
+                    )
+                if running:
+                    return "The runtime is already active."
+                if port_collision:
+                    return "A different process owns a declared port."
+                if not dependencies_ready:
+                    return "Start the required runtimes first: " + ", ".join(
+                        dependencies_unavailable
+                    )
+                if item["category"] != "docker" and not item.get("launch"):
+                    return "This resource has no persistent process to start."
+                if item["category"] == "javascript" and not sandwich.installed:
+                    return "Install Sandwich before starting JavaScript projects."
+                return "The runtime configuration is not ready."
+            if action == "stop":
+                if active_dependents:
+                    return "Stop dependent runtimes first: " + ", ".join(
+                        active_dependents
+                    )
+                if not running:
+                    return "The runtime is not active."
+                return "The active process is external to Diogenes management."
+            if action == "restart":
+                if not running:
+                    return "The runtime is not active."
+                if not dependencies_ready:
+                    return "Required runtimes are unavailable."
+                return "Only Diogenes-managed tmux or Compose runtimes can restart."
+            if action == "sync":
+                if (
+                    item.get("maintenance_requires_dependencies")
+                    and not dependencies_ready
+                ):
+                    return "Start required runtimes before synchronizing: " + ", ".join(
+                        dependencies_unavailable
+                    )
+                if not git.get("present"):
+                    return "The project is not a Git checkout."
+                if git.get("dirty"):
+                    return "Commit or preserve local changes before synchronizing."
+                if not git_sync_ready:
+                    return "Git origin or branch does not match the declared source."
+                if running:
+                    return "Stop the active runtime before synchronizing its source."
+                return "Git synchronization is unavailable."
+            if action == "update":
+                if (
+                    item.get("maintenance_requires_dependencies")
+                    and not dependencies_ready
+                ):
+                    return "Start required runtimes before updating: " + ", ".join(
+                        dependencies_unavailable
+                    )
+                if item.get("update_blocked_reason"):
+                    return str(item["update_blocked_reason"])
+                if not source_exists:
+                    return "Install the project first."
+                if port_collision:
+                    return "A different process owns a declared port."
+                if running and not managed and item["category"] != "docker":
+                    return "Stop the externally managed process before updating."
+                if (
+                    item.get("git_update")
+                    and not git_sync_ready
+                    and not non_git_compose_ready
+                ):
+                    return "A clean checkout on the declared Git origin and branch is required."
+                return "No safe update contract is currently available."
+            return "Action is unavailable."
+
+        enabled_reasons = {
+            "open": "Open the registered project root in Zed.",
+            "initialize": "Create only missing project-local defaults.",
+            "install": "Install into the registered services root without starting it.",
+            "start": "Start the registered runtime with its declared environment.",
+            "stop": "Stop the Diogenes-managed runtime.",
+            "restart": "Restart the Diogenes-managed runtime.",
+            "sync": "Fetch and fast-forward the clean declared Git checkout.",
+            "update": "Apply the declared update contract without replacing local configuration.",
+        }
+        action_details = {
+            action: {
+                "enabled": enabled,
+                "reason": (
+                    enabled_reasons[action]
+                    if enabled
+                    else disabled_reason(action)
+                ),
+            }
+            for action, enabled in actions.items()
+        }
         runtimes.append(
             {
                 "id": item["id"],
@@ -572,13 +1385,26 @@ def collect_managed_runtimes() -> dict[str, Any]:
                 "dependencies_unavailable": dependencies_unavailable,
                 "active_dependents": active_dependents,
                 "root": str(item["root"]),
-                "source_exists": item["root"].is_dir(),
+                "source_exists": source_exists,
+                "runtime_ready": runtime_ready,
+                "readiness": readiness,
                 "optional": bool(item.get("optional")),
                 "ports": ports,
                 "status": status,
+                "states": {
+                    "source": source_state,
+                    "process": process_state,
+                    "integration": integration_state,
+                    "update": update_state,
+                },
+                "source_state": source_state,
+                "process_state": process_state,
+                "integration_state": integration_state,
+                "update_state": update_state,
                 "git": git,
                 "package": _package(item),
                 "package_spec": item.get("package_spec"),
+                "dashboard": item.get("dashboard"),
                 "update_blocked_reason": item.get("update_blocked_reason"),
                 "compose": compose,
                 "tmux": {
@@ -597,79 +1423,8 @@ def collect_managed_runtimes() -> dict[str, Any]:
                     for document in _runtime_documents(item)
                 ],
                 "hermes_mcp": bool(item.get("hermes_mcp")),
-                "actions": {
-                    "open": item["root"].is_dir() and shutil.which("zed") is not None,
-                    "initialize": (
-                        item["root"].is_dir()
-                        and any(
-                            not bootstrap["path"].exists()
-                            for bootstrap in item.get("bootstrap_files") or ()
-                        )
-                    ),
-                    "install": (
-                        not item["root"].exists()
-                        and (
-                            bool(item.get("git_update"))
-                            or bool(item.get("package_spec"))
-                            or bool(item.get("update_module"))
-                        )
-                        and (
-                            item["category"] != "javascript"
-                            or sandwich.installed
-                        )
-                    ),
-                    "start": (
-                        item["category"] == "docker"
-                        and compose_ready
-                        and not running
-                        and not port_collision
-                        and dependencies_ready
-                    ) or (
-                        bool(item.get("launch"))
-                        and not running
-                        and dependencies_ready
-                        and (item["category"] != "javascript" or sandwich.installed)
-                    ),
-                    "stop": (
-                        running and compose_ready and not active_dependents
-                        if item["category"] == "docker"
-                        else bool(session and managed and not active_dependents)
-                    ),
-                    "restart": (
-                        running and compose_ready and dependencies_ready
-                        if item["category"] == "docker"
-                        else bool(session and managed and dependencies_ready)
-                    ),
-                    "sync": (
-                        git_sync_ready
-                        and not (
-                            item["category"] in {"javascript", "native"}
-                            and running
-                        )
-                    ),
-                    "update": (
-                        (
-                            item["category"] == "docker"
-                            and compose_ready
-                            and not port_collision
-                            and not item.get("update_blocked_reason")
-                            and (not running or dependencies_ready)
-                        )
-                        or (
-                            item["category"] == "javascript"
-                            and sandwich.installed
-                            and (not running or managed)
-                            and (not running or dependencies_ready)
-                            and (bool(item.get("package_spec")) or (git["present"] and not git["dirty"]))
-                        )
-                        or (
-                            item["category"] == "native"
-                            and bool(item.get("update_module"))
-                            and (not running or managed)
-                            and (not running or dependencies_ready)
-                        )
-                    ),
-                },
+                "actions": actions,
+                "action_details": action_details,
                 "port_collision": port_collision,
             }
         )
@@ -867,23 +1622,181 @@ class ManagedRuntimeControl:
         if env_file:
             argv.extend(["--env-file", str(env_file)])
         argv.extend(["-f", str(item["compose"])])
+        for override in item.get("compose_overrides") or ():
+            if override.is_file():
+                argv.extend(["-f", str(override)])
         return argv
 
-    def _steps(self, item: dict[str, Any], action: str) -> list[dict[str, Any]]:
+    @staticmethod
+    def _planned_compose_base(item: dict[str, Any]) -> list[str]:
+        """Compose argv for an install plan whose files do not exist yet."""
+
+        if not item.get("compose"):
+            raise RuntimeJobError("runtime has no Compose project")
+        argv = ["docker", "compose"]
+        bootstrap_paths = {
+            bootstrap["path"]
+            for bootstrap in item.get("bootstrap_files") or ()
+        }
+        env_file = next(
+            (
+                document["path"]
+                for document in item.get("documents") or ()
+                if document["format"] == "env"
+                and (
+                    document["path"].is_file()
+                    or document["path"] in bootstrap_paths
+                )
+            ),
+            None,
+        )
+        if env_file:
+            argv.extend(["--env-file", str(env_file)])
+        argv.extend(["-f", str(item["compose"])])
+        bootstrap_paths = {
+            bootstrap["path"]
+            for bootstrap in item.get("bootstrap_files") or ()
+        }
+        for override in item.get("compose_overrides") or ():
+            if override.is_file() or override in bootstrap_paths:
+                argv.extend(["-f", str(override)])
+        return argv
+
+    @staticmethod
+    def _setup_step(
+        item: dict[str, Any],
+        *,
+        label: str = "Apply project setup",
+    ) -> dict[str, Any] | None:
+        setup = item.get("setup")
+        if not isinstance(setup, dict):
+            return None
+        if setup.get("kind") == "bun_script":
+            argv = _service_argv(
+                [
+                    "bun",
+                    "run",
+                    str(setup["value"]),
+                    *[str(value) for value in setup.get("args") or ()],
+                ]
+            )
+        elif setup.get("kind") == "bun_global":
+            argv = _service_argv(
+                [
+                    "bun",
+                    "install",
+                    "--global",
+                    str(setup["value"]),
+                    *[str(value) for value in setup.get("args") or ()],
+                ]
+            )
+        elif setup.get("kind") == "shell_script":
+            argv = _service_argv(
+                [
+                    "bash",
+                    str(setup["path"]),
+                    *[str(value) for value in setup.get("args") or ()],
+                ]
+            )
+        else:
+            raise RuntimeJobError("runtime setup contract is invalid")
+        return {
+            "label": label,
+            "argv": argv,
+            "cwd": str(item["root"]),
+            "timeout": 1800,
+        }
+
+    @staticmethod
+    def _bun_install_argv(item: dict[str, Any]) -> list[str]:
+        mode = str(item.get("bun_install_mode") or "auto")
+        if mode == "frozen" or (
+            mode == "auto"
+            and (
+                (item["root"] / "bun.lock").is_file()
+                or (item["root"] / "bun.lockb").is_file()
+            )
+        ):
+            return _service_argv(["bun", "install", "--frozen-lockfile"])
+        if mode in {"foreign_lock", "pnpm_lock"}:
+            # With no Bun lock committed, --no-save causes Bun to import the
+            # upstream npm/pnpm lock for this install without leaving a stale,
+            # untracked bun.lock that would mask later foreign lock changes.
+            return _service_argv(["bun", "install", "--no-save"])
+        return _service_argv(["bun", "install"])
+
+    @staticmethod
+    def _data_directory_steps(item: dict[str, Any]) -> list[dict[str, Any]]:
+        missing = [
+            str(path)
+            for path in item.get("data_directories") or ()
+            if not path.is_dir()
+        ]
+        if not missing:
+            return []
+        return [
+            {
+                "label": "Create persistent project data directories",
+                "argv": ["mkdir", "-p", *missing],
+                "timeout": 30,
+            }
+        ]
+
+    @staticmethod
+    def _readiness_verification_steps(
+        item: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        return [
+            {
+                "label": f"Verify {check['label']}",
+                "argv": [
+                    "test",
+                    "-x" if check.get("executable") else "-f",
+                    str(check["path"]),
+                ],
+                "timeout": 30,
+            }
+            for check in item.get("readiness_checks") or ()
+        ]
+
+    @staticmethod
+    def _compose_targets(
+        item: dict[str, Any],
+        field: str,
+    ) -> list[str]:
+        values = (
+            item[field]
+            if field in item
+            else item.get("compose_services") or []
+        )
+        return [str(value) for value in values]
+
+    def _steps(
+        self,
+        item: dict[str, Any],
+        action: str,
+        *,
+        observed: dict[str, Any] | None = None,
+    ) -> list[dict[str, Any]]:
         root: Path = item["root"]
         repository_root = Path(__file__).resolve().parents[1]
         if action == "update" and item.get("update_blocked_reason"):
             raise RuntimeJobError(str(item["update_blocked_reason"]))
-        observed = next(
-            (
-                runtime
-                for runtime in collect_managed_runtimes().get("runtimes", [])
-                if runtime.get("id") == item["id"]
-            ),
-            None,
-        )
+        if observed is None:
+            observed = next(
+                (
+                    runtime
+                    for runtime in collect_managed_runtimes().get("runtimes", [])
+                    if runtime.get("id") == item["id"]
+                ),
+                None,
+            )
         if not isinstance(observed, dict):
             raise RuntimeJobError("managed runtime observation is unavailable")
+        observed_running = (
+            observed.get("process_state") in {"running", "running_external"}
+            or observed.get("status") == "running"
+        )
         if action in {"start", "restart"} and not observed.get(
             "dependencies_ready", True
         ):
@@ -891,7 +1804,16 @@ class ManagedRuntimeControl:
                 "start the required runtimes first: "
                 + ", ".join(observed.get("dependencies_unavailable") or [])
             )
-        if action == "update" and observed.get("status") == "running" and not observed.get(
+        if (
+            action in {"sync", "update"}
+            and item.get("maintenance_requires_dependencies")
+            and not observed.get("dependencies_ready", True)
+        ):
+            raise RuntimeJobError(
+                "start the required runtimes before maintenance: "
+                + ", ".join(observed.get("dependencies_unavailable") or [])
+            )
+        if action == "update" and observed_running and not observed.get(
             "dependencies_ready", True
         ):
             raise RuntimeJobError(
@@ -899,6 +1821,14 @@ class ManagedRuntimeControl:
                 + ", ".join(observed.get("dependencies_unavailable") or [])
             )
         managed_session = bool((observed.get("tmux") or {}).get("managed"))
+        if (
+            action == "install"
+            and item["category"] == "javascript"
+            and not observe_sandwich_installation().installed
+        ):
+            raise RuntimeJobError(
+                "Sandwich is required for JavaScript runtime installation"
+            )
         if action == "open":
             executable = shutil.which("zed")
             if executable is None:
@@ -917,6 +1847,7 @@ class ManagedRuntimeControl:
             if not root.is_dir():
                 raise RuntimeJobError("runtime source directory is not installed")
             return [
+                *self._data_directory_steps(item),
                 {
                     "label": "Create missing project-local runtime files",
                     "argv": [
@@ -930,7 +1861,7 @@ class ManagedRuntimeControl:
                 }
             ]
         if action == "install":
-            if root.exists():
+            if not _install_path_available(root):
                 raise RuntimeJobError("runtime source path already exists")
             if item.get("git_update"):
                 steps = [
@@ -952,6 +1883,7 @@ class ManagedRuntimeControl:
                         ],
                         "timeout": 1800,
                     },
+                    *self._data_directory_steps(item),
                 ]
                 steps.append(
                     {
@@ -970,7 +1902,7 @@ class ManagedRuntimeControl:
                     steps.append(
                         {
                             "label": "Install with Bun",
-                            "argv": _service_argv(["bun", "install"]),
+                            "argv": self._bun_install_argv(item),
                             "cwd": str(root),
                             "timeout": 1800,
                         }
@@ -986,6 +1918,32 @@ class ManagedRuntimeControl:
                                 "timeout": 1800,
                             }
                         )
+                setup_step = self._setup_step(
+                    item,
+                    label="Complete project-native setup",
+                )
+                if setup_step:
+                    steps.append(setup_step)
+                steps.extend(self._readiness_verification_steps(item))
+                if item["category"] == "docker" and item.get("bootstrap_files"):
+                    base = self._planned_compose_base(item)
+                    services = self._compose_targets(item, "update_services")
+                    steps.extend(
+                        [
+                            {
+                                "label": "Validate Compose project",
+                                "argv": [*base, "config", "--quiet"],
+                                "cwd": str(root),
+                                "timeout": 60,
+                            },
+                            {
+                                "label": "Pull Compose images",
+                                "argv": [*base, "pull", *services],
+                                "cwd": str(root),
+                                "timeout": 1800,
+                            },
+                        ]
+                    )
                 return steps
             if item.get("package_spec"):
                 return [
@@ -1008,14 +1966,69 @@ class ManagedRuntimeControl:
                     {
                         "label": "Resolve package through Sandwich",
                         "argv": _service_argv(
-                            ["npx", "-y", str(item["package_spec"]), "--version"]
+                            ["bun", "x", str(item["package_spec"]), "--version"]
                         ),
                         "cwd": str(root),
                         "timeout": 900,
                     },
                 ]
+            if (
+                item["category"] == "docker"
+                and item.get("compose")
+                and item.get("bootstrap_files")
+            ):
+                base = self._planned_compose_base(item)
+                services = self._compose_targets(item, "update_services")
+                return [
+                    {
+                        "label": "Create runtime directory",
+                        "argv": ["mkdir", "-p", str(root)],
+                        "timeout": 30,
+                    },
+                    *self._data_directory_steps(item),
+                    {
+                        "label": "Create project-local startup and configuration",
+                        "argv": [
+                            sys.executable,
+                            "-m",
+                            "src.ulysses_runtime_bootstrap",
+                            item["id"],
+                        ],
+                        "cwd": str(repository_root),
+                        "timeout": 60,
+                    },
+                    {
+                        "label": "Validate Compose project",
+                        "argv": [*base, "config", "--quiet"],
+                        "cwd": str(root),
+                        "timeout": 60,
+                    },
+                    {
+                        "label": "Pull Compose images",
+                        "argv": [*base, "pull", *services],
+                        "cwd": str(root),
+                        "timeout": 1800,
+                    },
+                ]
             if item.get("update_module"):
                 return [
+                    {
+                        "label": "Create runtime directory",
+                        "argv": ["mkdir", "-p", str(root)],
+                        "timeout": 30,
+                    },
+                    *self._data_directory_steps(item),
+                    {
+                        "label": "Create project-local startup and configuration",
+                        "argv": [
+                            sys.executable,
+                            "-m",
+                            "src.ulysses_runtime_bootstrap",
+                            item["id"],
+                        ],
+                        "cwd": str(repository_root),
+                        "timeout": 60,
+                    },
                     {
                         "label": "Install native runtime for this user",
                         "argv": [
@@ -1026,21 +2039,18 @@ class ManagedRuntimeControl:
                         ],
                         "cwd": str(Path(__file__).resolve().parents[1]),
                         "timeout": 900,
-                    }
+                    },
+                    *self._readiness_verification_steps(item),
                 ]
             raise RuntimeJobError("runtime has no supported install contract")
-        if (
-            action == "sync"
-            and item["category"] in {"javascript", "native"}
-            and observed.get("status") == "running"
-        ):
+        if action == "sync" and observed_running:
             raise RuntimeJobError(
                 "stop the active runtime before synchronizing its source"
             )
         if (
             action == "update"
             and item["category"] in {"javascript", "native"}
-            and observed.get("status") == "running"
+            and observed_running
             and not managed_session
         ):
             raise RuntimeJobError(
@@ -1063,7 +2073,7 @@ class ManagedRuntimeControl:
             ]
         if item["category"] == "docker":
             base = self._compose_base(item)
-            services = [str(value) for value in item.get("compose_services") or []]
+            services = self._compose_targets(item, "lifecycle_services")
             if action == "start":
                 return [{"label": "Start Compose services", "argv": [*base, "up", "-d", *services], "cwd": str(root), "timeout": 900}]
             if action == "stop":
@@ -1071,10 +2081,62 @@ class ManagedRuntimeControl:
             if action == "restart":
                 return [{"label": "Restart Compose services", "argv": [*base, "restart", *services], "cwd": str(root), "timeout": 600}]
             if action == "update":
-                steps = [{"label": "Pull Compose images", "argv": [*base, "pull", *services], "cwd": str(root), "timeout": 1800}]
+                update_services = self._compose_targets(
+                    item,
+                    "update_services",
+                )
+                steps: list[dict[str, Any]] = []
+                if item.get("git_update"):
+                    git = _git(root)
+                    git_contract_matches = _git_contract_matches(item, git)
+                    image_only = bool(
+                        item.get("allow_non_git_compose")
+                        and not git.get("present")
+                    )
+                    if not git_contract_matches and not image_only:
+                        raise RuntimeJobError(
+                            "clean, pinned Git source is required for Compose update"
+                        )
+                    if git_contract_matches:
+                        steps.extend(
+                            [
+                                {
+                                    "label": "Fetch project source",
+                                    "argv": [
+                                        "git",
+                                        "-C",
+                                        str(root),
+                                        "fetch",
+                                        "--prune",
+                                        "origin",
+                                    ],
+                                    "timeout": 300,
+                                },
+                                {
+                                    "label": "Fast-forward project source",
+                                    "argv": [
+                                        "git",
+                                        "-C",
+                                        str(root),
+                                        "merge",
+                                        "--ff-only",
+                                        f"origin/{item['source_branch']}",
+                                    ],
+                                    "timeout": 300,
+                                },
+                            ]
+                        )
+                steps.append(
+                    {
+                        "label": "Pull Compose images",
+                        "argv": [*base, "pull", *update_services],
+                        "cwd": str(root),
+                        "timeout": 1800,
+                    }
+                )
                 if item.get("build_on_update"):
-                    steps.append({"label": "Build Compose services", "argv": [*base, "build", "--pull", *services], "cwd": str(root), "timeout": 3600})
-                if observed.get("status") == "running":
+                    steps.append({"label": "Build Compose services", "argv": [*base, "build", "--pull", *update_services], "cwd": str(root), "timeout": 3600})
+                if observed_running:
                     steps.append({"label": "Apply Compose update", "argv": [*base, "up", "-d", *services], "cwd": str(root), "timeout": 1200})
                 return steps
         if item["category"] in {"javascript", "native"}:
@@ -1096,20 +2158,40 @@ class ManagedRuntimeControl:
                 ]
             if action == "update":
                 was_managed = bool(session and _tmux_alive(session))
-                prefix = (
-                    [{"label": "Stop managed tmux runtime", "argv": ["tmux", "kill-session", "-t", session], "timeout": 30}]
-                    if was_managed
-                    else []
-                )
-                suffix = (
-                    [{"label": "Restart managed tmux runtime", "argv": ["tmux", "new-session", "-d", "-E", "-s", session, "-c", str(root), *_service_argv(launch)], "timeout": 60}]
+                restart_steps = (
+                    [
+                        {
+                            "label": "Stop managed tmux runtime",
+                            "argv": [
+                                "tmux",
+                                "kill-session",
+                                "-t",
+                                session,
+                            ],
+                            "timeout": 30,
+                        },
+                        {
+                            "label": "Restart managed tmux runtime",
+                            "argv": [
+                                "tmux",
+                                "new-session",
+                                "-d",
+                                "-E",
+                                "-s",
+                                session,
+                                "-c",
+                                str(root),
+                                *_service_argv(launch),
+                            ],
+                            "timeout": 60,
+                        },
+                    ]
                     if was_managed and launch
                     else []
                 )
                 if item["category"] == "native" and item.get("update_module"):
                     repo = Path(__file__).resolve().parents[1]
                     return [
-                        *prefix,
                         {
                             "label": "Install official signal-cli native release for this user",
                             "argv": [
@@ -1121,39 +2203,105 @@ class ManagedRuntimeControl:
                             "cwd": str(repo),
                             "timeout": 900,
                         },
-                        *suffix,
+                        *self._readiness_verification_steps(item),
+                        *restart_steps,
                     ]
                 if item.get("package_spec"):
                     return [
-                        *prefix,
-                        {"label": "Refresh Bun package cache", "argv": _service_argv(["npx", "-y", str(item["package_spec"]), "--version"]), "cwd": str(root), "timeout": 900},
-                        *suffix,
+                        {
+                            "label": "Refresh Bun package cache",
+                            "argv": _service_argv(
+                                [
+                                    "bun",
+                                    "x",
+                                    str(item["package_spec"]),
+                                    "--version",
+                                ]
+                            ),
+                            "cwd": str(root),
+                            "timeout": 900,
+                        },
+                        *restart_steps,
                     ]
                 git = _git(root)
                 if not _git_contract_matches(item, git):
                     raise RuntimeJobError(
-                        "clean, pinned Git source is required for JavaScript update"
+                        "clean, pinned Git source is required for project update"
                     )
                 steps = [
                     {"label": "Fetch project source", "argv": ["git", "-C", str(root), "fetch", "--prune", "origin"], "timeout": 300},
                     {"label": "Fast-forward project source", "argv": ["git", "-C", str(root), "merge", "--ff-only", f"origin/{item['source_branch']}"], "timeout": 300},
-                    {"label": "Install with Bun", "argv": _service_argv(["bun", "install"]), "cwd": str(root), "timeout": 1800},
                 ]
-                if item.get("build_script"):
-                    steps.append({"label": "Build with Bun", "argv": _service_argv(["bun", "run", str(item["build_script"])]), "cwd": str(root), "timeout": 1800})
-                return [*prefix, *steps, *suffix]
+                if item["category"] == "javascript":
+                    steps.append(
+                        {
+                            "label": "Install with Bun",
+                            "argv": self._bun_install_argv(item),
+                            "cwd": str(root),
+                            "timeout": 1800,
+                        }
+                    )
+                    if item.get("build_script"):
+                        steps.append(
+                            {
+                                "label": "Build with Bun",
+                                "argv": _service_argv(
+                                    [
+                                        "bun",
+                                        "run",
+                                        str(item["build_script"]),
+                                    ]
+                                ),
+                                "cwd": str(root),
+                                "timeout": 1800,
+                            }
+                        )
+                if item.get("setup_on_update"):
+                    setup_step = self._setup_step(
+                        item,
+                        label="Refresh project-native integration",
+                    )
+                    if setup_step:
+                        steps.append(setup_step)
+                steps.extend(self._readiness_verification_steps(item))
+                return [*steps, *restart_steps]
         raise RuntimeJobError("unsupported runtime lifecycle action")
 
     def create_plan(self, *, runtime_id: str, action: str) -> tuple[dict[str, Any], str]:
         if action not in {"open", "initialize", "install", "start", "stop", "restart", "sync", "update"}:
             raise RuntimeJobError("unsupported managed runtime action")
         item = self._item(runtime_id)
+        observed = next(
+            (
+                runtime
+                for runtime in collect_managed_runtimes().get("runtimes", [])
+                if runtime.get("id") == runtime_id
+            ),
+            None,
+        )
+        if not isinstance(observed, dict):
+            raise RuntimeJobError("managed runtime observation is unavailable")
+        detail = (observed.get("action_details") or {}).get(action)
+        enabled = (
+            detail.get("enabled")
+            if isinstance(detail, dict)
+            else (observed.get("actions") or {}).get(action)
+        )
+        if enabled is not True:
+            reason = (
+                str(detail.get("reason") or "")
+                if isinstance(detail, dict)
+                else ""
+            )
+            raise RuntimeJobError(
+                reason or f"{action} is not currently available for {runtime_id}"
+            )
         return self.jobs.create_plan(
             runtime_id=runtime_id,
             action=action,
             summary=f"{action.capitalize()} {item['label']}",
             confirmation_phrase=f"{action.upper()} {runtime_id}",
-            steps=self._steps(item, action),
+            steps=self._steps(item, action, observed=observed),
             metadata={"category": item["category"], "root": str(item["root"])},
         )
 

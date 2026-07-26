@@ -65,7 +65,7 @@ This makes the **Merge** button refuse to work until the gating checks pass.
 5. Enable **Require status checks to pass before merging**.
 6. In the search box that appears, add these checks by name:
    - `Python syntax (compileall)`
-   - `JS syntax (node --check)`
+   - `JS syntax (Bun parser)`
    - `gitleaks`
    - `actionlint`
    - `zizmor (Actions SAST)`
@@ -96,6 +96,6 @@ let the workflows run on one pull request first, then add them here.
 ## Keeping it current
 
 `.github/dependabot.yml` opens small weekly pull requests to update Python and
-npm packages, the Docker base image, and the pinned automation actions
+Bun-managed package manifests, the Docker base image, and pinned automation actions
 themselves. Review and merge those like any other pull request; they keep the
 project patched without manual tracking.

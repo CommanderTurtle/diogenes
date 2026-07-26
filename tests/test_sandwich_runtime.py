@@ -18,21 +18,80 @@ from src.ulysses_runtime import OwnershipState, RuntimeAdapter
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
-COMPONENT_ROOT = REPOSITORY_ROOT / "components" / "sandwich"
+
+
+def _write_component(root: Path, *, version: str = "0.3.0") -> Path:
+    (root / "bin").mkdir(parents=True)
+    (root / "scripts").mkdir()
+    entrypoints = {}
+    for command in (
+        "sandwich",
+        "node",
+        "npm",
+        "npx",
+        "pnpm",
+        "yarn",
+        "corepack",
+    ):
+        executable = root / "bin" / command
+        executable.write_text("#!/bin/sh\n", encoding="utf-8")
+        executable.chmod(0o755)
+        entrypoints[command] = f"bin/{command}"
+    maintenance = root / "scripts" / "apply-hermes-maintenance.sh"
+    maintenance.write_text("#!/bin/sh\n", encoding="utf-8")
+    maintenance.chmod(0o755)
+    (root / "manifest.json").write_text(
+        json.dumps(
+            {
+                "schema_version": SANDWICH_SCHEMA,
+                "id": "sandwich",
+                "version": version,
+                "entrypoints": entrypoints,
+                "operations": {
+                    "doctor": {
+                        "argv": ["bin/sandwich", "doctor"],
+                        "mutating": False,
+                        "human_confirmation": False,
+                    },
+                    "hermes_check": {
+                        "argv": [
+                            "scripts/apply-hermes-maintenance.sh",
+                            "--check",
+                        ],
+                        "mutating": False,
+                        "human_confirmation": False,
+                    },
+                    "hermes_apply": {
+                        "argv": [
+                            "scripts/apply-hermes-maintenance.sh",
+                            "--apply",
+                        ],
+                        "mutating": True,
+                        "human_confirmation": True,
+                        "maintenance_window": True,
+                    },
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    return root
 
 
 def _layout(tmp_path: Path) -> SandwichLayout:
+    services = tmp_path / "Hermes"
+    _write_component(services / "sandwich")
     return SandwichLayout.default(
-        repository_root=REPOSITORY_ROOT,
         home=tmp_path,
+        microservices_root=services,
     )
 
 
-def test_bundled_manifest_is_valid_and_mutations_are_human_gated():
-    manifest = load_sandwich_manifest(COMPONENT_ROOT)
+def test_standalone_manifest_is_valid_and_mutations_are_human_gated(tmp_path):
+    component = _write_component(tmp_path / "Hermes" / "sandwich")
+    manifest = load_sandwich_manifest(component)
 
     assert manifest.version == "0.3.0"
-    assert manifest.operations["install_preview"].mutating is False
     assert manifest.operations["hermes_check"].mutating is False
     assert manifest.operations["hermes_apply"].maintenance_window is True
     assert all(
@@ -52,22 +111,28 @@ def test_runtime_definition_uses_observed_ownership_and_sanitized_environment(
     assert definition.runtime_id == "sandwich.runtime"
     assert definition.adapter is RuntimeAdapter.NATIVE
     assert definition.ownership is OwnershipState.OBSERVED
-    assert definition.source_root == COMPONENT_ROOT.resolve()
+    assert definition.source_root == (
+        tmp_path / "Hermes" / "sandwich"
+    ).resolve()
     assert definition.execution is not None
     assert definition.execution.inherit_host_environment is False
     assert definition.execution.environment["HOME"] == str(tmp_path)
     assert "repos/regedited" not in definition.execution.environment["PATH"]
 
 
-def test_operation_specs_resolve_only_bundled_executables(tmp_path):
+def test_operation_specs_resolve_only_standalone_executables(tmp_path):
     layout = _layout(tmp_path)
     spec = sandwich_operation_spec("hermes_check", layout=layout)
 
     executable = Path(spec.argv[0])
     assert executable == (
-        COMPONENT_ROOT / "scripts" / "apply-hermes-maintenance.sh"
+        tmp_path
+        / "Hermes"
+        / "sandwich"
+        / "scripts"
+        / "apply-hermes-maintenance.sh"
     ).resolve()
-    assert executable.is_relative_to(COMPONENT_ROOT.resolve())
+    assert executable.is_relative_to(layout.component_root)
     assert spec.argv[1:] == ("--check",)
 
 
@@ -177,10 +242,9 @@ def test_mixed_system_node_is_not_reported_as_sandwich(tmp_path):
 
 
 def test_status_requires_expected_services_location(tmp_path):
-    component = tmp_path / "external-sandwich"
+    component = _write_component(tmp_path / "external-sandwich")
     component_bin = component / "bin"
     path_bin = tmp_path / "path-bin"
-    component_bin.mkdir(parents=True)
     path_bin.mkdir()
     for command in (
         "sandwich",
@@ -192,8 +256,6 @@ def test_status_requires_expected_services_location(tmp_path):
         "corepack",
     ):
         executable = component_bin / command
-        executable.write_text("#!/bin/sh\n", encoding="utf-8")
-        executable.chmod(0o755)
         (path_bin / command).symlink_to(executable)
     bun = path_bin / "bun"
     bun.write_text("#!/bin/sh\n", encoding="utf-8")
@@ -209,3 +271,16 @@ def test_status_requires_expected_services_location(tmp_path):
     assert status["installed"] is True
     assert status["location_current"] is False
     assert status["ready"] is False
+
+
+def test_missing_standalone_checkout_keeps_registry_definition_optional(tmp_path):
+    layout = SandwichLayout.default(
+        home=tmp_path,
+        microservices_root=tmp_path / "Hermes",
+    )
+
+    definition = sandwich_runtime_definition(layout=layout)
+
+    assert definition.label == "Sandwich"
+    assert definition.execution is None
+    assert definition.source_root == tmp_path / "Hermes" / "sandwich"

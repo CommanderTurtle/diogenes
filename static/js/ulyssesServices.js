@@ -17,6 +17,8 @@ let activeTab = 'docker';
 let topology = null;
 let chroma = null;
 let hermes = null;
+let hermesStack = null;
+let sandwich = null;
 let runtimeJobs = [];
 let jobLogs = {};
 let readiness = null;
@@ -333,7 +335,7 @@ function renderJavaScript() {
           <h3>JavaScript compatibility plane</h3>
           <p>Sandwich keeps Bun canonical while exposing explicit compatibility commands.</p>
         </div>
-        ${statusBadge(runtime.installed ? 'running' : 'unknown')}
+        ${statusBadge(runtime.installed ? 'installed' : 'missing')}
       </div>
       <dl class="uly-runtime-facts">
         <div><dt>Installed</dt><dd>${runtime.installed ? 'Yes' : 'No'}</dd></div>
@@ -350,7 +352,81 @@ function renderJavaScript() {
           <div><strong>${esc(name)}</strong><code title="${esc(path)}">${esc(path)}</code></div>`).join('')}
       </div>
     </section>
+    ${renderSandwichControl()}
     ${renderManagedCategory('javascript')}`;
+}
+
+function renderSandwichControl() {
+  if (!sandwich) {
+    return `
+      <section class="uly-services-panel">
+        <div class="uly-empty-state">
+          <strong>Sandwich status unavailable</strong>
+          <p>Refresh Services after the native status endpoint is reachable.</p>
+        </div>
+      </section>`;
+  }
+  const actions = sandwich.actions || {};
+  const controls = [
+    {
+      action: 'install',
+      label: sandwich.installed ? 'Repair install' : 'Install',
+      enabled: !!actions.install_available,
+      reason: 'Clone CommanderTurtle/sandwich into the configured services root and install its user-level Bun compatibility commands.',
+    },
+    {
+      action: 'sync',
+      label: 'Git sync',
+      enabled: !!actions.sync_available,
+      reason: actions.sync_available
+        ? 'Fast-forward the clean Sandwich checkout and reconcile its user-level commands and shell configuration.'
+        : 'Git sync requires a ready, clean standalone Sandwich checkout.',
+    },
+    {
+      action: 'doctor',
+      label: 'Doctor',
+      enabled: !!actions.doctor_available,
+      reason: actions.doctor_available
+        ? 'Run the compatibility contract and verify every Bun command façade resolves to this checkout.'
+        : 'Doctor becomes available after Sandwich is installed and detected as ready.',
+    },
+  ];
+  const state = sandwich.ready
+    ? 'ready'
+    : sandwich.installed
+      ? 'degraded'
+      : 'missing';
+  return `
+    <section class="uly-services-panel">
+      <div class="uly-panel-heading">
+        <div>
+          <h3>Sandwich</h3>
+          <p>Optional Bun compatibility layer for JavaScript services. It never installs a system Node runtime.</p>
+        </div>
+        ${statusBadge(state)}
+      </div>
+      <dl class="uly-runtime-facts">
+        <div><dt>Expected source</dt><dd><code>${esc(sandwich.expected_root || 'Not configured')}</code></dd></div>
+        <div><dt>Detected source</dt><dd><code>${esc(sandwich.source_root || 'Not detected')}</code></dd></div>
+        <div><dt>Version</dt><dd>${esc(sandwich.installed_version || 'Not installed')}</dd></div>
+        <div><dt>Repository</dt><dd><code>${esc(sandwich.repository || 'https://github.com/CommanderTurtle/sandwich')}</code></dd></div>
+      </dl>
+      ${(sandwich.missing_commands || []).length
+        ? `<div class="uly-finding severity-warning"><strong>Compatibility commands are incomplete.</strong><p>Missing: ${esc(sandwich.missing_commands.join(', '))}</p></div>`
+        : ''}
+      ${(sandwich.mismatched_commands || []).length
+        ? `<div class="uly-finding severity-warning"><strong>Command links point elsewhere.</strong><p>Reconcile: ${esc(sandwich.mismatched_commands.join(', '))}</p></div>`
+        : ''}
+      <div class="uly-capability-list" style="margin-top:8px;">
+        ${controls.map(control => `
+          <button type="button"
+            data-sandwich-action="${esc(control.action)}"
+            title="${esc(control.reason)}"
+            aria-label="${esc(`${control.label}: ${control.reason}`)}"
+            ${control.enabled ? '' : 'disabled aria-disabled="true"'}>${esc(control.label)}</button>
+        `).join('')}
+      </div>
+    </section>`;
 }
 
 function managedItems(category) {
@@ -365,10 +441,31 @@ function capabilityChain(item) {
 
 function runtimeActionButtons(item) {
   const actions = item.actions || {};
+  const details = item.action_details || {};
   const labels = { open: 'Open in Zed', initialize: 'Create start/config', install: 'Install', start: 'Start', stop: 'Stop', restart: 'Restart', sync: 'Git sync', update: 'Update' };
-  return Object.entries(labels).map(([action, label]) =>
-    `<button type="button" data-runtime-action="${action}" data-runtime-id="${esc(item.id)}"${actions[action] ? '' : ' disabled'}>${label}</button>`
-  ).join('');
+  return Object.entries(labels).map(([action, label]) => {
+    const detail = details[action] || {};
+    const enabled = typeof detail.enabled === 'boolean' ? detail.enabled : !!actions[action];
+    const reason = detail.reason || (enabled ? `${label} ${item.label}.` : `${label} is unavailable for this runtime.`);
+    return `<button type="button" data-runtime-action="${action}" data-runtime-id="${esc(item.id)}" title="${esc(reason)}" aria-label="${esc(`${label}: ${reason}`)}"${enabled ? '' : ' disabled aria-disabled="true"'}>${label}</button>`;
+  }).join('');
+}
+
+function runtimeStateFacets(item) {
+  const states = item.states || {};
+  const labels = [
+    ['source', 'Source'],
+    ['process', 'Process'],
+    ['integration', 'Integration'],
+    ['update', 'Update'],
+  ];
+  return `
+    <div class="uly-service-deps" aria-label="${esc(item.label)} runtime state">
+      ${labels.map(([key, label]) => {
+        const value = states[key] || item[`${key}_state`] || 'unknown';
+        return `<span title="${esc(`${label}: ${String(value).replaceAll('_', ' ')}`)}"><b>${esc(label)}</b> ${statusBadge(value)}</span>`;
+      }).join('')}
+    </div>`;
 }
 
 function runtimeDocumentsHtml(item) {
@@ -433,6 +530,7 @@ function managedRuntimeCard(item) {
         ${item.git?.dirty ? '<span style="color:var(--orange,#ffb86c);">Git changes preserved · sync blocked</span>' : ''}
       </div>
       <div class="uly-service-path">${esc(item.root)}</div>
+      ${runtimeStateFacets(item)}
       <div class="uly-service-ports">${ports.length ? ports.map((port) => `<span class="${port.active ? 'active' : ''}">127.0.0.1:${esc(port.port)}</span>`).join('') : `<span class="muted">${item.resource_kind === 'skill_library' ? 'Indexed on demand; never injected wholesale' : item.resource_kind === 'repository' ? 'Source and update lifecycle only' : 'Command/tool runtime'}</span>`}</div>
       ${capabilityChain(item)}
       ${compose ? `
@@ -576,6 +674,19 @@ function renderHermes() {
   const preview = hermes.adoption_preview || {};
   const actions = Array.isArray(hermes.lifecycle_actions) ? hermes.lifecycle_actions : [];
   const hermesJobs = runtimeJobs.filter((job) => job.runtime_id === 'hermes.gateway');
+  const stack = hermesStack || {};
+  const stackProfiles = Array.isArray(stack.profiles) ? stack.profiles : [];
+  const stackArtifacts = Object.entries(stack.artifacts || {});
+  const missingArtifacts = stackArtifacts
+    .filter(([, present]) => !present)
+    .map(([name]) => name);
+  const stackPrerequisitesReady = Boolean(
+    stack.hermes_available
+    && stack.default_config_present
+    && stackArtifacts.length
+    && missingArtifacts.length === 0
+  );
+  const stackJobs = runtimeJobs.filter((job) => job.runtime_id === 'hermes.stack');
   return `
     <section class="uly-services-panel">
       <div class="uly-panel-heading">
@@ -599,6 +710,56 @@ function renderHermes() {
           <code>${esc(finding.code)}</code>
           <p>${esc(finding.evidence)}</p>
         </div>`).join('')}
+    </section>
+    <section class="uly-services-panel">
+      <div class="uly-panel-heading">
+        <div>
+          <h3>Hermes orchestration</h3>
+          <p>Ɗiogenēs observes the committed MCP, plugin, hook, workflow, and skill policy before applying it to native Hermes profiles.</p>
+        </div>
+        ${statusBadge(stack.ready ? 'ready' : (stackPrerequisitesReady ? 'pending' : 'blocked'))}
+      </div>
+      <dl class="uly-runtime-facts">
+        <div><dt>Services root</dt><dd><code>${esc(stack.services_root || 'Not observed')}</code></dd></div>
+        <div><dt>Hermes executable</dt><dd>${stack.hermes_available ? 'available' : 'not detected'}</dd></div>
+        <div><dt>Default profile</dt><dd>${stack.default_config_present ? 'configured' : 'configuration missing'}</dd></div>
+        <div><dt>Integration artifacts</dt><dd>${esc(stackArtifacts.filter(([, present]) => present).length)}/${esc(stackArtifacts.length)} ready</dd></div>
+        <div><dt>Gateway restart</dt><dd>${stack.gateway_restart_required ? 'included in the confirmed plan' : 'not required'}</dd></div>
+      </dl>
+      <div class="uly-command-grid">
+        ${stackProfiles.map((profile) => {
+          const issues = [
+            ...(profile.missing ? ['profile configuration missing'] : []),
+            ...(profile.missing_mcp || []).map((name) => `MCP: ${name}`),
+            ...(profile.missing_plugins || []).map((name) => `plugin: ${name}`),
+            ...(profile.rag_policy_missing || []).map((name) => `RAG policy: ${name}`),
+            ...(profile.always_enabled_but_disabled || []).map((name) => `always-on skill: ${name}`),
+            ...(profile.codebase_hook_ready === false ? ['codebase-memory hook'] : []),
+          ];
+          return `<div>
+            <strong>${esc(profile.profile || 'profile')} ${statusBadge(issues.length ? 'blocked' : 'ready')}</strong>
+            <code>${esc(profile.config_path || 'Configuration path unavailable')}</code>
+            <small>${issues.length ? esc(issues.join(' · ')) : 'MCP, plugin, hook, workflow, and skill policy is current.'}</small>
+          </div>`;
+        }).join('') || '<div class="uly-empty-state compact">Hermes profile readiness has not been observed.</div>'}
+      </div>
+      ${missingArtifacts.length
+        ? `<div class="uly-finding severity-error"><strong>Required integration artifacts are missing</strong><p>${esc(missingArtifacts.join(' · '))}</p></div>`
+        : ''}
+      <div class="uly-capability-list">
+        <button type="button" data-hermes-stack-apply${stackPrerequisitesReady ? '' : ' disabled'}>${stack.ready ? 'Reapply orchestration' : 'Apply orchestration'}</button>
+        <small>The confirmed plan applies policy, refreshes Retrieval, restarts the Hermes gateway, and verifies readiness. Providers, credentials, sessions, messaging, and unrelated registrations are preserved.</small>
+      </div>
+      <div class="uly-snapshot-list">
+        ${stackJobs.map((job) => `
+          <div>
+            <strong>${esc(job.summary)} ${statusBadge(job.status)}</strong>
+            <code>${esc(job.id)}</code>
+            <span>${esc(job.step_results?.length || 0)}/${esc(job.steps?.length || 0)} steps · ${esc(formatObservedAt(job.created_at))}</span>
+            <button type="button" data-view-job-log="${esc(job.id)}">${jobLogs[job.id] == null ? 'View log' : 'Refresh log'}</button>
+            ${jobLogs[job.id] == null ? '' : `<pre>${esc(jobLogs[job.id] || '(no output yet)')}</pre>`}
+          </div>`).join('') || '<div class="uly-empty-state compact">No Hermes orchestration jobs have been planned.</div>'}
+      </div>
     </section>
     <section class="uly-services-panel">
       <div class="uly-panel-heading">
@@ -796,8 +957,14 @@ function render() {
   root.querySelector('[data-hermes-adopt]')?.addEventListener('click', () => {
     adoptHermes();
   });
+  root.querySelector('[data-hermes-stack-apply]')?.addEventListener('click', () => {
+    planHermesStackApply();
+  });
   root.querySelectorAll('[data-hermes-action]').forEach((button) => {
     button.addEventListener('click', () => planHermesAction(button.dataset.hermesAction));
+  });
+  root.querySelectorAll('[data-sandwich-action]').forEach((button) => {
+    button.addEventListener('click', () => planSandwichAction(button.dataset.sandwichAction));
   });
   root.querySelectorAll('[data-copy-cuda-launch]').forEach((button) => {
     button.addEventListener('click', async () => {
@@ -942,7 +1109,7 @@ async function planHermesAction(actionId) {
     const job = planned.job || {};
     const labels = (job.steps || []).map((step, index) => `${index + 1}. ${step.label}`).join('\n');
     const confirmed = await uiModule.styledConfirm(
-      `${job.summary}\n\n${labels}\n\nThis job is durable and will retain its step results after an Diogenes restart.`,
+      `${job.summary}\n\n${labels}\n\nThis job is durable and will retain its step results after a Ɗiogenēs restart.`,
       {
         title: 'Confirm lifecycle plan',
         confirmText: action.label,
@@ -965,6 +1132,52 @@ async function planHermesAction(actionId) {
   } catch (error) {
     loadError = error?.message || String(error);
     render();
+  }
+}
+
+async function planHermesStackApply() {
+  const wantsPlan = await uiModule.styledConfirm(
+    'Create a fixed Hermes orchestration plan? Ɗiogenēs will apply the committed integration policy, refresh Retrieval, restart the Hermes gateway, and verify the result. Nothing runs until the plan is confirmed separately.',
+    {
+      title: 'Plan Hermes orchestration',
+      confirmText: 'Create plan',
+      cancelText: 'Cancel',
+      danger: true,
+    },
+  );
+  if (!wantsPlan) return;
+  try {
+    const planned = await request('/api/odysseus/hermes/stack/jobs/plan', {
+      method: 'POST',
+      body: JSON.stringify({ action: 'apply' }),
+    });
+    const job = planned.job || {};
+    const steps = (job.steps || [])
+      .map((step, index) => `${index + 1}. ${step.label}`)
+      .join('\n');
+    const confirmed = await uiModule.styledConfirm(
+      `${job.summary}\n\n${steps}\n\nThis plan preserves Hermes providers, credentials, sessions, messaging configuration, and unrelated registrations.`,
+      {
+        title: 'Confirm Hermes orchestration',
+        confirmText: 'Apply orchestration',
+        cancelText: 'Keep plan only',
+        danger: true,
+      },
+    );
+    if (!confirmed) {
+      await load();
+      return;
+    }
+    await request(`/api/odysseus/jobs/${encodeURIComponent(job.id)}/execute`, {
+      method: 'POST',
+      body: JSON.stringify({
+        confirmation_token: planned.confirmation_token,
+        confirmation_phrase: job.confirmation_phrase,
+      }),
+    });
+    await load();
+  } catch (error) {
+    uiModule.showToast(`Hermes orchestration was not run: ${error?.message || error}`, 9000);
   }
 }
 
@@ -1080,6 +1293,52 @@ async function planManagedRuntime(runtimeId, action) {
   }
 }
 
+async function planSandwichAction(action) {
+  if (!action) return;
+  const wantsPlan = await uiModule.styledConfirm(
+    `Create a fixed Sandwich ${action} plan? Nothing runs until the generated argv-only steps are confirmed separately.`,
+    {
+      title: 'Plan Sandwich action',
+      confirmText: 'Create plan',
+      cancelText: 'Cancel',
+      danger: action === 'install' || action === 'sync',
+    },
+  );
+  if (!wantsPlan) return;
+  try {
+    const planned = await request('/api/odysseus/sandwich/jobs/plan', {
+      method: 'POST',
+      body: JSON.stringify({ action }),
+    });
+    const job = planned.job || {};
+    const steps = (job.steps || []).map((step, index) => `${index + 1}. ${step.label}`).join('\n');
+    const confirmed = await uiModule.styledConfirm(
+      `${job.summary}\n\n${steps}\n\nThe durable job log remains available in Services.`,
+      {
+        title: 'Confirm Sandwich action',
+        confirmText: action === 'doctor' ? 'Run doctor' : 'Run',
+        cancelText: 'Keep plan only',
+        danger: action === 'install' || action === 'sync',
+      },
+    );
+    if (!confirmed) {
+      await load();
+      return;
+    }
+    await request(`/api/odysseus/jobs/${encodeURIComponent(job.id)}/execute`, {
+      method: 'POST',
+      body: JSON.stringify({
+        confirmation_token: planned.confirmation_token,
+        confirmation_phrase: job.confirmation_phrase,
+      }),
+    });
+    uiModule.showToast(`${job.summary} started. Progress is available in Services.`, 6000);
+    await load();
+  } catch (error) {
+    uiModule.showToast(`Sandwich action was not run: ${error?.message || error}`, 9000);
+  }
+}
+
 async function toggleRuntimeConfig(runtimeId) {
   if (expandedRuntime === runtimeId) {
     expandedRuntime = '';
@@ -1150,10 +1409,21 @@ async function load() {
   loading = true;
   loadError = '';
   render();
-  const [topologyResult, chromaResult, hermesResult, jobsResult, readinessResult, runtimesResult] = await Promise.allSettled([
+  const [
+    topologyResult,
+    chromaResult,
+    hermesResult,
+    hermesStackResult,
+    sandwichResult,
+    jobsResult,
+    readinessResult,
+    runtimesResult,
+  ] = await Promise.allSettled([
     request('/api/odysseus/topology'),
     request('/api/odysseus/chroma/persistence'),
     request('/api/odysseus/hermes/adoption'),
+    request('/api/odysseus/hermes/stack'),
+    request('/api/odysseus/sandwich'),
     request('/api/odysseus/jobs?limit=50'),
     request('/api/odysseus/readiness'),
     request('/api/odysseus/runtimes'),
@@ -1161,12 +1431,14 @@ async function load() {
   topology = topologyResult.status === 'fulfilled' ? topologyResult.value : null;
   chroma = chromaResult.status === 'fulfilled' ? chromaResult.value : null;
   hermes = hermesResult.status === 'fulfilled' ? hermesResult.value : null;
+  hermesStack = hermesStackResult.status === 'fulfilled' ? hermesStackResult.value : null;
+  sandwich = sandwichResult.status === 'fulfilled' ? sandwichResult.value : null;
   runtimeJobs = jobsResult.status === 'fulfilled' && Array.isArray(jobsResult.value?.jobs)
     ? jobsResult.value.jobs
     : [];
   readiness = readinessResult.status === 'fulfilled' ? readinessResult.value : null;
   managedRuntimes = runtimesResult.status === 'fulfilled' ? runtimesResult.value : null;
-  const errors = [topologyResult, chromaResult, hermesResult, jobsResult, readinessResult, runtimesResult]
+  const errors = [topologyResult, chromaResult, hermesResult, hermesStackResult, sandwichResult, jobsResult, readinessResult, runtimesResult]
     .filter((result) => result.status === 'rejected')
     .map((result) => result.reason?.message || String(result.reason));
   loadError = errors.join(' · ');

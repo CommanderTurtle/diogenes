@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -370,6 +371,13 @@ def test_open_and_initialize_actions_use_project_root(
                     "dependencies_ready": True,
                     "active_dependents": [],
                     "tmux": {"managed": False},
+                    "action_details": {
+                        "open": {"enabled": True, "reason": "Open project."},
+                        "initialize": {
+                            "enabled": True,
+                            "reason": "Create defaults.",
+                        },
+                    },
                 }
             ]
         },
@@ -394,7 +402,7 @@ def test_open_and_initialize_actions_use_project_root(
     ]
 
 
-def test_native_update_plan_stops_installs_and_restarts_managed_session(
+def test_native_update_plan_verifies_before_restarting_managed_session(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -420,16 +428,16 @@ def test_native_update_plan_stops_installs_and_restarts_managed_session(
         action="update",
     )
 
-    assert plan["steps"][0]["argv"] == [
+    assert plan["steps"][0]["argv"][1:4] == [
+        "-m",
+        "src.ulysses_signal_update",
+        "--install-user",
+    ]
+    assert plan["steps"][1]["argv"] == [
         "tmux",
         "kill-session",
         "-t",
         "ulysses-signal-cli",
-    ]
-    assert plan["steps"][1]["argv"][1:4] == [
-        "-m",
-        "src.ulysses_signal_update",
-        "--install-user",
     ]
     assert plan["steps"][2]["argv"][-2:] == ["bash", "runconfig.sh"]
 
@@ -673,3 +681,533 @@ def test_external_active_runtime_rejects_source_mutation(
     message = "stop the active runtime" if action == "sync" else "active runtime is external"
     with pytest.raises(manager.RuntimeJobError, match=message):
         manager.ManagedRuntimeControl(tmp_path / "state")._steps(item, action)
+
+
+def test_git_remote_status_reports_ahead_and_behind_without_changing_refs(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    local_commit = "1" * 40
+    remote_commit = "2" * 40
+    calls: list[list[str]] = []
+
+    def fake_run(
+        argv: list[str],
+        *,
+        cwd: Path | None = None,
+        timeout: int = 20,
+    ) -> subprocess.CompletedProcess[str]:
+        del cwd, timeout
+        calls.append(argv)
+        if "ls-remote" in argv:
+            return subprocess.CompletedProcess(
+                argv,
+                0,
+                f"{remote_commit}\trefs/heads/main\n",
+                "",
+            )
+        if "cat-file" in argv:
+            return subprocess.CompletedProcess(argv, 0, "", "")
+        if "rev-list" in argv:
+            return subprocess.CompletedProcess(argv, 0, "1\t2\n", "")
+        raise AssertionError(argv)
+
+    monkeypatch.setattr(manager, "_run", fake_run)
+    manager._GIT_REMOTE_CACHE.clear()
+    item = {
+        "root": tmp_path,
+        "git_update": True,
+        "source_url": "https://github.com/example/runtime.git",
+        "source_branch": "main",
+    }
+    observed = manager._git_remote_status(
+        item,
+        {
+            "present": True,
+            "dirty": False,
+            "branch": "main",
+            "commit": local_commit,
+            "origin": "https://github.com/example/runtime.git",
+        },
+    )
+
+    assert observed["remote_commit"] == remote_commit
+    assert observed["ahead"] == 1
+    assert observed["behind"] == 2
+    assert observed["update_status"] == "diverged"
+    flattened = [argument for call in calls for argument in call]
+    assert "merge" not in flattened
+    assert "checkout" not in flattened
+    assert "--no-write-fetch-head" not in flattened
+
+
+def test_port_only_process_at_a_missing_root_is_unmanaged(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(manager, "_port_open", lambda _port: True)
+    monkeypatch.setattr(manager, "_tmux_alive", lambda _name: False)
+    monkeypatch.setattr(manager, "_compose", lambda _item: None)
+
+    observed = manager._observe_runtime_state(
+        {
+            "id": "example.gateway",
+            "category": "javascript",
+            "root": tmp_path / "missing",
+            "ports": [7999],
+        }
+    )
+
+    assert observed["running"] is True
+    assert observed["process_state"] == "running_external"
+    assert observed["port_collision"] is True
+
+
+def test_repository_state_is_installed_not_stopped_and_explains_actions(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "cli"
+    root.mkdir()
+    item = {
+        "id": "example.cli",
+        "label": "Example CLI",
+        "category": "native",
+        "resource_kind": "repository",
+        "root": root,
+        "documents": (),
+        "bootstrap_files": (),
+        "data_directories": (),
+        "ports": [],
+    }
+    monkeypatch.setattr(manager, "load_runtime_management", lambda: (item,))
+    monkeypatch.setattr(
+        manager,
+        "observe_sandwich_installation",
+        lambda: SimpleNamespace(installed=True),
+    )
+    monkeypatch.setattr(
+        manager,
+        "_git_status",
+        lambda _item: {
+            "present": False,
+            "dirty": False,
+            "branch": None,
+            "commit": None,
+            "origin": None,
+            "update_status": "not_applicable",
+        },
+    )
+    monkeypatch.setattr(manager.shutil, "which", lambda _name: None)
+
+    runtime = manager.collect_managed_runtimes()["runtimes"][0]
+
+    assert runtime["status"] == "installed"
+    assert runtime["states"] == {
+        "source": "installed",
+        "process": "not_applicable",
+        "integration": "not_applicable",
+        "update": "not_applicable",
+    }
+    assert runtime["actions"]["start"] is False
+    assert runtime["action_details"]["start"]["enabled"] is False
+    assert "no persistent process" in runtime["action_details"]["start"]["reason"]
+
+
+def test_native_git_update_never_installs_javascript_dependencies(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "retrieval"
+    root.mkdir()
+    setup = root / "setup.sh"
+    item = {
+        "id": "retrieval.mcp",
+        "label": "Hermes Retrieval",
+        "category": "native",
+        "resource_kind": "mcp",
+        "root": root,
+        "documents": (),
+        "git_update": True,
+        "source_url": "https://github.com/CommanderTurtle/retrieval.git",
+        "source_branch": "main",
+        "setup": {
+            "kind": "shell_script",
+            "value": "setup.sh",
+            "path": setup,
+        },
+        "setup_on_update": True,
+        "ports": [],
+    }
+    monkeypatch.setattr(
+        manager,
+        "collect_managed_runtimes",
+        lambda: {
+            "runtimes": [
+                {
+                    "id": "retrieval.mcp",
+                    "status": "installed",
+                    "process_state": "not_applicable",
+                    "dependencies_ready": True,
+                    "active_dependents": [],
+                    "tmux": {"managed": False},
+                }
+            ]
+        },
+    )
+    monkeypatch.setattr(
+        manager,
+        "_git",
+        lambda _root: {
+            "present": True,
+            "dirty": False,
+            "branch": "main",
+            "commit": "1" * 40,
+            "origin": "https://github.com/CommanderTurtle/retrieval.git",
+        },
+    )
+
+    steps = manager.ManagedRuntimeControl(tmp_path / "state")._steps(
+        item,
+        "update",
+    )
+    argv = [argument for step in steps for argument in step["argv"]]
+
+    assert [step["label"] for step in steps] == [
+        "Fetch project source",
+        "Fast-forward project source",
+        "Refresh project-native integration",
+    ]
+    assert "bun" not in argv
+    assert str(setup) in argv
+
+
+def test_catalog_has_portable_librarian_retrieval_and_n8n_contracts(
+    tmp_path: Path,
+) -> None:
+    items = {
+        item["id"]: item
+        for item in manager.load_runtime_management(
+            home=tmp_path,
+            services_root=tmp_path / "services",
+        )
+    }
+
+    librarian = items["librarian.mcp"]
+    retrieval = items["retrieval.mcp"]
+    codebase = items["codebase.memory.mcp"]
+    n8n = items["n8n.automation"]
+
+    assert librarian["source_url"] == (
+        "https://github.com/CommanderTurtle/librarian.git"
+    )
+    assert librarian["setup"] == {
+        "kind": "bun_script",
+        "value": "setup",
+        "args": (),
+    }
+    assert retrieval["source_url"] == (
+        "https://github.com/CommanderTurtle/retrieval.git"
+    )
+    assert retrieval["setup"]["path"] == (
+        tmp_path / "services" / "retrieval" / "setup.sh"
+    ).resolve()
+    assert librarian["readiness_checks"] == ()
+    assert codebase["readiness_checks"][0]["path"] == (
+        tmp_path / ".local" / "bin" / "codebase-memory-mcp"
+    ).resolve()
+    assert n8n["root"] == (tmp_path / "services" / "n8n").resolve()
+    assert n8n["optional"] is True
+    assert n8n["dashboard"]["url"] == "http://127.0.0.1:5678"
+    bootstrap = {
+        str(value["path"].name): value["content"]
+        for value in n8n["bootstrap_files"]
+    }
+    assert "N8N_DIAGNOSTICS_ENABLED=false" in bootstrap[".env"]
+    assert "N8N_PERSONALIZATION_ENABLED=false" in bootstrap[".env"]
+    assert "docker.n8n.io/n8nio/n8n:2.31.6" in bootstrap["compose.yml"]
+    assert "N8N_IMAGE=" in bootstrap[".env"]
+    assert "N8N_SECURE_COOKIE=false" in bootstrap[".env"]
+
+
+def test_n8n_install_plan_materializes_config_and_pulls_without_starting(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    n8n = next(
+        item
+        for item in manager.load_runtime_management(
+            home=tmp_path,
+            services_root=tmp_path / "services",
+        )
+        if item["id"] == "n8n.automation"
+    )
+    monkeypatch.setattr(
+        manager,
+        "collect_managed_runtimes",
+        lambda: {
+            "runtimes": [
+                {
+                    "id": "n8n.automation",
+                    "status": "not_installed",
+                    "process_state": "stopped",
+                    "dependencies_ready": True,
+                    "active_dependents": [],
+                    "tmux": {"managed": False},
+                }
+            ]
+        },
+    )
+
+    steps = manager.ManagedRuntimeControl(tmp_path / "state")._steps(
+        n8n,
+        "install",
+    )
+
+    assert [step["label"] for step in steps] == [
+        "Create runtime directory",
+        "Create persistent project data directories",
+        "Create project-local startup and configuration",
+        "Validate Compose project",
+        "Pull Compose images",
+    ]
+    assert not any(
+        argument == "up"
+        for step in steps
+        for argument in step["argv"]
+    )
+    assert "--env-file" in steps[-2]["argv"]
+
+
+def test_searxng_uses_official_source_but_adopts_existing_legacy_compose(
+    tmp_path: Path,
+) -> None:
+    services = tmp_path / "services"
+    root = services / "SEARXNG" / "searxng"
+    root.mkdir(parents=True)
+    legacy = root / "docker-compose.yml"
+    legacy.write_text("services:\n  core:\n    image: searxng/searxng\n", encoding="utf-8")
+
+    item = next(
+        item
+        for item in manager.load_runtime_management(
+            home=tmp_path,
+            services_root=services,
+        )
+        if item["id"] == "searxng.search"
+    )
+
+    assert item["source_url"] == "https://github.com/searxng/searxng.git"
+    assert item["source_branch"] == "master"
+    assert item["compose"] == legacy.resolve()
+    assert item["compose_primary"] == (
+        root / "container" / "docker-compose.yml"
+    ).resolve()
+
+
+def test_non_git_searxng_update_is_an_image_only_compose_update(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    services = tmp_path / "services"
+    root = services / "SEARXNG" / "searxng"
+    root.mkdir(parents=True)
+    (root / "docker-compose.yml").write_text(
+        "services:\n  core:\n    image: searxng/searxng\n  valkey:\n    image: valkey/valkey\n",
+        encoding="utf-8",
+    )
+    item = next(
+        item
+        for item in manager.load_runtime_management(
+            home=tmp_path,
+            services_root=services,
+        )
+        if item["id"] == "searxng.search"
+    )
+    monkeypatch.setattr(
+        manager,
+        "collect_managed_runtimes",
+        lambda: {
+            "runtimes": [
+                {
+                    "id": item["id"],
+                    "status": "stopped",
+                    "process_state": "stopped",
+                    "dependencies_ready": True,
+                    "active_dependents": [],
+                    "tmux": {"managed": False},
+                }
+            ]
+        },
+    )
+
+    steps = manager.ManagedRuntimeControl(tmp_path / "state")._steps(
+        item,
+        "update",
+    )
+
+    assert [step["label"] for step in steps] == ["Pull Compose images"]
+    assert steps[0]["argv"][-2:] == ["core", "valkey"]
+    assert all("git" not in step["argv"] for step in steps)
+
+
+def test_firecrawl_lifecycle_operates_the_complete_official_stack(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    item = next(
+        item
+        for item in manager.load_runtime_management(
+            home=tmp_path,
+            services_root=tmp_path / "services",
+        )
+        if item["id"] == "firecrawl.api"
+    )
+    monkeypatch.setattr(
+        manager,
+        "collect_managed_runtimes",
+        lambda: {
+            "runtimes": [
+                {
+                    "id": item["id"],
+                    "status": "stopped",
+                    "process_state": "stopped",
+                    "dependencies_ready": True,
+                    "active_dependents": [],
+                    "tmux": {"managed": False},
+                }
+            ]
+        },
+    )
+
+    step = manager.ManagedRuntimeControl(tmp_path / "state")._steps(
+        item,
+        "start",
+    )[0]
+
+    assert step["argv"][-2:] == ["up", "-d"]
+    assert "api" not in step["argv"]
+    firecrawl_env = next(
+        bootstrap["content"]
+        for bootstrap in item["bootstrap_files"]
+        if bootstrap["path"].name == ".env"
+    )
+    assert "PORT=3002" in firecrawl_env
+    assert "USE_DB_AUTHENTICATION=false" in firecrawl_env
+    assert "SEARXNG_ENDPOINT=http://host.docker.internal:7070" in firecrawl_env
+
+
+def test_missing_declared_artifact_reports_incomplete_and_keeps_repair(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    item = next(
+        item
+        for item in manager.load_runtime_management(
+            home=tmp_path,
+            services_root=tmp_path / "services",
+        )
+        if item["id"] == "signal.cli"
+    )
+    item["root"].mkdir(parents=True)
+    monkeypatch.setattr(manager, "load_runtime_management", lambda: (item,))
+    monkeypatch.setattr(manager, "_port_open", lambda _port: False)
+    monkeypatch.setattr(manager, "_tmux_alive", lambda _name: False)
+    monkeypatch.setattr(
+        manager,
+        "observe_sandwich_installation",
+        lambda: SimpleNamespace(installed=True),
+    )
+
+    runtime = manager.collect_managed_runtimes()["runtimes"][0]
+
+    assert runtime["status"] == "incomplete"
+    assert runtime["runtime_ready"] is False
+    assert runtime["actions"]["start"] is False
+    assert runtime["actions"]["update"] is True
+    assert any(
+        check["label"] == "signal-cli command" and not check["ready"]
+        for check in runtime["readiness"]["checks"]
+    )
+
+
+def test_action_planning_fails_closed_when_observation_omits_capability(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "service"
+    root.mkdir()
+    item = {
+        "id": "example.service",
+        "label": "Example",
+        "category": "native",
+        "root": root,
+        "documents": (),
+        "ports": [],
+    }
+    monkeypatch.setattr(manager, "load_runtime_management", lambda: (item,))
+    monkeypatch.setattr(
+        manager,
+        "collect_managed_runtimes",
+        lambda: {
+            "runtimes": [
+                {
+                    "id": "example.service",
+                    "status": "stopped",
+                    "dependencies_ready": True,
+                    "active_dependents": [],
+                    "tmux": {"managed": False},
+                }
+            ]
+        },
+    )
+
+    with pytest.raises(manager.RuntimeJobError, match="not currently available"):
+        manager.ManagedRuntimeControl(tmp_path / "state").create_plan(
+            runtime_id="example.service",
+            action="open",
+        )
+
+
+def test_install_plan_accepts_the_same_empty_directory_as_observation(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "native"
+    root.mkdir()
+    item = {
+        "id": "example.native",
+        "label": "Example native",
+        "category": "native",
+        "root": root,
+        "documents": (),
+        "bootstrap_files": (),
+        "data_directories": (),
+        "update_module": "src.example_update",
+        "update_args": [],
+        "ports": [],
+    }
+    monkeypatch.setattr(
+        manager,
+        "collect_managed_runtimes",
+        lambda: {
+            "runtimes": [
+                {
+                    "id": item["id"],
+                    "status": "incomplete",
+                    "process_state": "stopped",
+                    "dependencies_ready": True,
+                    "active_dependents": [],
+                    "tmux": {"managed": False},
+                }
+            ]
+        },
+    )
+
+    steps = manager.ManagedRuntimeControl(tmp_path / "state")._steps(
+        item,
+        "install",
+    )
+
+    assert steps[0]["label"] == "Create runtime directory"
+    assert steps[-1]["argv"][1:3] == ["-m", "src.example_update"]

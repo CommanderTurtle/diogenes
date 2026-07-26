@@ -132,9 +132,9 @@ python3 ~/.claude/skills/odysseus/scripts/odysseus_api.py cookbook stop serve-ab
 
 # Relaunch with new flags. cmd MUST begin with one of the allowlisted binaries.
 python3 ~/.claude/skills/odysseus/scripts/odysseus_api.py cookbook serve \
-  /mnt/HADES/models/Qwen3.5-397B-A17B-AWQ \
-  "vllm serve /mnt/HADES/models/Qwen3.5-397B-A17B-AWQ --host 0.0.0.0 --port 8001 --tensor-parallel-size 8 --max-model-len 262144 --gpu-memory-utilization 0.90 --dtype auto --max-num-seqs 8 --trust-remote-code --enable-expert-parallel --enable-auto-tool-choice --tool-call-parser qwen3_coder --reasoning-parser qwen3" \
-  pewds@192.168.1.12
+  /models/example-model \
+  "vllm serve /models/example-model --host 0.0.0.0 --port 8001 --gpu-memory-utilization 0.90" \
+  gpu-box
 ```
 
 **Debug loop pattern:** when a serve is failing, the productive sequence is

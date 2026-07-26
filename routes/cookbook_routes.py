@@ -56,8 +56,6 @@ from routes.cookbook_helpers import (
     _append_vllm_linux_preflight_lines, _ollama_bind_from_cmd, _pip_install_fallback_chain,
     _pip_install_no_cache, _user_shell_path_bootstrap, _venv_safe_local_pip_install_cmd,
     _diagnose_serve_output, run_ssh_command_async,
-    _ollama_bind_from_cmd, _pip_install_fallback_chain, _pip_install_no_cache,
-    _user_shell_path_bootstrap, _venv_safe_local_pip_install_cmd,
     _append_pip_install_runner_lines, _pip_install_command_without_break_system_packages,
     _normalize_llama_cpp_python_cache_types,
     ModelDownloadRequest, ServeRequest,
@@ -67,15 +65,55 @@ from src.ulysses_colibri_command import (
     ColibriCommandError,
     validate_colibri_serve_command,
 )
+from src.ulysses_prism import (
+    PROVIDER_ID as PRISM_PROVIDER_ID,
+    collect_prism_providers,
+    default_prism_catalog,
+)
+from src.ulysses_prism_command import (
+    PrismCommandError,
+    validate_prism_serve_command,
+)
 
 _HF_TOKEN_STATUS_SNIPPET = (
     'if [ -n "$HF_TOKEN" ]; then '
     'echo "[odysseus] HF token: applied"; '
     'else '
     'echo "[odysseus] HF token: NOT SET — gated/private models will be denied. '
-    'Add one in Odysseus Cookbook -> Settings -> HuggingFace Token."; '
+    'Add one in Ɗiogenēs Cookbook -> Settings -> HuggingFace Token."; '
     'fi'
 )
+
+
+def _hf_xet_env_lines(*, reliable: bool, powershell: bool = False) -> list[str]:
+    """Return the current Hugging Face transfer-lane environment contract.
+
+    Xet is the supported high-performance transport in current
+    ``huggingface_hub``. The reliable lane deliberately disables it while
+    preserving the Hub cache, so a retry resumes existing partial data.
+    """
+    disable_xet = "1" if reliable else "0"
+    high_performance = "0" if reliable else "1"
+    if powershell:
+        return [
+            f'$env:HF_HUB_DISABLE_XET = "{disable_xet}"',
+            f'$env:HF_XET_HIGH_PERFORMANCE = "{high_performance}"',
+        ]
+    return [
+        f"export HF_HUB_DISABLE_XET={disable_xet}",
+        f"export HF_XET_HIGH_PERFORMANCE={high_performance}",
+    ]
+
+
+def _hf_hub_capability_check(*, require_xet: bool) -> str:
+    """Python snippet that rejects pre-Xet Hub clients and missing Xet wheels."""
+    xet_import = "import hf_xet; " if require_xet else ""
+    return (
+        f"{xet_import}"
+        "from importlib.metadata import version; "
+        "from packaging.version import Version; "
+        "assert Version(version('huggingface-hub')) >= Version('0.32.0')"
+    )
 
 
 def _serve_supports_tools(runtime_id: str | None, command: str) -> bool | None:
@@ -90,6 +128,8 @@ def _serve_supports_tools(runtime_id: str | None, command: str) -> bool | None:
     )
     if capability is not None:
         return capability
+    if runtime_id == PRISM_PROVIDER_ID:
+        return True
     return True if "--enable-auto-tool-choice" in command else None
 
 
@@ -390,6 +430,135 @@ def _append_local_ollama_download_command_lines(
     lines.append('if [ -z "$ODYSSEUS_OLLAMA_PULL_CMD" ]; then echo "ERROR: Ollama not found on this server. Install Ollama or start an ollama-rocm/ollama-test container."; exit 127; fi')
 
 
+def _resolve_cached_hf_snapshot(
+    repo_id: str,
+    *,
+    environ: dict[str, str] | None = None,
+    home: Path | None = None,
+) -> Path | None:
+    """Return a complete local Hugging Face snapshot without assuming a user home."""
+    env = os.environ if environ is None else environ
+    cache_roots: list[Path] = []
+    for key in ("HF_HUB_CACHE", "HUGGINGFACE_HUB_CACHE"):
+        raw = str(env.get(key, "") or "").strip()
+        if raw:
+            cache_roots.append(Path(raw).expanduser())
+    hf_home = str(env.get("HF_HOME", "") or "").strip()
+    if hf_home:
+        cache_roots.append(Path(hf_home).expanduser() / "hub")
+    cache_roots.append((home or Path.home()) / ".cache" / "huggingface" / "hub")
+
+    repo_cache_name = f"models--{repo_id.replace('/', '--')}"
+    seen: set[str] = set()
+    for cache_root in cache_roots:
+        cache_key = str(cache_root)
+        if cache_key in seen:
+            continue
+        seen.add(cache_key)
+        repo_root = cache_root / repo_cache_name
+        snapshots_root = repo_root / "snapshots"
+        if not snapshots_root.is_dir():
+            continue
+
+        candidates: list[Path] = []
+        main_ref = repo_root / "refs" / "main"
+        try:
+            revision = main_ref.read_text(encoding="utf-8").strip()
+        except OSError:
+            revision = ""
+        if re.fullmatch(r"[0-9A-Fa-f]{7,64}", revision):
+            candidates.append(snapshots_root / revision)
+        try:
+            candidates.extend(
+                sorted(
+                    (path for path in snapshots_root.iterdir() if path.is_dir()),
+                    key=lambda path: path.stat().st_mtime,
+                    reverse=True,
+                )
+            )
+        except OSError:
+            pass
+
+        checked: set[str] = set()
+        for candidate in candidates:
+            candidate_key = str(candidate)
+            if candidate_key in checked:
+                continue
+            checked.add(candidate_key)
+            try:
+                entries = list(candidate.iterdir())
+            except OSError:
+                continue
+            if entries and not any(entry.name.endswith(".incomplete") for entry in entries):
+                return candidate.resolve()
+    return None
+
+
+def _normalize_minimax_m3_vllm_cmd(cmd: str) -> str:
+    """Normalize MiniMax M3 vLLM launches while keeping cache paths portable."""
+    cmd_lower = (cmd or "").lower()
+    if not cmd or "vllm serve" not in cmd_lower or "minimax" not in cmd_lower or "m3" not in cmd_lower:
+        return cmd
+    try:
+        parts = shlex.split(cmd)
+    except ValueError:
+        return cmd
+    if "serve" not in parts:
+        return cmd
+
+    env_re = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
+    env_parts = [part for part in parts if env_re.match(part)]
+    body = [part for part in parts if not env_re.match(part)]
+    try:
+        serve_i = body.index("serve")
+    except ValueError:
+        return cmd
+    if serve_i + 1 >= len(body):
+        return cmd
+
+    repo_id = "cyankiwi/MiniMax-M3-AWQ-INT4"
+    if body[serve_i + 1] == repo_id:
+        snapshot = _resolve_cached_hf_snapshot(repo_id)
+        if snapshot is not None:
+            body[serve_i + 1] = str(snapshot)
+
+    def add_env(key: str, value: str) -> None:
+        if not any(part.startswith(f"{key}=") for part in env_parts):
+            env_parts.append(f"{key}={value}")
+
+    def has_flag(flag: str) -> bool:
+        return any(part == flag or part.startswith(flag + "=") for part in body)
+
+    def set_flag(flag: str, value: str) -> None:
+        for index, part in enumerate(body):
+            if part == flag:
+                if index + 1 < len(body):
+                    body[index + 1] = value
+                else:
+                    body.append(value)
+                return
+            if part.startswith(flag + "="):
+                body[index] = f"{flag}={value}"
+                return
+        body.extend([flag, value])
+
+    def add_bool(flag: str) -> None:
+        if not has_flag(flag):
+            body.append(flag)
+
+    add_env("VLLM_TARGET_DEVICE", "cuda")
+    add_env("VLLM_USE_FLASHINFER_SAMPLER", "0")
+    set_flag("--served-model-name", repo_id)
+    set_flag("--tool-call-parser", "minimax_m3")
+    set_flag("--reasoning-parser", "minimax_m3")
+    set_flag("--attention-backend", "TRITON_ATTN")
+    set_flag("--block-size", "128")
+    add_bool("--language-model-only")
+    add_bool("--disable-custom-all-reduce")
+    add_bool("--enable-expert-parallel")
+    return shlex.join(env_parts + body)
+
+
 def setup_cookbook_routes() -> APIRouter:
     router = APIRouter(tags=["cookbook"])
     _cookbook_state_path = Path(COOKBOOK_STATE_FILE)
@@ -630,79 +799,6 @@ def setup_cookbook_routes() -> APIRouter:
 
     def _load_stored_hf_token() -> str:
         return load_stored_hf_token(state_path=_cookbook_state_path)
-
-    def _normalize_minimax_m3_vllm_cmd(cmd: str) -> str:
-        """Patch MiniMax M3 vLLM launches into the known-good local form.
-
-        The browser form can be stale or omit advanced-only fields. MiniMax M3
-        is sensitive to several flags: using the HF repo id with block-size 128
-        fails KV-cache setup, and FlashInfer sampler JIT fails on this host's
-        system nvcc. Normalize server-side before writing the tmux runner.
-        """
-        cmd_lower = (cmd or "").lower()
-        if not cmd or "vllm serve" not in cmd_lower or "minimax" not in cmd_lower or "m3" not in cmd_lower:
-            return cmd
-        try:
-            parts = shlex.split(cmd)
-        except ValueError:
-            return cmd
-        if "serve" not in parts:
-            return cmd
-
-        env_re = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
-        env_parts = [p for p in parts if env_re.match(p)]
-        body = [p for p in parts if not env_re.match(p)]
-        try:
-            serve_i = body.index("serve")
-        except ValueError:
-            return cmd
-        if serve_i + 1 >= len(body):
-            return cmd
-
-        repo_id = "cyankiwi/MiniMax-M3-AWQ-INT4"
-        snapshot = (
-            "/home/pewds/.cache/huggingface/hub/"
-            "models--cyankiwi--MiniMax-M3-AWQ-INT4/"
-            "snapshots/4082acbbec1236d21828d55b6bb0fe02ade4ab5b"
-        )
-        if body[serve_i + 1] == repo_id:
-            body[serve_i + 1] = snapshot
-
-        def add_env(key: str, value: str) -> None:
-            if not any(p.startswith(f"{key}=") for p in env_parts):
-                env_parts.append(f"{key}={value}")
-
-        def has_flag(flag: str) -> bool:
-            return any(p == flag or p.startswith(flag + "=") for p in body)
-
-        def set_flag(flag: str, value: str) -> None:
-            for i, part in enumerate(body):
-                if part == flag:
-                    if i + 1 < len(body):
-                        body[i + 1] = value
-                    else:
-                        body.append(value)
-                    return
-                if part.startswith(flag + "="):
-                    body[i] = f"{flag}={value}"
-                    return
-            body.extend([flag, value])
-
-        def add_bool(flag: str) -> None:
-            if not has_flag(flag):
-                body.append(flag)
-
-        add_env("VLLM_TARGET_DEVICE", "cuda")
-        add_env("VLLM_USE_FLASHINFER_SAMPLER", "0")
-        set_flag("--served-model-name", repo_id)
-        set_flag("--tool-call-parser", "minimax_m3")
-        set_flag("--reasoning-parser", "minimax_m3")
-        set_flag("--attention-backend", "TRITON_ATTN")
-        set_flag("--block-size", "128")
-        add_bool("--language-model-only")
-        add_bool("--disable-custom-all-reduce")
-        add_bool("--enable-expert-parallel")
-        return shlex.join(env_parts + body)
 
     def _normalize_deepseek_v4_sglang_cmd(cmd: str) -> str:
         """Patch stale DeepSeek-V4 SGLang commands into the safer local form.
@@ -1065,6 +1161,7 @@ def setup_cookbook_routes() -> APIRouter:
         req.local_dir = _validate_local_dir(req.local_dir)
         req.hf_token = "" if is_ollama_download else (req.hf_token or _load_stored_hf_token())
         _validate_token(req.hf_token)
+        reliable_download = req.use_reliable_download
         if req.remote_host and not req.env_prefix:
             req.env_prefix = _server_env_prefix_for_download(req.remote_host)
         TMUX_LOG_DIR.mkdir(parents=True, exist_ok=True)
@@ -1110,10 +1207,9 @@ def setup_cookbook_routes() -> APIRouter:
         # activated venv. Local bash runs only — meaningless over SSH.
         if not req.remote_host:
             lines.append(_local_tooling_path_export(sys.executable))
-        # Best-effort install hf CLI (always). hf_transfer (Rust parallel downloader)
-        # is fast but flaky on large files — it tends to crash near the end at high
-        # throughput. Retries set disable_hf_transfer to fall back to the plain,
-        # slower-but-reliable downloader (resumes cleanly from the .incomplete files).
+        # Best-effort install the current HF CLI. The default lane uses hf_xet
+        # in high-performance mode. Retries switch to the conservative Hub HTTP
+        # lane without discarding resumable cache data.
         # Use `python3 -m pip` not `pip` — macOS has no bare `pip` command.
         if is_ollama_download:
             _append_local_ollama_download_command_lines(
@@ -1123,14 +1219,15 @@ def setup_cookbook_routes() -> APIRouter:
                 docker_fallback_blocked=_local_ollama_docker_access_blocked(),
             )
         else:
-            lines.append(f"command -v hf >/dev/null 2>&1 || {_pip_install_fallback_chain('huggingface_hub', upgrade=True)}")
-            if req.disable_hf_transfer:
-                lines.append("export HF_HUB_ENABLE_HF_TRANSFER=0")
-                lines.append("export HF_HUB_DOWNLOAD_MAX_WORKERS=4")
-            else:
-                lines.append(f"python3 -c 'import hf_transfer' 2>/dev/null || {_pip_install_fallback_chain('hf_transfer')}")
-                lines.append("python3 -c 'import hf_transfer' 2>/dev/null && export HF_HUB_ENABLE_HF_TRANSFER=1")
-                lines.append("export HF_HUB_DOWNLOAD_MAX_WORKERS=8")
+            hf_capability_check = shlex.quote(
+                _hf_hub_capability_check(require_xet=not reliable_download)
+            )
+            lines.append(
+                f"( command -v hf >/dev/null 2>&1 && "
+                f"python3 -c {hf_capability_check} >/dev/null 2>&1 ) || "
+                f"{_pip_install_fallback_chain('huggingface_hub[hf_xet]', upgrade=True)}"
+            )
+            lines.extend(_hf_xet_env_lines(reliable=reliable_download))
 
         remote = req.remote_host  # None for local
         is_windows = req.platform == "windows"
@@ -1170,30 +1267,41 @@ def setup_cookbook_routes() -> APIRouter:
                 ps_lines.append('if ($LASTEXITCODE -eq 0) { Write-Host ""; Write-Host "DOWNLOAD_OK" } else { Write-Host ""; Write-Host "DOWNLOAD_FAILED (exit $LASTEXITCODE)" }')
             else:
                 # Try hf CLI, fall back to Python huggingface_hub, then auto-install
-                ps_lines.append('try {{')
+                ps_lines.append('try {')
+                ps_lines.extend(
+                    f"  {line}" for line in _hf_xet_env_lines(
+                        reliable=reliable_download,
+                        powershell=True,
+                    )
+                )
+                ps_hf_check = _hf_hub_capability_check(
+                    require_xet=not reliable_download
+                ).replace('"', '`"')
+                ps_lines.append(f'  python -c "{ps_hf_check}" 2>$null')
+                ps_lines.append(
+                    '  if ($LASTEXITCODE -ne 0) { '
+                    'python -m pip install -q -U "huggingface_hub[hf_xet]" }'
+                )
                 ps_lines.append('  $hfPath = Get-Command hf -ErrorAction SilentlyContinue')
-                ps_lines.append('  if ($hfPath) {{')
+                ps_lines.append('  if ($hfPath) {')
                 # Pipe $null to stdin to suppress interactive "update available? [Y/n]" prompt
                 ps_lines.append(f'    $null | {hf_cmd}')
-                ps_lines.append('  }} else {{')
+                ps_lines.append('  } else {')
                 ps_lines.append('    python -c "import huggingface_hub" 2>$null')
-                ps_lines.append('    if ($LASTEXITCODE -eq 0) {{')
+                ps_lines.append('    if ($LASTEXITCODE -eq 0) {')
                 ps_lines.append('      Write-Host "hf CLI not found, using Python huggingface_hub..."')
-                ps_lines.append('      python -m pip install -q hf_transfer 2>$null')
-                ps_lines.append('      $env:HF_HUB_ENABLE_HF_TRANSFER = "1"')
                 ps_lines.append(f"      python -c \"import os; from huggingface_hub import snapshot_download; snapshot_download('{req.repo_id}'{_dl_pyarg}, max_workers=8)\"")
-                ps_lines.append('    }} else {{')
+                ps_lines.append('    } else {')
                 ps_lines.append('      Write-Host "Installing huggingface-hub..."')
-                ps_lines.append('      python -m pip install -q huggingface-hub hf_transfer')
-                ps_lines.append('      $env:HF_HUB_ENABLE_HF_TRANSFER = "1"')
+                ps_lines.append('      python -m pip install -q -U "huggingface_hub[hf_xet]"')
                 ps_lines.append(f"      python -c \"import os; from huggingface_hub import snapshot_download; snapshot_download('{req.repo_id}'{_dl_pyarg}, max_workers=8)\"")
-                ps_lines.append('    }}')
-                ps_lines.append('  }}')
-                ps_lines.append('  if ($LASTEXITCODE -eq 0) {{ Write-Host ""; Write-Host "DOWNLOAD_OK" }}')
-                ps_lines.append('  else {{ Write-Host ""; Write-Host "DOWNLOAD_FAILED (exit $LASTEXITCODE)" }}')
-                ps_lines.append('}} catch {{')
+                ps_lines.append('    }')
+                ps_lines.append('  }')
+                ps_lines.append('  if ($LASTEXITCODE -eq 0) { Write-Host ""; Write-Host "DOWNLOAD_OK" }')
+                ps_lines.append('  else { Write-Host ""; Write-Host "DOWNLOAD_FAILED (exit $LASTEXITCODE)" }')
+                ps_lines.append('} catch {')
                 ps_lines.append('  Write-Host ""; Write-Host "DOWNLOAD_FAILED ($_)"')
-                ps_lines.append('}}')
+                ps_lines.append('}')
             ps_lines.append(f'Remove-Item -Force "$HOME\\{remote_runner}" -ErrorAction SilentlyContinue')
             runner_path = TMUX_LOG_DIR / f"{session_id}_run.ps1"
             runner_path.write_text("\r\n".join(ps_lines) + "\r\n", encoding="utf-8")
@@ -1241,9 +1349,8 @@ def setup_cookbook_routes() -> APIRouter:
             runner_lines.append('export PATH="$HOME/.local/bin:$HOME/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"')
             runner_lines.append('ODYSSEUS_PY="$(command -v python3 || command -v python || true)"')
             runner_lines.append('if [ -z "$ODYSSEUS_PY" ]; then echo "ERROR: python3/python not found on this server."; exit 127; fi')
-            # Install hf CLI + optional hf_transfer best-effort. Retries disable
-            # hf_transfer because the Rust parallel path is fast but has been
-            # flaky near the end of very large multi-file downloads.
+            # Install the current HF CLI and select either the fast Xet lane or
+            # the conservative resumable HTTP lane.
             # Use --break-system-packages on PEP-668 systems (Arch, newer Debian) so it doesn't bail.
             if is_ollama_download:
                 runner_lines.append('if command -v ollama >/dev/null 2>&1; then')
@@ -1257,32 +1364,33 @@ def setup_cookbook_routes() -> APIRouter:
                 runner_lines.append('if [ -z "$ODYSSEUS_OLLAMA_PULL_CMD" ]; then echo "ERROR: Ollama not found on this server. Install Ollama or start an ollama-rocm/ollama-test container."; exit 127; fi')
             else:
                 hf_hub_install = _pip_install_fallback_chain(
-                    "huggingface_hub",
+                    "huggingface_hub[hf_xet]",
                     python_cmd='"$ODYSSEUS_PY" -m pip',
                     upgrade=True,
                 )
-                runner_lines.append(f"command -v hf >/dev/null 2>&1 || command -v huggingface-cli >/dev/null 2>&1 || {hf_hub_install}")
+                hf_capability_check = shlex.quote(
+                    _hf_hub_capability_check(
+                        require_xet=not reliable_download
+                    )
+                )
+                runner_lines.append(
+                    "( ( command -v hf >/dev/null 2>&1 || "
+                    "command -v huggingface-cli >/dev/null 2>&1 ) && "
+                    f"\"$ODYSSEUS_PY\" -c {hf_capability_check} "
+                    f">/dev/null 2>&1 ) || {hf_hub_install}"
+                )
                 runner_lines.append('hash -r 2>/dev/null || true')
                 runner_lines.append('ODYSSEUS_HF_CLI="$(command -v hf || command -v huggingface-cli || true)"')
                 runner_lines.append('if [ -z "$ODYSSEUS_HF_CLI" ]; then echo "ERROR: HF CLI not found after installing huggingface_hub."; exit 127; fi')
-                if req.disable_hf_transfer:
-                    runner_lines.append("export HF_HUB_ENABLE_HF_TRANSFER=0")
-                    runner_lines.append("export HF_HUB_DOWNLOAD_MAX_WORKERS=4")
-                else:
-                    hf_transfer_install = _pip_install_fallback_chain(
-                        "hf_transfer",
-                        python_cmd='"$ODYSSEUS_PY" -m pip',
-                    )
-                    runner_lines.append(f"\"$ODYSSEUS_PY\" -c 'import hf_transfer' 2>/dev/null || {hf_transfer_install}")
-                    runner_lines.append("\"$ODYSSEUS_PY\" -c 'import hf_transfer' 2>/dev/null && export HF_HUB_ENABLE_HF_TRANSFER=1")
-                    runner_lines.append("export HF_HUB_DOWNLOAD_MAX_WORKERS=8")
+                runner_lines.extend(
+                    _hf_xet_env_lines(reliable=reliable_download)
+                )
                 # Surface whether the HF token actually reached THIS server, so a gated
                 # download's "not authorized" failure can be told apart from a missing
                 # token (the token is masked — we only print applied / not-set).
                 runner_lines.append(_HF_TOKEN_STATUS_SNIPPET)
             # Wrap the download in a retry loop. Large HF/Ollama transfers can
             # hit transient network failures; both backends resume cached partials.
-            mw = 4 if req.disable_hf_transfer else 8
             runner_lines.append('_max_retries=10; _attempt=0; _ec=0')
             runner_lines.append('while [ $_attempt -lt $_max_retries ]; do')
             runner_lines.append('  _attempt=$((_attempt+1))')
@@ -1418,6 +1526,13 @@ def setup_cookbook_routes() -> APIRouter:
                         model_dirs.append(parent)
             except Exception as exc:
                 logger.warning("Colibri model directories were not added to scan: %s", exc)
+            try:
+                for provider in default_prism_catalog():
+                    root = str(provider.model_root)
+                    if root not in model_dirs:
+                        model_dirs.append(root)
+            except Exception as exc:
+                logger.warning("PrismML model directories were not added to scan: %s", exc)
         paths_code = _cached_model_scan_script(model_dirs)
 
         scan_py = TMUX_LOG_DIR / "scan_cache.py"
@@ -1996,7 +2111,7 @@ def setup_cookbook_routes() -> APIRouter:
         # Cookbook emits two fixed Docker exec forms for its Ollama sidecars.
         # Keep Docker out of the general allowlist: only these parsed shapes may
         # proceed to the target-aware Docker availability/opt-in preflight.
-        if req.runtime_id:
+        if req.runtime_id and req.runtime_id.startswith("colibri."):
             if req.remote_host:
                 raise HTTPException(
                     400,
@@ -2041,6 +2156,82 @@ def setup_cookbook_routes() -> APIRouter:
             req.served_model_id = str(
                 provider_report.get("endpoint", {}).get("model_id") or ""
             )
+        elif req.runtime_id == PRISM_PROVIDER_ID:
+            if req.remote_host:
+                raise HTTPException(
+                    400,
+                    "The managed PrismML runtime is host-scoped and cannot launch through a remote Cookbook target.",
+                )
+            if not req.runtime_model_id:
+                raise HTTPException(400, "PrismML model identity is required")
+            if not req.runtime_settings:
+                raise HTTPException(400, "PrismML runtime settings are required")
+            try:
+                req.cmd = validate_prism_serve_command(
+                    req.runtime_model_id,
+                    req.runtime_settings,
+                    req.cmd,
+                )
+            except PrismCommandError as exc:
+                raise HTTPException(400, str(exc)) from exc
+            report = collect_prism_providers()
+            provider_report = next(
+                (
+                    item
+                    for item in report.get("providers", [])
+                    if item.get("id") == req.runtime_id
+                ),
+                None,
+            )
+            if not provider_report:
+                raise HTTPException(400, "Unknown PrismML runtime")
+            model_report = next(
+                (
+                    item
+                    for item in provider_report.get("models", [])
+                    if item.get("id") == req.runtime_model_id
+                ),
+                None,
+            )
+            if not model_report:
+                raise HTTPException(400, "Unknown PrismML model")
+            # Provider findings cover both catalogued models.  Launch
+            # readiness is model-specific, so derive the gate from the exact
+            # selected model below instead of letting a missing *other* model
+            # block this launch.
+            reasons: list[str] = []
+            if not provider_report.get("source", {}).get("ready"):
+                reasons.append("official prism source is not ready")
+            if not provider_report.get("build", {}).get("ready"):
+                reasons.append("CUDA 13 / sm_120a build is not ready")
+            if not model_report.get("ready"):
+                reasons.append("the exact selected GGUF is missing or incomplete")
+            endpoint = provider_report.get("endpoint", {})
+            requested_port = int(
+                req.runtime_settings.get("port") or endpoint.get("port") or 0
+            )
+            if (
+                endpoint.get("port_open")
+                and requested_port == int(endpoint.get("port") or 0)
+            ):
+                reasons.append("the configured PrismML port is already occupied")
+            if bool(req.runtime_settings.get("speculative")) and not model_report.get(
+                "drafter", {}
+            ).get("complete"):
+                reasons.append("DSpark was enabled but its exact drafter is not ready")
+            if bool(req.runtime_settings.get("vision")) and not model_report.get(
+                "mmproj", {}
+            ).get("complete"):
+                reasons.append("vision was enabled but its exact projector is not ready")
+            if reasons:
+                raise HTTPException(
+                    409,
+                    "PrismML runtime is not launchable: "
+                    + "; ".join(dict.fromkeys(reasons)),
+                )
+            req.served_model_id = str(model_report.get("api_model_id") or "")
+        elif req.runtime_id:
+            raise HTTPException(400, "Unknown managed native runtime")
         elif _is_generated_ollama_docker_exec_cmd(req.cmd):
             req.cmd = req.cmd.strip()
         else:
@@ -2241,7 +2432,12 @@ def setup_cookbook_routes() -> APIRouter:
                     'repair with the configured exact uv lock."'
                 )
             _append_venv_nvidia_library_path_lines(runner_lines, cmd=req.cmd)
-            if "sglang.launch_server" in req.cmd or "mlx_lm.server" in req.cmd or re.search(r"\bvllm\s+serve\b", req.cmd or ""):
+            if (
+                req.runtime_id == PRISM_PROVIDER_ID
+                or "sglang.launch_server" in req.cmd
+                or "mlx_lm.server" in req.cmd
+                or re.search(r"\bvllm\s+serve\b", req.cmd or "")
+            ):
                 _append_openai_port_preflight_lines(runner_lines, cmd=req.cmd, expected_model=req.repo_id)
             # Show whether the HF token reached this server (masked) — a gated
             # model vLLM has to download will be denied without it.
@@ -2249,6 +2445,11 @@ def setup_cookbook_routes() -> APIRouter:
             handled_ollama_serve = False
             # Auto-install inference engine if missing
             local_windows_llama_cmd = local_windows and ("llama_cpp" in req.cmd or "llama-server" in req.cmd)
+            # The managed Prism bundle is already an internally consistent
+            # native llama.cpp build. Reuse the long-standing skip guard so it
+            # can never fall into the stock ggml-org bootstrap below.
+            if req.runtime_id == PRISM_PROVIDER_ID:
+                local_windows_llama_cmd = True
             if ("llama_cpp" in req.cmd or "llama-server" in req.cmd) and not local_windows_llama_cmd:
                 # Prefer the NATIVE llama-server binary — its minja templating
                 # renders modern GGUF chat templates that the Python bindings'
@@ -2676,7 +2877,7 @@ def setup_cookbook_routes() -> APIRouter:
                 runner_lines.append('if printf "%s" "$ODYSSEUS_MLX_IMAGE_MODEL" | grep -qi hidream; then')
                 runner_lines.append('  if ! "$ODYSSEUS_MLX_IMAGE_CMD_PY" -c "import mlx, mlx_vlm, transformers, huggingface_hub, safetensors, numpy, PIL" >/dev/null 2>&1; then')
                 runner_lines.append('    echo "ERROR: HiDream MLX serving needs the model requirements in the launch Python: $ODYSSEUS_MLX_IMAGE_CMD_PY."')
-                runner_lines.append('    echo "Install with: $ODYSSEUS_MLX_IMAGE_CMD_PY -m pip install -U fastapi uvicorn python-multipart mlx mlx-vlm \'transformers>=4.57.0,<6.0\' huggingface_hub safetensors numpy pillow tqdm sentencepiece hf_transfer"')
+                runner_lines.append('    echo "Install with: $ODYSSEUS_MLX_IMAGE_CMD_PY -m pip install -U fastapi uvicorn python-multipart mlx mlx-vlm \'transformers>=4.57.0,<6.0\' \'huggingface_hub[hf_xet]\' safetensors numpy pillow tqdm sentencepiece"')
                 runner_lines.append('    ODYSSEUS_PREFLIGHT_EXIT=127')
                 runner_lines.append('  fi')
                 runner_lines.append('elif printf "%s" "$ODYSSEUS_MLX_IMAGE_MODEL" | grep -qi boogu; then')
@@ -2960,7 +3161,8 @@ def setup_cookbook_routes() -> APIRouter:
             cmd = f"ssh {pf}{host} '{setup_script}'"
         else:
             # Linux: auto-install tmux (via whichever package manager is available)
-            # and huggingface_hub + hf_transfer (falling back to --user/--break-system-packages
+            # and the current Hugging Face Hub/Xet client (falling back to
+            # --user/--break-system-packages
             # on PEP-668 locked distros like Arch / newer Debian).
             setup_script = (
                 # Install tmux if missing — try common package managers; skip if no sudo
@@ -2974,9 +3176,9 @@ def setup_cookbook_routes() -> APIRouter:
                 "fi; "
                 "command -v tmux >/dev/null 2>&1 || echo 'WARNING: tmux missing and auto-install failed (need passwordless sudo). Install manually.'; "
                 # Install Python bits. Try system install first; fall back to --user --break-system-packages on PEP 668 systems.
-                "pip install -q huggingface_hub hf_transfer 2>/dev/null || "
-                "pip install --user --break-system-packages -q huggingface_hub hf_transfer 2>/dev/null || "
-                "pip3 install --user --break-system-packages -q huggingface_hub hf_transfer 2>/dev/null; "
+                "pip install -q huggingface_hub hf_xet 2>/dev/null || "
+                "pip install --user --break-system-packages -q huggingface_hub hf_xet 2>/dev/null || "
+                "pip3 install --user --break-system-packages -q huggingface_hub hf_xet 2>/dev/null; "
                 "python3 -c 'from huggingface_hub import snapshot_download; print(\"OK\")'"
             )
             cmd = f"ssh {pf}{host} '{setup_script}'"
@@ -4532,7 +4734,8 @@ def setup_cookbook_routes() -> APIRouter:
 
                     # Capture last lines for progress. Prefer the "Downloading" line
                     # (real aggregate bytes) over "Fetching N files" (whole-file count that
-                    # lags with hf_transfer). Falls back to the true last line otherwise.
+                    # lags with parallel chunked downloads). Falls back to the
+                    # true last line otherwise.
                     if is_alive:
                         try:
                             cap = subprocess.run(capture_cmd, timeout=4, capture_output=True, text=True)

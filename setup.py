@@ -13,6 +13,36 @@ import sys
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, BASE_DIR)
+
+
+def _ensure_env_file(base_dir):
+    """Create the checkout environment file before deployment paths freeze."""
+    env_path = os.path.join(base_dir, ".env")
+    example_path = os.path.join(base_dir, ".env.example")
+    if os.path.exists(env_path):
+        return "exists"
+    if not os.path.exists(example_path):
+        return "missing"
+    shutil.copy2(example_path, env_path)
+    if os.name != "nt":
+        os.chmod(env_path, 0o600)
+    return "created"
+
+
+# Deployment paths are calculated while src.constants is imported. A fresh
+# direct setup must therefore create and load .env before that import, just as
+# uvsetup.sh does. Exported process variables retain precedence.
+_BOOTSTRAP_BASE_DIR = BASE_DIR
+_BOOTSTRAP_ENV_STATUS = _ensure_env_file(BASE_DIR)
+
+from dotenv import load_dotenv
+
+load_dotenv(
+    os.path.join(BASE_DIR, ".env"),
+    encoding="utf-8-sig",
+    override=False,
+)
+
 from src.constants import (
     DATA_DIR, AUTH_FILE, UPLOAD_DIR, PERSONAL_DIR, PERSONAL_UPLOADS_DIR,
     TTS_CACHE_DIR, GENERATED_IMAGES_DIR, DEEP_RESEARCH_DIR, CHROMA_DIR,
@@ -155,16 +185,20 @@ def create_default_admin():
 
 def create_env():
     """Copy .env.example to .env if it doesn't exist."""
-    env_path = os.path.join(BASE_DIR, ".env")
-    example_path = os.path.join(BASE_DIR, ".env.example")
-    if os.path.exists(env_path):
+    global _BOOTSTRAP_ENV_STATUS
+
+    status = (
+        _BOOTSTRAP_ENV_STATUS
+        if BASE_DIR == _BOOTSTRAP_BASE_DIR
+        else _ensure_env_file(BASE_DIR)
+    )
+    if status == "exists":
         print("  [skip] .env already exists")
         return
-    if os.path.exists(example_path):
-        import shutil
-        shutil.copy2(example_path, env_path)
+    if status == "created":
         print("  [ok] .env created from .env.example")
         print("        ** Edit .env with your LLM host and API keys **")
+        _BOOTSTRAP_ENV_STATUS = "exists"
     else:
         print("  [warn] .env.example not found — create .env manually")
 
@@ -179,7 +213,7 @@ def check_deps():
             missing.append(mod)
     if missing:
         print(f"\n  [warn] Missing packages: {', '.join(missing)}")
-        print(f"         Run: pip install -r requirements.txt")
+        print("         Run: uv pip install --python .venv/bin/python -r requirements.txt")
     else:
         print("  [ok] All core dependencies installed")
 
@@ -251,7 +285,6 @@ def main():
     # UTF-8 BOM in a Notepad-saved .env. load_dotenv does not override already
     # exported OS env vars, so the existing precedence is preserved. python-dotenv
     # is a hard dependency (requirements.txt) and is verified by check_deps below.
-    from dotenv import load_dotenv
     load_dotenv(os.path.join(BASE_DIR, ".env"), encoding="utf-8-sig")
 
     # Fail fast with a clear message if the CPU architecture is wrong (Apple
@@ -265,11 +298,7 @@ def main():
     check_deps()
 
     print("\n4. Initializing database...")
-    try:
-        init_database()
-    except Exception as e:
-        print(f"  [warn] Database init failed: {e}")
-        print("         This is OK if dependencies aren't installed yet.")
+    init_database()
 
     print("\n5. Creating initial admin...")
 
@@ -278,7 +307,7 @@ def main():
     try:
         admin_status = create_default_admin()
     except Exception as e:
-        print(f"  [warn] Admin creation failed: {e}")
+        print(f"  [error] Admin creation failed: {e}")
         admin_status = "failed"
 
     print("\n=== Setup complete ===")
@@ -286,7 +315,7 @@ def main():
     # this, so suppress the manual hint there to avoid a contradictory URL.
     if not os.getenv("ODYSSEUS_SKIP_RUN_HINT"):
         print(f"\nStart the server with:")
-        print(f"  python -m uvicorn app:app --host 127.0.0.1 --port 7000")
+        print("  uv run --active --no-sync python -m uvicorn app:app --host 127.0.0.1 --port 7000")
         print(f"\nThen open http://localhost:7000")
 
     # Cleaned, action-focused final instruction strings
@@ -295,12 +324,16 @@ def main():
     elif admin_status == "exists":
         print("Login with your existing admin credentials.\n")
     elif admin_status == "skipped":
-        print("Admin creation did not happen: dependencies are missing.\nRun 'pip install bcrypt' and rerun setup.\n")
+        print(
+            "Admin creation did not happen: dependencies are missing.\n"
+            "Run 'uv pip install --python .venv/bin/python bcrypt' and rerun setup.\n"
+        )
     elif admin_status == "failed":
         print("Admin creation did not happen: a system or file error occurred.\nCheck write permissions for the 'data' directory and rerun setup.\n")
     else:  # handling "failed" or any unhandled edge case
         print("Admin creation did not happen: a system or file error occurred.\nCheck write permissions for the 'data' directory and rerun setup.\n")
+    return 0 if admin_status in {"created", "exists"} else 1
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

@@ -24,11 +24,18 @@ from src.ulysses_catalog import default_runtime_registry
 from src.ulysses_discovery import HostDiscoverySnapshot, collect_host_discovery
 from src.ulysses_hermes import collect_hermes_adoption
 from src.ulysses_hermes_control import HermesControl
+from src.ulysses_hermes_stack import HermesStackControl
 from src.ulysses_jobs import (
     RuntimeJobConfirmationError,
     RuntimeJobConflict,
     RuntimeJobError,
 )
+from src.ulysses_prism import collect_prism_providers
+from src.ulysses_prism_command import (
+    PrismCommandError,
+    render_prism_serve_command,
+)
+from src.ulysses_prism_control import PrismControl
 from src.ulysses_readiness import collect_switchover_readiness
 from src.ulysses_runtime_management import (
     ManagedRuntimeControl,
@@ -51,6 +58,10 @@ class HermesLifecyclePlanRequest(BaseModel):
     action: str
 
 
+class HermesStackPlanRequest(BaseModel):
+    action: str
+
+
 class HermesMcpPlanRequest(BaseModel):
     action: str
     name: str
@@ -70,6 +81,16 @@ class ColibriCommandRequest(BaseModel):
 
 
 class ColibriLifecyclePlanRequest(BaseModel):
+    runtime_id: str
+    action: str
+
+
+class PrismCommandRequest(BaseModel):
+    model_id: str
+    settings: dict[str, str | bool | int | float | None]
+
+
+class PrismLifecyclePlanRequest(BaseModel):
     runtime_id: str
     action: str
 
@@ -103,8 +124,13 @@ def setup_ulysses_routes(
     chroma_collector: Callable[[], dict] = collect_chroma_persistence,
     hermes_collector: Callable[[], dict] = collect_hermes_adoption,
     colibri_collector: Callable[[], dict] = collect_colibri_providers,
+    prism_collector: Callable[[], dict] = collect_prism_providers,
     hermes_control_factory: Callable[[], HermesControl] = HermesControl,
+    hermes_stack_control_factory: Callable[
+        [], HermesStackControl
+    ] = HermesStackControl,
     colibri_control_factory: Callable[[], ColibriControl] = ColibriControl,
+    prism_control_factory: Callable[[], PrismControl] = PrismControl,
     runtime_control_factory: Callable[[], ManagedRuntimeControl] = ManagedRuntimeControl,
     sandwich_control_factory: Callable[[], SandwichControl] = SandwichControl,
     sandwich_collector: Callable[[], dict] = collect_sandwich_status,
@@ -139,10 +165,22 @@ def setup_ulysses_routes(
         report = await run_in_threadpool(hermes_collector)
         return hermes_control_factory().decorate_report(report)
 
+    @router.get("/hermes/stack")
+    async def get_hermes_stack(request: Request) -> dict:
+        require_admin(request)
+        return await run_in_threadpool(
+            hermes_stack_control_factory().observe
+        )
+
     @router.get("/colibri/providers")
     async def get_colibri_providers(request: Request) -> dict:
         require_admin(request)
         return await run_in_threadpool(colibri_collector)
+
+    @router.get("/prism/providers")
+    async def get_prism_providers(request: Request) -> dict:
+        require_admin(request)
+        return await run_in_threadpool(prism_collector)
 
     @router.get("/runtimes")
     async def get_managed_runtimes(request: Request) -> dict:
@@ -273,6 +311,46 @@ def setup_ulysses_routes(
         except RuntimeJobError as exc:
             raise _job_http_error(exc) from exc
 
+    @router.post("/prism/command")
+    async def render_prism_command(
+        request: Request,
+        body: PrismCommandRequest,
+    ) -> dict:
+        require_admin(request)
+        try:
+            command = await run_in_threadpool(
+                render_prism_serve_command,
+                body.model_id,
+                body.settings,
+            )
+        except PrismCommandError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        return {
+            "schema_version": "ulysses.prism-command.v1",
+            "runtime_id": "prism.llamacpp",
+            "model_id": body.model_id,
+            "command": command,
+            "editable": False,
+        }
+
+    @router.post("/prism/jobs/plan")
+    async def plan_prism_lifecycle(
+        request: Request,
+        body: PrismLifecyclePlanRequest,
+    ) -> dict:
+        require_admin(request)
+        report = await run_in_threadpool(prism_collector)
+        try:
+            plan, token = await run_in_threadpool(
+                prism_control_factory().create_plan,
+                report,
+                provider_id=body.runtime_id,
+                action=body.action,
+            )
+            return {"job": plan, "confirmation_token": token}
+        except RuntimeJobError as exc:
+            raise _job_http_error(exc) from exc
+
     @router.post("/hermes/adoption/apply")
     async def apply_hermes_adoption(
         request: Request,
@@ -302,6 +380,21 @@ def setup_ulysses_routes(
             plan, token = await run_in_threadpool(
                 hermes_control_factory().create_lifecycle_plan,
                 report,
+                action=body.action,
+            )
+            return {"job": plan, "confirmation_token": token}
+        except RuntimeJobError as exc:
+            raise _job_http_error(exc) from exc
+
+    @router.post("/hermes/stack/jobs/plan")
+    async def plan_hermes_stack(
+        request: Request,
+        body: HermesStackPlanRequest,
+    ) -> dict:
+        require_admin(request)
+        try:
+            plan, token = await run_in_threadpool(
+                hermes_stack_control_factory().create_plan,
                 action=body.action,
             )
             return {"job": plan, "confirmation_token": token}

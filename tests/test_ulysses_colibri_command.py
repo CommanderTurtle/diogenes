@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import shlex
+from pathlib import Path
 
 import pytest
 
@@ -35,10 +36,13 @@ def test_hy3_profile_uses_separate_binary_model_and_port() -> None:
         {"profile": "rtx5090-high-ram"},
     )
 
-    assert argv[0].endswith("/Odysseus/colibri-hy3/c/coli")
-    assert argv[argv.index("--model") + 1].endswith(
-        "/colibri-models/UnderstandLing--Hy3-colibri-int4"
-    )
+    cli = Path(argv[0])
+    assert cli.name == "coli"
+    assert cli.parent.name == "c"
+    assert cli.parent.parent.name == "colibri-hy3"
+    model = Path(argv[argv.index("--model") + 1])
+    assert model.name == "UnderstandLing--Hy3-colibri-int4"
+    assert model.parent.name == "colibri-models"
     assert argv[argv.index("--vram") + 1] == "0"
     assert argv[argv.index("--port") + 1] == "8643"
     assert env["PIPE"] == "2"

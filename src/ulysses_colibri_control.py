@@ -1,4 +1,4 @@
-"""Confirmed source-sync and CUDA-build jobs for native Colibri providers."""
+"""Confirmed source-sync, model-download, and CUDA-build jobs for Colibri."""
 
 from __future__ import annotations
 
@@ -10,13 +10,14 @@ from typing import Any
 from src.constants import DATA_DIR
 from src.ulysses_colibri import (
     ColibriProvider,
+    _github_origins_match,
     default_colibri_catalog,
     resolve_cuda_compiler,
 )
 from src.ulysses_jobs import RuntimeJobError, RuntimeJobStore
 
 
-ALLOWED_ACTIONS = {"sync", "build"}
+ALLOWED_ACTIONS = {"sync", "download", "build"}
 CONFIRMATION_PHRASES = {
     "sync": {
         "colibri.glm": "SYNC COLIBRI GLM",
@@ -25,6 +26,10 @@ CONFIRMATION_PHRASES = {
     "build": {
         "colibri.glm": "BUILD COLIBRI GLM CUDA",
         "colibri.hy3": "BUILD COLIBRI HY3 CUDA",
+    },
+    "download": {
+        "colibri.glm": "DOWNLOAD COLIBRI GLM MODEL",
+        "colibri.hy3": "DOWNLOAD COLIBRI HY3 MODEL",
     },
 }
 
@@ -67,7 +72,10 @@ class ColibriControl:
     ) -> list[dict[str, Any]]:
         source = observed.get("source") or {}
         if source.get("present"):
-            if source.get("origin") != provider.source_url:
+            if not _github_origins_match(
+                source.get("origin"),
+                provider.source_url,
+            ):
                 raise RuntimeJobError("Colibri origin does not match the catalog")
             if source.get("branch") != provider.source_branch:
                 raise RuntimeJobError("Colibri branch does not match the catalog")
@@ -221,6 +229,96 @@ class ColibriControl:
             },
         ]
 
+    @staticmethod
+    def _download_steps(
+        provider: ColibriProvider,
+        observed: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        endpoint = observed.get("endpoint") or {}
+        if endpoint.get("port_open"):
+            raise RuntimeJobError(
+                "Stop the Colibri provider before changing its model files"
+            )
+        if provider.model_root is None:
+            raise RuntimeJobError("Colibri model destination is not configured")
+        variants = [
+            item
+            for item in provider.model_variants
+            if item.get("recommended")
+        ]
+        if len(variants) != 1:
+            raise RuntimeJobError("Colibri recommended model variant is invalid")
+        variant = variants[0]
+        repository_root = Path(__file__).resolve().parents[1]
+        downloader_root = repository_root / ".venv-model-download"
+        downloader_python = downloader_root / "bin" / "python"
+        requirements = repository_root / "requirements" / "model-download.txt"
+        script = repository_root / "scripts" / "hf_download.py"
+        if downloader_root.exists() and not (
+            downloader_root / "pyvenv.cfg"
+        ).is_file():
+            raise RuntimeJobError(
+                ".venv-model-download exists but is not a Python environment"
+            )
+        steps: list[dict[str, Any]] = [
+            {
+                "label": "Verify uv",
+                "argv": ["uv", "--version"],
+                "timeout": 30,
+            },
+        ]
+        if not downloader_python.is_file():
+            steps.append(
+                {
+                    "label": "Create isolated model downloader",
+                    "argv": [
+                        "uv",
+                        "venv",
+                        str(downloader_root),
+                        "--python",
+                        "3.13.12",
+                        "--seed",
+                    ],
+                    "timeout": 600,
+                }
+            )
+        steps.extend(
+            [
+                {
+                    "label": "Reconcile model download dependencies",
+                    "argv": [
+                        "uv",
+                        "pip",
+                        "install",
+                        "--python",
+                        str(downloader_python),
+                        "-r",
+                        str(requirements),
+                    ],
+                    "timeout": 600,
+                },
+                {
+                    "label": "Download exact Colibri model snapshot",
+                    "argv": [
+                        str(downloader_python),
+                        str(script),
+                        str(variant["repository"]),
+                        "--revision",
+                        str(variant["revision"]),
+                        "--local-dir",
+                        str(provider.model_root),
+                        "--workers",
+                        "16",
+                        "--tokio-workers",
+                        "16",
+                        "--fast",
+                    ],
+                    "timeout": 21600,
+                },
+            ]
+        )
+        return steps
+
     def create_plan(
         self,
         report: dict[str, Any],
@@ -232,12 +330,15 @@ class ColibriControl:
             raise RuntimeJobError("unsupported Colibri lifecycle action")
         provider = self._provider(provider_id)
         observed = self._report_provider(report, provider_id)
-        steps = (
-            self._sync_steps(provider, observed)
-            if action == "sync"
-            else self._build_steps(provider, observed)
-        )
-        verb = "Sync" if action == "sync" else "Build"
+        if action == "sync":
+            steps = self._sync_steps(provider, observed)
+            verb = "Sync"
+        elif action == "download":
+            steps = self._download_steps(provider, observed)
+            verb = "Download model for"
+        else:
+            steps = self._build_steps(provider, observed)
+            verb = "Build"
         return self.jobs.create_plan(
             runtime_id=provider_id,
             action=action,

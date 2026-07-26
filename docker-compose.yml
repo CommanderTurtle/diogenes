@@ -16,6 +16,9 @@ services:
       # land under /app/.local for the odysseus user. Persist them so a
       # container recreate does not silently remove installed serve engines.
       - ${APP_DATA_DIR:-./data}/local:/app/.local:z
+      # Bun is the only JavaScript runtime. Persist bunx/global-package caches
+      # without sharing a host Node/npm installation into the container.
+      - ${APP_DATA_DIR:-./data}/bun:/app/.bun:z
     extra_hosts:
       # Lets the container reach local services on the Docker host, including
       # Ollama at http://host.docker.internal:11434.
@@ -28,9 +31,28 @@ services:
       - RESEARCH_LLM_ENDPOINT=${RESEARCH_LLM_ENDPOINT:-}
       - HF_TOKEN=${HF_TOKEN:-}
       - HUGGING_FACE_HUB_TOKEN=${HUGGING_FACE_HUB_TOKEN:-}
+      # Camofox is the browser backend by default. The stdio MCP adapter runs
+      # inside this container and reaches the independently managed browser on
+      # the Docker host. Use dedicated *_DOCKER_* path variables for optional
+      # container-visible mounts; native host paths are not portable here.
+      - ODYSSEUS_BROWSER_MCP_PROVIDER=${ODYSSEUS_BROWSER_MCP_PROVIDER:-camofox}
+      - ODYSSEUS_BROWSER_MCP_REQUIRE_CACHE=${ODYSSEUS_BROWSER_MCP_REQUIRE_CACHE:-0}
+      - CAMOFOX_URL=${CAMOFOX_DOCKER_URL:-http://host.docker.internal:9377}
+      - CAMOFOX_API_KEY=${CAMOFOX_API_KEY:-}
+      - CAMOFOX_VIEWPORT=${CAMOFOX_VIEWPORT:-}
+      - CAMOFOX_DEFAULT_USER_ID=${CAMOFOX_DEFAULT_USER_ID:-}
+      - CAMOFOX_PROFILES_DIR=${CAMOFOX_MCP_CONTAINER_PROFILES_DIR:-}
+      - CAMOFOX_MCP_ROOT=${CAMOFOX_MCP_CONTAINER_ROOT:-/app/external/camofox-mcp}
+      # Playwright remains an explicit provider choice. No browser binary is
+      # bundled; this path must point to an intentionally mounted executable.
+      - ODYSSEUS_BROWSER_EXECUTABLE=${ODYSSEUS_BROWSER_EXECUTABLE:-}
       - SEARXNG_INSTANCE=http://searxng:8080
       - CHROMADB_HOST=chromadb
       - CHROMADB_PORT=8000
+      # Bun, Hugging Face, and Chroma all honor these telemetry opt-outs.
+      - DO_NOT_TRACK=1
+      - HF_HUB_DISABLE_TELEMETRY=1
+      - ANONYMIZED_TELEMETRY=FALSE
       - DATABASE_URL=${DATABASE_URL:-sqlite:///./data/app.db}
       - AUTH_ENABLED=${AUTH_ENABLED:-true}
       - LOCALHOST_BYPASS=${LOCALHOST_BYPASS:-false}
@@ -90,7 +112,8 @@ services:
     volumes:
       # Current Chroma images declare persist_path: /data in /config.yaml.
       # The former /chroma/chroma target left the live database ephemeral.
-      - chromadb-data:/data
+      # Keep it in the same portable application data tree as app.db/caches.
+      - ${APP_DATA_DIR:-./data}/chromadb:/data:z
     environment:
       - ANONYMIZED_TELEMETRY=FALSE
     restart: unless-stopped
@@ -158,5 +181,4 @@ services:
 
 volumes:
   searxng-data:
-  chromadb-data:
   ntfy-cache:

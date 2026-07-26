@@ -31,10 +31,39 @@ ALLOWED_PORT_ENVS = {
     "ULYSSES_COLIBRI_GLM_PORT",
     "ULYSSES_COLIBRI_HY3_PORT",
 }
+_GITHUB_REMOTE_RE = re.compile(
+    r"^(?:https://github\.com/|git@github\.com:|ssh://git@github\.com/)"
+    r"([^/\s]+)/([^/\s]+)/?$",
+    re.IGNORECASE,
+)
 
 
 class ColibriCatalogError(ValueError):
     """Raised when the committed provider catalog is unsafe."""
+
+
+def _canonical_github_origin(value: object) -> str | None:
+    """Return one canonical identity for supported GitHub HTTPS/SSH remotes."""
+    if not isinstance(value, str):
+        return None
+    match = _GITHUB_REMOTE_RE.fullmatch(value.strip())
+    if match is None:
+        return None
+    owner, repository = match.groups()
+    if repository.lower().endswith(".git"):
+        repository = repository[:-4]
+    if not owner or not repository:
+        return None
+    return (
+        f"https://github.com/{owner.casefold()}/"
+        f"{repository.casefold()}.git"
+    )
+
+
+def _github_origins_match(observed: object, expected: object) -> bool:
+    observed_origin = _canonical_github_origin(observed)
+    expected_origin = _canonical_github_origin(expected)
+    return bool(observed_origin and observed_origin == expected_origin)
 
 
 @dataclass(frozen=True, slots=True)
@@ -786,6 +815,75 @@ def _port_open(port: int) -> bool:
         return False
 
 
+def _endpoint_lifecycle(
+    provider: ColibriProvider,
+    *,
+    port_open: bool,
+    health: dict[str, Any] | None,
+    models: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Classify the configured endpoint without claiming unsafe ownership.
+
+    A healthy OpenAI-compatible endpoint whose model catalog is empty is the
+    normal observable shape while Colibri is loading.  Treating it as stopped
+    hid the live process and made it impossible for the UI to offer Stop.
+
+    Ownership remains deliberately evidence-based:
+
+    * the configured model, or an empty *valid* ``/v1/models`` list, identifies
+      the configured Colibri endpoint;
+    * a non-empty list containing only other model ids is a foreign collision;
+    * a health response without a valid model catalog is unknown and therefore
+      never receives a stop action.
+    """
+
+    raw_data = models.get("data") if isinstance(models, dict) else None
+    models_compatible = isinstance(raw_data, list)
+    served_ids = [
+        str(item.get("id"))
+        for item in (raw_data if models_compatible else [])
+        if isinstance(item, dict) and item.get("id")
+    ]
+    expected_model_served = provider.model_id in served_ids
+
+    if not port_open:
+        state = "stopped"
+        ownership = "none"
+        ownership_evidence = "port_closed"
+    elif health is None:
+        state = "collision"
+        ownership = "foreign"
+        ownership_evidence = "health_endpoint_unavailable"
+    elif not models_compatible:
+        state = "degraded"
+        ownership = "unknown"
+        ownership_evidence = "model_catalog_unavailable"
+    elif expected_model_served:
+        state = "running"
+        ownership = "owned"
+        ownership_evidence = "configured_model_advertised"
+    elif served_ids:
+        state = "collision"
+        ownership = "foreign"
+        ownership_evidence = "different_models_advertised"
+    else:
+        state = "starting"
+        ownership = "owned"
+        ownership_evidence = "empty_compatible_model_catalog"
+
+    return {
+        "state": state,
+        "ownership": ownership,
+        "ownership_evidence": ownership_evidence,
+        "owned": ownership == "owned",
+        "foreign": ownership == "foreign",
+        "collision": state == "collision",
+        "models_compatible": models_compatible,
+        "expected_model_served": expected_model_served,
+        "served_models": served_ids,
+    }
+
+
 def observe_colibri_provider(provider: ColibriProvider) -> dict[str, Any]:
     git = _git(provider)
     model = _model(provider)
@@ -808,14 +906,16 @@ def observe_colibri_provider(provider: ColibriProvider) -> dict[str, Any]:
         if health is not None
         else None
     )
-    served_ids = [
-        str(item.get("id"))
-        for item in (models or {}).get("data", [])
-        if isinstance(item, dict) and item.get("id")
-    ]
+    endpoint_lifecycle = _endpoint_lifecycle(
+        provider,
+        port_open=port_open,
+        health=health,
+        models=models,
+    )
+    served_ids = endpoint_lifecycle["served_models"]
     provenance_ready = bool(
         git["present"]
-        and git["origin"] == provider.source_url
+        and _github_origins_match(git["origin"], provider.source_url)
         and git["branch"] == provider.source_branch
         and git["minimum_commit_present"]
         and provider.cli_path.is_file()
@@ -845,8 +945,11 @@ def observe_colibri_provider(provider: ColibriProvider) -> dict[str, Any]:
         and manifest_valid
     )
     prerequisites = _build_prerequisites(provider)
-    running = health is not None and provider.model_id in served_ids
-    collision = port_open and health is None
+    running = endpoint_lifecycle["state"] == "running"
+    collision = endpoint_lifecycle["collision"]
+    owned_process_active = bool(
+        port_open and endpoint_lifecycle["ownership"] == "owned"
+    )
     findings: list[dict[str, str]] = []
     if not git["present"]:
         findings.append(
@@ -950,7 +1053,38 @@ def observe_colibri_provider(provider: ColibriProvider) -> dict[str, Any]:
                 "evidence": ", ".join(prerequisites["missing"]),
             }
         )
-    if collision:
+    if endpoint_lifecycle["state"] == "starting":
+        findings.append(
+            {
+                "code": f"{provider.provider_id}.endpoint_starting",
+                "severity": "warning",
+                "summary": "Colibri is healthy but has not advertised its model yet.",
+                "evidence": f"127.0.0.1:{provider.port}/v1/models returned an empty model list",
+            }
+        )
+    elif endpoint_lifecycle["ownership_evidence"] == "model_catalog_unavailable":
+        findings.append(
+            {
+                "code": f"{provider.provider_id}.model_catalog_unavailable",
+                "severity": "error",
+                "summary": "The healthy endpoint did not return a valid OpenAI model catalog.",
+                "evidence": f"127.0.0.1:{provider.port}/v1/models",
+            }
+        )
+    elif (
+        collision
+        and endpoint_lifecycle["ownership_evidence"]
+        == "different_models_advertised"
+    ):
+        findings.append(
+            {
+                "code": f"{provider.provider_id}.model_collision",
+                "severity": "error",
+                "summary": "The provider port is serving a different model.",
+                "evidence": ", ".join(served_ids),
+            }
+        )
+    elif collision:
         findings.append(
             {
                 "code": f"{provider.provider_id}.port_collision",
@@ -970,8 +1104,8 @@ def observe_colibri_provider(provider: ColibriProvider) -> dict[str, Any]:
         "family": provider.family,
         "scope": "host",
         "status": (
-            "running"
-            if running
+            endpoint_lifecycle["state"]
+            if endpoint_lifecycle["state"] != "stopped"
             else ("degraded" if actionable_findings else "stopped")
         ),
         "source": {
@@ -1010,6 +1144,15 @@ def observe_colibri_provider(provider: ColibriProvider) -> dict[str, Any]:
             "port": provider.port,
             "port_open": port_open,
             "collision": collision,
+            "state": endpoint_lifecycle["state"],
+            "ownership": endpoint_lifecycle["ownership"],
+            "ownership_evidence": endpoint_lifecycle["ownership_evidence"],
+            "owned": endpoint_lifecycle["owned"],
+            "foreign": endpoint_lifecycle["foreign"],
+            "models_compatible": endpoint_lifecycle["models_compatible"],
+            "expected_model_served": endpoint_lifecycle[
+                "expected_model_served"
+            ],
             "healthy": health is not None,
             "model_id": provider.model_id,
             "served_models": served_ids,
@@ -1043,17 +1186,25 @@ def observe_colibri_provider(provider: ColibriProvider) -> dict[str, Any]:
         "documentation": provider.documentation,
         "findings": findings,
         "actions": {
+            "download_available": (
+                not model["present"]
+                and not port_open
+            ),
             "sync_available": (
-                not running and not git.get("unexpected_dirty", False)
+                not owned_process_active
+                and not git.get("unexpected_dirty", False)
             ),
             "build_available": (
                 source_ready
                 and prerequisites["ready"]
                 and not git.get("unexpected_dirty", False)
-                and not running
+                and not owned_process_active
             ),
             "doctor_available": (
-                source_ready and build_ready and model["present"] and not running
+                source_ready
+                and build_ready
+                and model["present"]
+                and not owned_process_active
             ),
             "start_available": (
                 source_ready
@@ -1061,7 +1212,7 @@ def observe_colibri_provider(provider: ColibriProvider) -> dict[str, Any]:
                 and model["present"]
                 and not port_open
             ),
-            "stop_available": running,
+            "stop_available": owned_process_active,
             "register_available": running,
             "human_confirmation": True,
         },

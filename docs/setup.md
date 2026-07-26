@@ -36,20 +36,27 @@ only when you intentionally want LAN/reverse-proxy access.
 > Cookbook serves local models on CPU only. For GPU-accelerated model serving,
 > run natively instead — see [Apple Silicon](#apple-silicon) below.
 
-### Native Linux / macOS
+### Native GNU/Linux / WSL — Diogenes workstation lane
+
+After cloning the Diogenes `dev` branch, install
+[uv](https://docs.astral.sh/uv/getting-started/installation/) and run:
+
 ```bash
-git clone https://github.com/odysseus-dev/odysseus.git
-cd odysseus
-python3 -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
-python setup.py
-python -m uvicorn app:app --host 127.0.0.1 --port 7000
+cd Diogenes
+./uvsetup.sh
+source .venv/bin/activate
+uv run --active --no-sync python -m uvicorn app:app --host 127.0.0.1 --port 7000
 ```
-Requirements: Python 3.11+. Cookbook also needs `tmux` for background model
-downloads and serves. The app itself is lightweight; local model serving is the
-heavy part and depends on the model, runtime, GPU, and VRAM, so small hosts can
-connect to API or remote model servers instead. Use `--host 0.0.0.0` only when you intentionally want LAN/reverse-proxy access.
+
+The script creates uv-managed CPython 3.13.12 environments at `.venv` and
+`.venv-model-download`, resolves the services root, detects the standalone
+Sandwich installation, and starts no service unless `--with-chroma` is
+explicitly supplied. Cookbook also needs `tmux` for background model downloads
+and serves. Use `--host 0.0.0.0` only when you intentionally want trusted
+LAN/reverse-proxy access.
+
+For macOS, use the upstream Apple Silicon flow below; `uvsetup.sh` is the
+GNU/Linux/WSL workstation contract.
 
 ### Apple Silicon
 Docker on macOS cannot use the Metal GPU. For GPU-accelerated Cookbook on an
@@ -89,7 +96,17 @@ unless you opt in.
 **Cookbook storage in Docker.** Downloads live in `./data/huggingface`
 (`~/.cache/huggingface` in the container). Cookbook-installed Python CLIs and
 serve engines live in `./data/local` (`~/.local` in the container), so they
-survive container recreation.
+survive container recreation. Chroma persists in `./data/chromadb`; there is no
+second, hidden named volume to migrate. Override the shared host root once with
+`APP_DATA_DIR`.
+
+**Bun-only JavaScript runtime.** The image copies Bun 1.3.14 from the official
+`oven/bun` image. It does not install Node.js, npm, pnpm, Yarn, Chromium, or a
+Playwright browser. Canonical `node`, `npm`, `npx`, `pnpm`, `yarn`, and
+`corepack` command names are image-owned compatibility facades that execute Bun.
+The Bun/bunx cache persists in `./data/bun`. Dependency lifecycle scripts remain
+subject to Bun's `trustedDependencies` safety model; add trust in the relevant
+project manifest rather than bypassing it image-wide.
 
 **Remote servers.** In **Cookbook -> Settings -> Servers**, generate the
 Odysseus SSH key and add the public key to the remote server's
@@ -255,19 +272,21 @@ RENDER_GID=989
 
 For NVIDIA/AMD GPU support, also read the comments in the selected overlay file: docker/gpu.nvidia.yml or docker/gpu.amd.yml.
 
-**Stack-management UIs (Portainer, Coolify, Dockhand, etc.).** These tools
-often accept only a single Compose file and do not reliably honor `COMPOSE_FILE`
-or multiple `-f` overlays. CLI users should keep using the `COMPOSE_FILE`
-overlay workflow above. For stack UIs, point the stack at one of the standalone
-files instead, which bundle the base stack plus the GPU settings:
+**Alternate override filenames.** `docker-compose.gpu-nvidia.yml` and
+`docker-compose.gpu-amd.yml` are thin, backward-compatible aliases of the
+canonical `docker/gpu.*.yml` overlays. They deliberately do not copy the stack;
+always combine either one with `docker-compose.yml`:
 
-- `docker-compose.gpu-nvidia.yml` — still requires the NVIDIA Container Toolkit
-  on the host.
-- `docker-compose.gpu-amd.yml` — still requires host ROCm/kfd/DRI setup, the
-  `video`/`render` group membership, and `RENDER_GID` when needed.
+```bash
+docker compose -f docker-compose.yml -f docker-compose.gpu-nvidia.yml up -d --build
+# or
+docker compose -f docker-compose.yml -f docker-compose.gpu-amd.yml up -d --build
+```
 
-The base `docker-compose.yml` plus the `docker/gpu.*.yml` overlays remain the
-source of truth; the standalone files mirror them for single-file deployments.
+This keeps authentication, Bun/Camofox, telemetry opt-outs, and storage
+configuration in one source of truth. A stack-management UI must support a base
+file plus an override; do not submit either GPU override as a standalone stack.
+The NVIDIA toolkit and AMD ROCm/group prerequisites above still apply.
 
 Verify after enabling either overlay:
 
@@ -381,8 +400,8 @@ If `chromadb-client` (the lightweight HTTP-only package) is installed alongside 
 
 **Fix:** uninstall `chromadb-client` and force-reinstall the full package:
 ```bash
-./venv/bin/pip uninstall chromadb-client -y
-./venv/bin/pip install --force-reinstall chromadb
+.venv/bin/python -m pip uninstall chromadb-client -y
+.venv/bin/python -m pip install --force-reinstall chromadb
 ```
 
 ### HTTPS + LAN/Tailscale exposure
@@ -419,24 +438,22 @@ A grab-bag of small gotchas that otherwise turn into long debugging sessions.
 | `PyMuPDF` | PDF page rendering in the side viewer panel and form-filling. (Note: AGPL-3.0) |
 | `markitdown` | Office/EPUB document text extraction (converts .docx/.xlsx/.pptx/.xls/.epub to Markdown). |
 
-### Faster, reproducible installs with uv (optional)
-[uv](https://docs.astral.sh/uv/) works as a drop-in replacement for the
-venv + pip steps in the native install guides, no project changes are needed but this change results in faster installs along with a lockfile for reproducible environments. After [installing `uv`](https://docs.astral.sh/uv/getting-started/installation/), use:
+### Dependency snapshots
+
+Diogenes' GNU/Linux setup already uses uv and an exact Python patch, but
+`requirements.txt` intentionally follows current compatible package releases.
+Two installs at different times can therefore produce different package
+versions. To preserve a known-good deployment or reproduce it on another
+matching host, snapshot and restore exact versions with:
 
 ```bash
-uv venv venv --python 3.13
-uv pip install -r requirements.txt
-# then continue as usual: python setup.py, uvicorn, ...
+uv pip freeze --python .venv/bin/python > requirements.lock
+uv pip sync --python .venv/bin/python requirements.lock
 ```
 
-`requirements.txt` is intentionally unpinned, so two installs at different times can produce different package versions. If you want a reproducible environment (e.g. across your own machines, or to roll back after a bad upgrade), snapshot and restore exact versions with:
-
-```bash
-uv pip compile requirements.txt -o requirements.lock   # snapshot current resolution
-uv pip sync requirements.lock                          # reproduce it exactly later
-```
-
-`requirements.lock` is gitignored and platform-specific (compile it on the OS you deploy to). Regenerate it deliberately when you want to take upgrades. The plain `uv pip install -r requirements.txt` keeps following the unpinned requirements like pip does.
+`requirements.lock` is gitignored and platform-specific. Regenerate it
+deliberately after reviewed updates. The normal `./uvsetup.sh` flow keeps
+following the unpinned requirements and then runs `uv pip check`.
 
 ### Outlook / Office 365 email
 Odysseus email accounts currently use IMAP/SMTP username-password auth. Outlook
@@ -496,7 +513,7 @@ Key settings:
 | `SEARXNG_SECRET` | generated on first Docker boot | Optional SearXNG cookie/CSRF secret. Leave blank unless you need to pin it. |
 | `APP_BIND` | `127.0.0.1` | Docker Compose host bind address for the web UI. Use `0.0.0.0` only for intentional LAN/reverse-proxy access. |
 | `APP_PORT` | `7000` | Docker Compose host port for the web UI. |
-| `APP_DATA_DIR` | `./data` | Docker Compose host directory for application data volumes. |
+| `APP_DATA_DIR` | `./data` | Docker Compose host directory for application data, Chroma, Bun, model, SSH, and Python CLI storage. |
 | `APP_LOGS_DIR` | `./logs` | Docker Compose host directory for application logs. |
 | `AUTH_ENABLED` | `true` | Enable/disable login |
 | `LOCALHOST_BYPASS` | `false` | Development-only auth bypass for loopback requests. Keep false for shared/network deployments. |
@@ -519,43 +536,51 @@ All upload-limit vars are validated (must be a positive integer) and optional; a
 
 ### Built-in MCP servers and browser provider
 
-Odysseus auto-registers its Python built-in MCP servers at startup. Browser
-automation is a separately selectable npx-based MCP provider:
+Odysseus auto-registers its Python built-in MCP servers at startup. Diogenes
+defaults its separate browser MCP to Camofox:
 
 ```dotenv
-# Backward-compatible upstream default
-ODYSSEUS_BROWSER_MCP_PROVIDER=playwright
-
-# Existing external camofox-browser service
-# ODYSSEUS_BROWSER_MCP_PROVIDER=camofox
-# CAMOFOX_URL=http://127.0.0.1:9377
+ODYSSEUS_BROWSER_MCP_PROVIDER=camofox
+CAMOFOX_URL=http://127.0.0.1:9377
+CAMOFOX_MCP_ROOT=${ULYSSES_MICROSERVICES_ROOT}/camofox-mcp
 
 # No built-in browser MCP (does not uninstall either package)
 # ODYSSEUS_BROWSER_MCP_PROVIDER=disabled
+
+# Upstream-compatible explicit alternative; never selected automatically
+# ODYSSEUS_BROWSER_MCP_PROVIDER=playwright
 ```
 
-`auto` selects Camofox only when `CAMOFOX_URL` is explicitly configured;
-otherwise it selects Playwright. A cached Playwright package never overrides an
-explicit `camofox` or `disabled` selection.
-
-To install the Playwright MCP package once:
-
-```bash
-npx -y @playwright/mcp@latest --version
-```
-
-To install Camofox MCP and start its required independent browser service:
-
-```bash
-npx -y camofox-mcp@latest --version
-npx camofox-browser@latest
-```
+`auto` also resolves to Camofox. A cached Playwright package never changes that
+selection. When `${CAMOFOX_MCP_ROOT}/dist/index.js` exists, Diogenes launches
+that reviewed local checkout directly with Bun. Otherwise it can resolve the
+Camofox MCP package through Sandwich's `npx` facade; Node is not installed.
+The independent Camofox browser service is installed, configured, updated, and
+started from **Services**.
 
 Camofox MCP uses stdio for Odysseus while calling the browser service at
 `CAMOFOX_URL` (default `http://127.0.0.1:9377`). Set `CAMOFOX_API_KEY` when that
 service requires authentication. Set `ODYSSEUS_BROWSER_MCP_REQUIRE_CACHE=1` to
-forbid npx package downloads during Odysseus startup; a missing selected package
-is then reported and skipped.
+forbid package resolution during startup; a missing selected package is then
+reported and skipped.
+
+Compose deliberately uses a separate container-to-host address so the native
+`.env` value can remain loopback-safe:
+
+```dotenv
+CAMOFOX_DOCKER_URL=http://host.docker.internal:9377
+```
+
+`host.docker.internal` is mapped through Compose on Linux and is provided by
+Docker Desktop on macOS/Windows. If the reviewed Camofox MCP checkout is mounted
+inside the container, set `CAMOFOX_MCP_CONTAINER_ROOT` to that *container*
+path; native host paths are not reused implicitly.
+
+Playwright remains available only when
+`ODYSSEUS_BROWSER_MCP_PROVIDER=playwright` is explicitly configured. The image
+does not contain Chromium and does not run `playwright install`; provide an
+intentionally mounted compatible executable through
+`ODYSSEUS_BROWSER_EXECUTABLE`, or use the default Camofox service.
 
 ## Architecture
 ```

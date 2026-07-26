@@ -33,7 +33,12 @@ def test_extras_and_version_markers_are_stripped():
 def test_plain_names_pass_through():
     assert _pip_dist_name({"name": "vllm", "pip": "vllm"}) == "vllm"
     assert _pip_dist_name({"name": "playwright", "pip": "playwright"}) == "playwright"
-    assert _pip_dist_name({"name": "hf_transfer", "pip": "hf_transfer"}) == "hf_transfer"
+    assert (
+        _pip_dist_name(
+            {"name": "hf_xet", "pip": "huggingface_hub[hf_xet]"}
+        )
+        == "huggingface_hub"
+    )
 
 
 def test_falls_back_to_import_name_when_no_pip_spec():

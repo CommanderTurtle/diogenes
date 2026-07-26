@@ -58,6 +58,42 @@ class _FakeHermesControl:
         )
 
 
+class _FakeHermesStackControl:
+    @staticmethod
+    def observe():
+        return {
+            "schema_version": "diogenes.hermes-stack-report.v1",
+            "services_root": "/home/example/Hermes",
+            "hermes_available": True,
+            "default_config_present": True,
+            "artifacts": {"default:mcp:retrieval": True},
+            "profiles": [
+                {
+                    "profile": "default",
+                    "missing_mcp": [],
+                    "missing_plugins": [],
+                    "rag_policy_missing": [],
+                    "always_enabled_but_disabled": [],
+                    "codebase_hook_ready": True,
+                }
+            ],
+            "gateway_restart_required": True,
+            "ready": True,
+        }
+
+    def create_plan(self, *, action):
+        return (
+            {
+                "id": "2" * 32,
+                "runtime_id": "hermes.stack",
+                "action": action,
+                "status": "planned",
+                "confirmation_phrase": "APPLY HERMES STACK",
+            },
+            "hermes-stack-confirmation-token",
+        )
+
+
 class _FakeColibriControl:
     def create_plan(self, _report, *, provider_id, action):
         return (
@@ -68,6 +104,19 @@ class _FakeColibriControl:
                 "status": "planned",
             },
             "colibri-confirmation-token",
+        )
+
+
+class _FakePrismControl:
+    def create_plan(self, _report, *, provider_id, action):
+        return (
+            {
+                "id": "1" * 32,
+                "runtime_id": provider_id,
+                "action": action,
+                "status": "planned",
+            },
+            "prism-confirmation-token",
         )
 
 
@@ -104,6 +153,7 @@ def _client(
     chroma_report=None,
     hermes_report=None,
     colibri_report=None,
+    prism_report=None,
 ):
     monkeypatch.setattr(routes, "require_admin", gate)
     monkeypatch.setattr(
@@ -140,16 +190,22 @@ def _client(
                 "mode": "read_only",
                 "providers": [],
             },
+            prism_collector=lambda: prism_report
+            or {
+                "schema_version": "ulysses.prism-provider-report.v1",
+                "providers": [],
+            },
             hermes_control_factory=_FakeHermesControl,
+            hermes_stack_control_factory=_FakeHermesStackControl,
             colibri_control_factory=_FakeColibriControl,
+            prism_control_factory=_FakePrismControl,
             runtime_control_factory=_FakeRuntimeControl,
             sandwich_control_factory=_FakeSandwichControl,
             sandwich_collector=lambda: {
                 "schema_version": "ulysses.sandwich-status.v1",
                 "installed": True,
                 "ready": True,
-                "bundled_version": "0.2.0",
-                "installed_version": "0.2.0",
+                "installed_version": "0.3.0",
                 "source_root": "/home/example/Hermes/sandwich",
             },
             managed_runtime_collector=lambda: {
@@ -265,6 +321,29 @@ def test_admin_receives_read_only_hermes_adoption(monkeypatch):
     assert response.json() == report
 
 
+def test_admin_receives_read_only_hermes_stack_readiness(monkeypatch):
+    response = _client(monkeypatch, lambda _request: None).get(
+        "/api/odysseus/hermes/stack"
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["schema_version"] == "diogenes.hermes-stack-report.v1"
+    assert payload["ready"] is True
+    assert payload["profiles"][0]["profile"] == "default"
+
+
+def test_hermes_stack_requires_admin(monkeypatch):
+    def gate(_request: Request):
+        raise HTTPException(403, "Admin only")
+
+    response = _client(monkeypatch, gate).get(
+        "/api/odysseus/hermes/stack"
+    )
+
+    assert response.status_code == 403
+
+
 def test_colibri_providers_require_admin(monkeypatch):
     def gate(_request: Request):
         raise HTTPException(403, "Admin only")
@@ -330,6 +409,72 @@ def test_admin_can_create_a_confirmed_colibri_build_plan(monkeypatch):
     assert payload["confirmation_token"] == "colibri-confirmation-token"
 
 
+def test_prism_providers_require_admin(monkeypatch):
+    def gate(_request: Request):
+        raise HTTPException(403, "Admin only")
+
+    response = _client(monkeypatch, gate).get(
+        "/api/odysseus/prism/providers"
+    )
+    assert response.status_code == 403
+
+
+def test_admin_receives_read_only_prism_provider_observation(monkeypatch):
+    report = {
+        "schema_version": "ulysses.prism-provider-report.v1",
+        "providers": [
+            {
+                "id": "prism.llamacpp",
+                "models": [{"id": "prism.ternary-bonsai-27b"}],
+            }
+        ],
+    }
+    response = _client(
+        monkeypatch,
+        lambda _request: None,
+        prism_report=report,
+    ).get("/api/odysseus/prism/providers")
+
+    assert response.status_code == 200
+    assert response.json() == report
+
+
+def test_admin_can_render_but_not_execute_a_prism_command(monkeypatch):
+    monkeypatch.setattr(
+        routes,
+        "render_prism_serve_command",
+        lambda model_id, settings: (
+            f"canonical:{model_id}:{settings['profile']}"
+        ),
+    )
+    response = _client(monkeypatch, lambda _request: None).post(
+        "/api/odysseus/prism/command",
+        json={
+            "model_id": "prism.ternary-bonsai-27b",
+            "settings": {"profile": "rtx5090-quality"},
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["command"] == (
+        "canonical:prism.ternary-bonsai-27b:rtx5090-quality"
+    )
+    assert response.json()["editable"] is False
+
+
+def test_admin_can_create_a_confirmed_prism_build_plan(monkeypatch):
+    response = _client(monkeypatch, lambda _request: None).post(
+        "/api/odysseus/prism/jobs/plan",
+        json={"runtime_id": "prism.llamacpp", "action": "build"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["job"]["runtime_id"] == "prism.llamacpp"
+    assert payload["job"]["action"] == "build"
+    assert payload["confirmation_token"] == "prism-confirmation-token"
+
+
 def test_admin_receives_managed_runtime_categories(monkeypatch):
     response = _client(monkeypatch, lambda _request: None).get(
         "/api/odysseus/runtimes"
@@ -360,6 +505,22 @@ def test_admin_can_create_a_confirmed_hermes_job_plan(monkeypatch):
     payload = response.json()
     assert payload["job"]["status"] == "planned"
     assert payload["confirmation_token"] == "confirmation-token"
+
+
+def test_admin_can_create_a_confirmed_hermes_stack_plan(monkeypatch):
+    response = _client(monkeypatch, lambda _request: None).post(
+        "/api/odysseus/hermes/stack/jobs/plan",
+        json={"action": "apply"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["job"]["runtime_id"] == "hermes.stack"
+    assert payload["job"]["confirmation_phrase"] == "APPLY HERMES STACK"
+    assert (
+        payload["confirmation_token"]
+        == "hermes-stack-confirmation-token"
+    )
 
 
 def test_admin_can_plan_a_hermes_owned_mcp_test(monkeypatch):

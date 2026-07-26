@@ -547,7 +547,7 @@ async def test_app_api_blocks_cookbook_host_control_routes_before_loopback(monke
     blocked_calls = (
         (
             "api/cookbook/packages/install",
-            {"pip": "hf_transfer"},
+            {"pip": "hf_xet"},
             "package installation is host code execution",
         ),
         (

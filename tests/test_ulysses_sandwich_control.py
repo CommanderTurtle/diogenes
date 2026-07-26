@@ -3,34 +3,6 @@ from __future__ import annotations
 from pathlib import Path
 
 from src.ulysses_sandwich_control import SandwichControl
-from src.ulysses_sandwich_install import stage_bundled_sandwich
-
-
-REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
-
-
-def test_staging_materializes_exact_component_under_services_root(tmp_path: Path) -> None:
-    services = tmp_path / "Hermes"
-
-    result = stage_bundled_sandwich(
-        repository_root=REPOSITORY_ROOT,
-        home=tmp_path,
-        microservices_root=services,
-    )
-
-    target = services / "sandwich"
-    assert result["created"] is True
-    assert result["source_root"] == str(target)
-    assert (target / "manifest.json").read_bytes() == (
-        REPOSITORY_ROOT / "components" / "sandwich" / "manifest.json"
-    ).read_bytes()
-
-    repeated = stage_bundled_sandwich(
-        repository_root=REPOSITORY_ROOT,
-        home=tmp_path,
-        microservices_root=services,
-    )
-    assert repeated["created"] is False
 
 
 def test_install_plan_targets_configured_microservices_root(
@@ -42,7 +14,11 @@ def test_install_plan_targets_configured_microservices_root(
     control = SandwichControl(tmp_path / "state")
 
     plan, _token = control.create_plan(
-        {"ready": False, "bundled_version": "0.3.0"},
+        {
+            "ready": False,
+            "installed_version": None,
+            "repository": "https://github.com/CommanderTurtle/sandwich.git",
+        },
         action="install",
     )
 
@@ -52,10 +28,8 @@ def test_install_plan_targets_configured_microservices_root(
         "-m",
         "src.ulysses_sandwich_install",
         "--stage",
-        "--source",
-        "git",
     ]
-    assert plan["steps"][1]["argv"] == [
-        str(target / "scripts" / "install-user.sh"),
-        "--apply",
-    ]
+    assert plan["steps"][1]["argv"] == [str(target / "install.sh")]
+    assert plan["steps"][1]["label"] == (
+        "Install Bun and the Sandwich compatibility layer"
+    )

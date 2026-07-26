@@ -12,6 +12,7 @@ from types import SimpleNamespace
 
 import pytest
 
+import routes.shell_routes as shell_routes
 from routes.shell_routes import (
     _find_line_break,
     _host_docker_access_enabled,
@@ -386,6 +387,51 @@ class TestPackageProbeStatus:
         assert "vLLM 0.23.0" in status.note
         assert "without upgrading to latest" in status.note
 
+    def test_vllm_cuda13_nightly_targets_only_inner_venv(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("ULYSSES_VLLM_LOCK", raising=False)
+        monkeypatch.setenv("ULYSSES_VLLM_PROFILE", "cuda13-nightly")
+        monkeypatch.delenv("ULYSSES_VLLM_SPEC", raising=False)
+        venv = tmp_path / ".venv"
+        venv_bin = venv / ("Scripts" if shell_routes.IS_WINDOWS else "bin")
+        python = venv_bin / ("python.exe" if shell_routes.IS_WINDOWS else "python")
+        python.parent.mkdir(parents=True)
+        python.write_text("", encoding="utf-8")
+        (venv / "pyvenv.cfg").write_text("uv = 0.11.31\n", encoding="utf-8")
+        monkeypatch.setattr(sys, "prefix", str(venv))
+        monkeypatch.setattr(sys, "base_prefix", "/usr")
+        monkeypatch.setattr(sys, "executable", str(python))
+        monkeypatch.setattr(shell_routes, "_DIOGENES_VENV", venv.resolve())
+
+        contract = _ulysses_vllm_lock_contract()
+
+        assert contract is not None
+        assert contract["mode"] == "cuda13-nightly"
+        assert contract["torch_backend"] == "cu130"
+        assert contract["package_spec"] == "vllm"
+        assert contract["python"] == str(python.absolute())
+        normalized, changed = _normalize_ulysses_vllm_install(
+            f"{python} -m pip install -U vllm"
+        )
+        assert changed is True
+        expected_install = shell_routes._ulysses_vllm_install_command(
+            contract, postflight=False
+        )
+        assert normalized.startswith(expected_install)
+        assert "--torch-backend=cu130" in normalized
+        assert "https://wheels.vllm.ai/nightly/cu130" in normalized
+        assert shell_routes.shlex.join(
+            ["uv", "pip", "check", "--python", str(python.absolute())]
+        ) in normalized
+        assert "import torch, vllm" in normalized
+        assert "diogenes-vllm-cuda13.lock" not in normalized
+
+        status = _package_pip_update_status(
+            {"name": "vllm", "pip": "vllm", "managed_install": contract},
+            {"binaries": {"vllm": str(venv / "bin" / "vllm")}, "dists": {"vllm": "0.26.0"}},
+        )
+        assert status.available is True
+        assert "CUDA 13 nightly" in status.note
+
     def test_vllm_uv_lock_contract_requires_complete_exact_lock(self, tmp_path, monkeypatch):
         lock = tmp_path / "vllm.lock"
         lock.write_text(
@@ -402,13 +448,15 @@ class TestPackageProbeStatus:
         )
         monkeypatch.setenv("ULYSSES_VLLM_LOCK", str(lock))
         venv = tmp_path / ".venv"
-        python = venv / "bin" / "python"
+        venv_bin = venv / ("Scripts" if shell_routes.IS_WINDOWS else "bin")
+        python = venv_bin / ("python.exe" if shell_routes.IS_WINDOWS else "python")
         python.parent.mkdir(parents=True)
         python.write_text("", encoding="utf-8")
         (venv / "pyvenv.cfg").write_text("uv = 0.11.31\n", encoding="utf-8")
         monkeypatch.setattr(sys, "prefix", str(venv))
         monkeypatch.setattr(sys, "base_prefix", "/usr")
         monkeypatch.setattr(sys, "executable", str(python))
+        monkeypatch.setattr(shell_routes, "_DIOGENES_VENV", venv.resolve())
 
         contract = _ulysses_vllm_lock_contract()
 
@@ -424,9 +472,13 @@ class TestPackageProbeStatus:
             f"{python} -m pip install -U vllm transformers"
         )
         assert changed is True
-        assert normalized == (
-            f"uv pip install --python {python} -r {lock.resolve()} --strict"
+        assert normalized.startswith(
+            shell_routes._ulysses_vllm_install_command(contract, postflight=False)
         )
+        assert shell_routes.shlex.join(
+            ["uv", "pip", "check", "--python", str(python.absolute())]
+        ) in normalized
+        assert "import torch, vllm" in normalized
 
         torch_normalized, torch_changed = _normalize_ulysses_vllm_install(
             f"{python} -m pip install -U torch"
@@ -446,6 +498,42 @@ class TestPackageProbeStatus:
         )
         assert remote_changed is False
         assert remote == "python -m pip install -U vllm"
+
+    def test_vllm_contract_rejects_a_different_active_venv(
+        self, tmp_path, monkeypatch
+    ):
+        app_venv = tmp_path / "checkout" / ".venv"
+        other_venv = tmp_path / "other" / ".venv"
+        venv_bin = other_venv / ("Scripts" if shell_routes.IS_WINDOWS else "bin")
+        python = venv_bin / ("python.exe" if shell_routes.IS_WINDOWS else "python")
+        python.parent.mkdir(parents=True)
+        python.write_text("", encoding="utf-8")
+        (other_venv / "pyvenv.cfg").write_text("uv = 0.11.31\n", encoding="utf-8")
+        monkeypatch.setenv("ULYSSES_VLLM_PROFILE", "cuda13-nightly")
+        monkeypatch.delenv("ULYSSES_VLLM_LOCK", raising=False)
+        monkeypatch.setattr(shell_routes, "_DIOGENES_VENV", app_venv.resolve())
+        monkeypatch.setattr(sys, "prefix", str(other_venv))
+        monkeypatch.setattr(sys, "base_prefix", "/usr")
+        monkeypatch.setattr(sys, "executable", str(python))
+
+        assert _ulysses_vllm_lock_contract() is None
+
+    def test_vllm_contract_rejects_python_outside_venv_bin(
+        self, tmp_path, monkeypatch
+    ):
+        venv = tmp_path / ".venv"
+        external_python = tmp_path / "python"
+        venv.mkdir()
+        external_python.write_text("", encoding="utf-8")
+        (venv / "pyvenv.cfg").write_text("uv = 0.11.31\n", encoding="utf-8")
+        monkeypatch.setenv("ULYSSES_VLLM_PROFILE", "cuda13-nightly")
+        monkeypatch.delenv("ULYSSES_VLLM_LOCK", raising=False)
+        monkeypatch.setattr(shell_routes, "_DIOGENES_VENV", venv.resolve())
+        monkeypatch.setattr(sys, "prefix", str(venv))
+        monkeypatch.setattr(sys, "base_prefix", "/usr")
+        monkeypatch.setattr(sys, "executable", str(external_python))
+
+        assert _ulysses_vllm_lock_contract() is None
 
     def test_llama_cpp_is_installed_when_native_llama_server_exists(self):
         probe = {

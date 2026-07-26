@@ -35,7 +35,8 @@ def test_cpu_only_drops_gpu_only_flags():
 def test_diffusers_is_not_blocked_on_windows_dependencies_panel():
     text = SRC.read_text(encoding="utf-8")
 
-    assert "const _winUnsupported = new Set(['hf_transfer', 'vllm', 'rembg', 'gfpgan']);" in text
+    assert "const _winUnsupported = new Set(['vllm', 'rembg', 'gfpgan']);" in text
+    assert "hf_xet" not in re.search(r"const _winUnsupported = new Set\(([^;]+)", text).group(1)
     assert "new Set(['diffusers'" not in text
 
 

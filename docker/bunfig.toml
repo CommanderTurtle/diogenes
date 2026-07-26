@@ -1,0 +1,6 @@
+# Container-wide Bun policy. Package-specific trust decisions remain in each
+# project's package.json (`trustedDependencies`) rather than being bypassed.
+telemetry = false
+
+[run]
+bun = true

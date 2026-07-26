@@ -12,8 +12,8 @@ from starlette.routing import Route
 from starlette.testclient import TestClient
 
 ROOT = Path(__file__).resolve().parents[1]
-COMPOSE_FILES = [
-    ROOT / "docker-compose.yml",
+BASE_COMPOSE = ROOT / "docker-compose.yml"
+GPU_OVERRIDE_FILES = [
     ROOT / "docker-compose.gpu-nvidia.yml",
     ROOT / "docker-compose.gpu-amd.yml",
 ]
@@ -51,12 +51,11 @@ def _cors_allow_methods() -> list[str]:
 def test_compose_files_forward_every_upload_limit_env_var():
     expected = _upload_limit_env_names()
     assert expected
-    for path in COMPOSE_FILES:
-        assert expected <= _compose_env_names(path), path.name
+    assert expected <= _compose_env_names(BASE_COMPOSE)
 
 
 def test_default_compose_files_do_not_mount_host_docker_socket():
-    for path in COMPOSE_FILES:
+    for path in [BASE_COMPOSE, *GPU_OVERRIDE_FILES]:
         text = path.read_text(encoding="utf-8")
         assert "/var/run/docker.sock" not in text, path.name
 
@@ -89,7 +88,9 @@ def test_docker_entrypoint_gates_socket_group_plumbing_on_explicit_opt_in():
 
 def test_docker_entrypoint_does_not_resolve_root_commands_from_app_local_path():
     script = (ROOT / "docker" / "entrypoint.sh").read_text(encoding="utf-8")
-    path_export = script.index('export PATH="/app/.local/bin:$PATH"')
+    path_export = script.index(
+        'export PATH="${BUN_INSTALL_BIN:-/app/.bun/bin}:/app/.local/bin:$PATH"'
+    )
     gosu_capture = script.index('GOSU_BIN="$(command -v gosu)"')
     python_capture = script.index('PYTHON_BIN="$(command -v python)"')
     setup_call = script.index('"$GOSU_BIN" "$ODY_USER" "$PYTHON_BIN" /app/setup.py')

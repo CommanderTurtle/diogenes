@@ -504,6 +504,12 @@ export function _detectBackend(model) {
   const isRocm = sysBackend === 'rocm';
   const isAppleSilicon = ['metal', 'mps', 'apple'].includes(sysBackend);
   const _nm = `${model.repo_id || ''} ${model.path || ''} ${model.name || ''}`.toLowerCase();
+  if (_nm.includes('prism-ml/ternary-bonsai-27b-gguf')
+      || _nm.includes('ternary-bonsai-27b-gguf')
+      || _nm.includes('prism-ml/bonsai-27b-gguf')
+      || _nm.includes('bonsai-27b-gguf')) {
+    return { backend: 'prism', label: 'PrismML' };
+  }
   if (_nm.includes('mastouri/glm-5.2-colibri-int4-g64-with-int8-mtp')
       || _nm.includes('mastouri--glm-5.2-colibri-int4-g64-with-int8-mtp')
       || _nm.includes('mateogrgic/glm-5.2-colibri-int4-with-int8-mtp')
@@ -756,6 +762,11 @@ export function _buildServeCmd(f, modelName, backend) {
     cmd += ` --max-queue ${f.colibri_max_queue || '8'}`;
     cmd += ` --queue-timeout ${f.colibri_queue_timeout || '300'}`;
     cmd += ` --kv-slots ${f.colibri_kv_slots || '1'}`;
+  } else if (backend === 'prism') {
+    // PrismML executable and model paths are catalog-owned. The serve panel
+    // replaces this value with /api/odysseus/prism/command output and the
+    // launch route validates that exact command again before execution.
+    cmd = String(f.prism_command || '').trim();
   } else if (backend === 'vllm') {
     // GPU list comes from the Row-1 button strip (data-field="gpus") —
     // the bare "auto" input that used to back gpu_id is gone, and the
@@ -1197,11 +1208,14 @@ async function _fetchDependencies() {
       if (_hint) _pkgParams.set('model_hint', _hint);
     }
     const _viewingRemote = !!(_dsel && _dsel.value && _dsel.value !== 'local');
-    const [resp, colibriResp, hermesResp, sandwichResp] = await Promise.all([
+    const [resp, colibriResp, prismResp, hermesResp, sandwichResp] = await Promise.all([
       fetch('/api/cookbook/packages' + (_pkgParams.toString() ? '?' + _pkgParams.toString() : '')),
       _viewingRemote
         ? Promise.resolve(null)
         : fetch('/api/odysseus/colibri/providers', { credentials: 'same-origin' }).catch(() => null),
+      _viewingRemote
+        ? Promise.resolve(null)
+        : fetch('/api/odysseus/prism/providers', { credentials: 'same-origin' }).catch(() => null),
       _viewingRemote
         ? Promise.resolve(null)
         : fetch('/api/odysseus/hermes/adoption', { credentials: 'same-origin' }).catch(() => null),
@@ -1211,6 +1225,7 @@ async function _fetchDependencies() {
     ]);
     const data = await resp.json();
     const _colibriExtras = colibriResp?.ok ? await colibriResp.json() : null;
+    const _prismExtra = prismResp?.ok ? await prismResp.json() : null;
     const _hermesExtra = hermesResp?.ok ? await hermesResp.json() : null;
     const _sandwichExtra = sandwichResp?.ok
       ? await sandwichResp.json()
@@ -1222,14 +1237,14 @@ async function _fetchDependencies() {
         };
     const pkgs = data.packages || [];
     if (!pkgs.length) { list.innerHTML = '<div class="hwfit-loading">No packages found</div>'; return; }
-    const _winUnsupported = new Set(['hf_transfer', 'vllm', 'rembg', 'gfpgan']);
+    const _winUnsupported = new Set(['vllm', 'rembg', 'gfpgan']);
     const _systemInstallable = new Set(['tmux', 'liburing-dev']);
 
     const _statusTag = (pkg, isLocal, isSystemDep, winBlocked) => {
       if (winBlocked) return `<span class="cookbook-dep-tag cookbook-dep-na">N/A</span>`;
       if (pkg.installed && isSystemDep) return `<span class="cookbook-dep-tag cookbook-dep-installed" title="Found on selected server">Installed</span>`;
       if (pkg.installed && pkg.pip_update_available === false && pkg.name !== 'llama_cpp') {
-        const tip = esc(pkg.update_note || pkg.status_note || 'Found externally; update outside Diogenes.');
+        const tip = esc(pkg.update_note || pkg.status_note || 'Found externally; update outside Ɗiogenēs.');
         return `<span class="cookbook-dep-tag cookbook-dep-installed" title="${tip}">Installed</span>`;
       }
       if (pkg.installed) return `<button class="cookbook-dep-tag cookbook-dep-installed cookbook-dep-installed-btn" title="Installed — click for actions"><span class="cookbook-dep-installed-label">Installed</span><span class="cookbook-dep-caret">&#9662;</span></button>`;
@@ -1248,7 +1263,7 @@ async function _fetchDependencies() {
     // Per-package inline glyphs — same accent-coloured marks used in the
     // Backend picker on the Run page, so the Dependencies row visually
     // matches the engine you're configuring. Unknown packages get no
-    // icon (the name alone is fine for librosa, hf_transfer, etc.).
+    // icon (the name alone is fine for librosa, hf_xet, etc.).
     const _DEP_GLYPHS = {
       vllm: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 4l7 16 7-16"/><path d="M14 4l4 9 3-9"/></svg>',
       sglang: '<span aria-hidden="true" style="display:block;width:13px;height:13px;background:currentColor;-webkit-mask:url(/static/icons/sglang-mark.png) center/contain no-repeat;mask:url(/static/icons/sglang-mark.png) center/contain no-repeat;"></span>',
@@ -1260,6 +1275,7 @@ async function _fetchDependencies() {
       diffusers: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M5 19l2-2M17 7l2-2"/></svg>',
       colibri_glm: '<svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 2h6v2h2v2h6v2h-5v2h5v2h-4v2h-3v2h-2v5h-2v-7H9v-2H2V8h7V6H6V4h2V2z"/></svg>',
       colibri_hy3: '<svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 2h6v2h2v2h6v2h-5v2h5v2h-4v2h-3v2h-2v5h-2v-7H9v-2H2V8h7V6H6V4h2V2z"/></svg>',
+      prism: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round" aria-hidden="true"><path d="M12 2 3 20h18L12 2Z"/><path d="M12 2v12M3 20l9-6 9 6"/></svg>',
       hermes: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 16c3-1 5-4 5-8"/><path d="M20 16c-3-1-5-4-5-8"/><path d="M9 8h6"/><path d="M7 20h10"/><path d="M12 4v16"/></svg>',
       sandwich: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linejoin="round" aria-hidden="true"><path d="M4 8l8-4 8 4-8 4-8-4z"/><path d="M4 12l8 4 8-4"/><path d="M4 16l8 4 8-4"/></svg>',
       krea_diffusers: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 19V5"/><path d="M4 12h4"/><path d="M12 5l-7 7 7 7"/><path d="M14 19l3-14 3 14"/><path d="M15.3 13h3.4"/></svg>',
@@ -1284,12 +1300,15 @@ async function _fetchDependencies() {
       // so the user can watch the pip install in the Running tab.
       let _rebuildBtn = '';
       if (pkg.name === 'vllm' && pkg.installed) {
-        const managed = pkg.managed_install?.mode === 'uv-lock';
+        const managedMode = pkg.managed_install?.mode || '';
+        const managed = managedMode === 'uv-lock' || managedMode === 'cuda13-nightly';
         const managedData = managed
-          ? ` data-managed-install-mode="uv-lock" data-managed-lock="${esc(pkg.managed_install.lock_path || '')}" data-managed-python="${esc(pkg.managed_install.python || '')}" data-managed-venv="${esc(pkg.managed_install.venv || '')}"`
+          ? ` data-managed-install-mode="${esc(managedMode)}" data-managed-lock="${esc(pkg.managed_install.lock_path || '')}" data-managed-python="${esc(pkg.managed_install.python || '')}" data-managed-venv="${esc(pkg.managed_install.venv || '')}"`
           : '';
         _rebuildBtn = managed
-          ? `<button type="button" class="cookbook-dep-tag cookbook-dep-rebuild cookbook-dep-reinstall" data-reinstall-pkg="vllm"${managedData} title="Reconcile the exact uv-locked CUDA/vLLM stack in Diogenes' inner .venv.">Reconcile</button>`
+          ? managedMode === 'uv-lock'
+            ? `<button type="button" class="cookbook-dep-tag cookbook-dep-rebuild cookbook-dep-reinstall" data-reinstall-pkg="vllm"${managedData} title="Reconcile the explicitly configured frozen vLLM lock in Ɗiogenēs’ inner .venv.">Reconcile</button>`
+            : `<button type="button" class="cookbook-dep-tag cookbook-dep-rebuild cookbook-dep-reinstall" data-reinstall-pkg="vllm"${managedData} title="Resolve current vLLM and matching Torch CUDA 13 nightly wheels inside Ɗiogenēs’ inner .venv, then run dependency and import checks.">Update CUDA 13</button>`
           : `<button type="button" class="cookbook-dep-tag cookbook-dep-rebuild cookbook-dep-reinstall" data-reinstall-pkg="vllm" title="Force-reinstall vLLM (pulls a matching torch). Runs as a tmux task in the Running tab.">Reinstall</button>`;
       } else if (pkg.name === 'sglang' && pkg.installed) {
         _rebuildBtn = `<button type="button" class="cookbook-dep-tag cookbook-dep-rebuild cookbook-dep-reinstall" data-reinstall-pkg="sglang" title="Force-reinstall SGLang (pulls a matching torch). Runs as a tmux task in the Running tab.">Reinstall</button>`;
@@ -1327,7 +1346,9 @@ async function _fetchDependencies() {
         : '';
       const managed = pkg.managed_install || {};
       const dependencyHelp = pkg.name === 'vllm' && managed.mode === 'uv-lock'
-        ? `This local Diogenes environment is pinned by ${managed.lock_path || 'the verified uv lock'}. Install and Reconcile use ${managed.python || 'the active inner .venv Python'} and never mutate a system Python. Set ULYSSES_VLLM_LOCK=disabled only to opt into normal upstream upgrades.`
+        ? `This local Ɗiogenēs environment uses the explicitly selected frozen lock ${managed.lock_path || ''}. Install and Reconcile target ${managed.python || 'the active inner .venv Python'} and never mutate a system Python.`
+        : pkg.name === 'vllm' && managed.mode === 'cuda13-nightly'
+          ? `Install and Update resolve ${managed.package_spec || 'vllm'} plus its compatible Torch stack from the CUDA 13 nightly wheel channel, only inside ${managed.venv || "Ɗiogenēs’ active .venv"}. The task finishes with uv pip check and import/version probes; it does not reuse the old implicit 0.23 lock.`
         : pkg.name === 'liburing-dev'
           ? 'This is an operating-system development package, not a Python dependency. Colibri-Hy3 needs its headers at native C/CUDA build time; it is intentionally detected outside .venv.'
           : '';
@@ -1420,6 +1441,16 @@ async function _fetchDependencies() {
       + `<button type="button" class="cookbook-dep-tag cookbook-dep-install" data-native-extra="${esc(runtimeId)}" data-native-extra-action="${esc(action)}"${enabled ? '' : ' disabled'} title="${esc(title)}">${esc(label)}</button>`
       + (title ? `<span class="hwfit-help-chip hwfit-help-chip-inline" title="${esc(title)}" aria-label="${esc(title)}">?</span>` : '')
       + `</span>`;
+    const _sourceIssueLabel = (source, { allowExpectedBuildOutput = false } = {}) => {
+      if (!source.present) return 'Not cloned';
+      if (source.unexpected_dirty || (source.dirty && !allowExpectedBuildOutput)) return 'Dirty checkout';
+      if (source.valid_checkout === false) return 'Invalid checkout';
+      if (source.origin_matches === false) return 'Source mismatch';
+      if (source.minimum_commit_present === false) return 'Revision mismatch';
+      if (Number(source.behind || 0) > 0) return 'Update available';
+      if (!source.ready) return 'Source mismatch';
+      return '';
+    };
     const _extrasHtml = (group = 'runtimes') => {
       if (_viewingRemote) return '';
       const rows = [];
@@ -1456,13 +1487,54 @@ async function _fetchDependencies() {
         rows.push(
           `<div class="cookbook-dep-row" data-pkg-name="hermes" data-dep-kind="native">`
           + `<div class="cookbook-dep-info"><div class="memory-item-title">${_depGlyphHtml('hermes')}Hermes</div>`
-          + `<div class="memory-item-meta" style="font-size:10px;opacity:.5;margin-top:2px;">Native agent installation · separate from the Diogenes Python environment</div>`
+          + `<div class="memory-item-meta" style="font-size:10px;opacity:.5;margin-top:2px;">Native agent installation · separate from the Ɗiogenēs Python environment</div>`
           + `<div class="memory-item-meta" style="font-size:10px;opacity:.65;margin-top:3px;">${esc(install.version || 'version unknown')} · ${esc(install.source_root || 'source not detected')}</div></div>`
           + _extraAction('hermes.gateway', 'update', 'Update', !!update?.enabled, update?.reason || 'Adopt Hermes in Services before lifecycle control.')
           + `<span class="cookbook-dep-tag cookbook-dep-cat">Runtime</span>`
           + `<span class="cookbook-dep-tag ${installed ? 'cookbook-dep-installed' : 'cookbook-dep-na'}">${installed ? (preview.adoption_current ? 'Managed' : 'Installed') : 'Missing'}</span>`
           + `</div>`
         );
+      }
+      if (group === 'prism') {
+        for (const provider of (_prismExtra?.providers || [])) {
+          const source = provider.source || {};
+          const build = provider.build || {};
+          const actions = provider.actions || {};
+          const models = provider.models || [];
+          const readyCount = models.filter(model => model.ready).length;
+          const sourceIssue = _sourceIssueLabel(source);
+          const modelDetail = models.map(model => {
+            const state = model.ready ? 'ready' : 'missing';
+            const file = String(model.weights?.path || '').split(/[\\/]/).pop();
+            return `${model.label}: ${file || 'exact GGUF'} ${state}`;
+          }).join(' · ');
+          const status = actions.start_available
+            ? 'Ready'
+            : sourceIssue
+              ? sourceIssue
+            : build.ready
+              ? 'Model pending'
+              : source.ready
+                ? 'Build needed'
+                : 'Source mismatch';
+          const detail = [
+            source.present ? `source ${String(source.commit || 'present').slice(0, 12)}` : 'source missing',
+            build.ready ? 'CUDA 13 · sm_120a build ready' : 'CUDA 13 build required',
+            `${readyCount}/${models.length} exact models ready`,
+          ].join(' · ');
+          rows.push(
+            `<div class="cookbook-dep-row" data-pkg-name="prism" data-dep-kind="native">`
+            + `<div class="cookbook-dep-info"><div class="memory-item-title">${_depGlyphHtml('prism')}${esc(provider.label || 'PrismML')}</div>`
+            + `<div class="memory-item-meta" style="font-size:10px;opacity:.5;margin-top:2px;">Official PrismML llama.cpp fork · independent native CUDA runtime</div>`
+            + `<div class="memory-item-meta" style="font-size:10px;opacity:.65;margin-top:3px;">${esc(detail)}</div>`
+            + `<div class="memory-item-meta" style="font-size:10px;opacity:.65;margin-top:3px;" title="Downloads remain in Models; this dependency row never substitutes another quant.">${esc(modelDetail || 'Exact model readiness unavailable')} · download exact files in Models</div></div>`
+            + _extraAction(provider.id, 'sync', source.present ? 'Sync' : 'Clone', !!actions.sync_available, 'Clone the official PrismML-Eng/llama.cpp prism branch when absent. Otherwise fetch and fast-forward only; dirty or mismatched checkouts are refused.')
+            + _extraAction(provider.id, 'build', 'Build CUDA', !!actions.build_available, 'Configure the official prism branch with CUDA 13, Ninja, Release mode, and CMAKE_CUDA_ARCHITECTURES=120a; build one internally consistent llama.cpp bundle and record its source/build manifest.')
+            + `<span class="cookbook-dep-tag cookbook-dep-cat">LLM</span>`
+            + `<span class="cookbook-dep-tag ${actions.start_available ? 'cookbook-dep-installed' : 'cookbook-dep-na'}">${esc(status)}</span>`
+            + `</div>`
+          );
+        }
       }
       for (const provider of (group === 'colibri' ? (_colibriExtras?.providers || []) : [])) {
         const isGlm = provider.id === 'colibri.glm';
@@ -1471,15 +1543,16 @@ async function _fetchDependencies() {
         const model = provider.model || {};
         const actions = provider.actions || {};
         const name = isGlm ? 'colibri_glm' : 'colibri_hy3';
+        const sourceIssue = _sourceIssueLabel(source, { allowExpectedBuildOutput: true });
         const status = actions.start_available
           ? 'Ready'
+          : sourceIssue
+            ? sourceIssue
           : build.ready
             ? 'Model pending'
             : source.ready
               ? 'Build needed'
-              : source.present
-                ? 'Source issue'
-                : 'Not cloned';
+              : 'Source mismatch';
         const detail = [
           source.present ? `source ${String(source.commit || 'present').slice(0, 12)}` : 'source missing',
           build.ready ? 'verified CUDA build ready' : (build.cuda_built ? 'CUDA build unverified' : 'CUDA build required'),
@@ -1500,19 +1573,22 @@ async function _fetchDependencies() {
           + `</div>`
         );
       }
-      return rows.length
-        ? _sectionHeader(
-            group === 'colibri' ? 'Colibri engines' : 'Native runtimes',
-            group === 'colibri'
-              ? 'Independent native C/CUDA LLM engines; each source tree is cloned, built, validated, and updated separately.'
-              : 'Host-level capabilities; never installed into the Diogenes Python environment.',
-          ) + rows.join('')
-        : '';
+      const title = group === 'colibri'
+        ? 'Colibri engines'
+        : group === 'prism'
+          ? 'PrismML engine'
+          : 'Native runtimes';
+      const note = group === 'colibri'
+        ? 'Independent native C/CUDA LLM engines; each source tree is cloned, built, validated, and updated separately.'
+        : group === 'prism'
+          ? 'Official native llama.cpp fork with exact Prism GGUF contracts; isolated from Python, vLLM, and Colibri.'
+          : 'Host-level capabilities; never installed into the Ɗiogenēs Python environment.';
+      return rows.length ? _sectionHeader(title, note) + rows.join('') : '';
     };
     const _pkgOrder = {
       System: ['tmux', 'docker', 'liburing-dev'],
-      Tools: ['hf_transfer'],
-      LLM: ['llama_cpp', 'sglang', 'vllm', 'colibri_glm', 'colibri_hy3', 'mlx_lm'],
+      Tools: ['hf_xet'],
+      LLM: ['llama_cpp', 'sglang', 'vllm', 'prism', 'colibri_glm', 'colibri_hy3', 'mlx_lm'],
       Image: ['diffusers', 'krea_diffusers', 'transformers', 'sam_mask', 'mflux', 'boogu_image_mlx', 'mlx_vlm'],
     };
     const _sortDeps = (items, category) => {
@@ -1561,7 +1637,10 @@ async function _fetchDependencies() {
               ? 'Browser and assistant utilities.'
               : '';
         parts.push(_section(cat, note, catItems));
-        if (cat === 'LLM') parts.push(_extrasHtml('colibri'));
+        if (cat === 'LLM') {
+          parts.push(_extrasHtml('prism'));
+          parts.push(_extrasHtml('colibri'));
+        }
       }
       return parts.join('');
     };
@@ -1573,7 +1652,7 @@ async function _fetchDependencies() {
         if (!byCat.has(cat)) byCat.set(cat, []);
         byCat.get(cat).push(item);
       }
-      const parts = [_sectionHeader('Diogenes app', 'Run inside the Diogenes app itself.')];
+      const parts = [_sectionHeader('Ɗiogenēs app', 'Run inside the Ɗiogenēs app itself.')];
       const order = ['System', 'Tools', 'LLM', 'Image', 'Audio', 'Other'];
       for (const cat of order) {
         const catItems = _sortDeps(byCat.get(cat) || [], cat);
@@ -1606,11 +1685,14 @@ async function _fetchDependencies() {
         const action = button.dataset.nativeExtraAction || '';
         const isHermes = runtimeId === 'hermes.gateway';
         const isSandwich = runtimeId === 'sandwich.runtime';
+        const isPrism = runtimeId === 'prism.llamacpp';
         const endpoint = isHermes
           ? '/api/odysseus/hermes/jobs/plan'
           : isSandwich
             ? '/api/odysseus/sandwich/jobs/plan'
-            : '/api/odysseus/colibri/jobs/plan';
+            : isPrism
+              ? '/api/odysseus/prism/jobs/plan'
+              : '/api/odysseus/colibri/jobs/plan';
         const body = isHermes || isSandwich
           ? { action }
           : { runtime_id: runtimeId, action };
@@ -1678,7 +1760,7 @@ async function _fetchDependencies() {
       let targetEnvPath = isLocalOnly ? '' : (targetServer?.envPath || _envState.envPath || '');
       const _managedVllm = (
         pipName === 'vllm'
-        && managedInstall?.mode === 'uv-lock'
+        && ['uv-lock', 'cuda13-nightly'].includes(managedInstall?.mode)
         && !targetServer?.host
         && !_envState.remoteHost
       );
@@ -1720,8 +1802,11 @@ async function _fetchDependencies() {
         .join(' ');
       const depTaskId = String(pkgName || pipName || 'dependency').trim().replace(/\s+/g, '_');
       if (_managedVllm && managedInstall.python) _py = managedInstall.python;
+      // The server renders the exact selected vLLM profile. This bounded
+      // trigger keeps indexes, pins, and postflight checks authoritative on
+      // the host instead of duplicating them in a potentially stale browser.
       const cmd = _managedVllm
-        ? `uv pip install --python ${_shellQuote(_py)} -r ${_shellQuote(managedInstall.lock)} --strict`
+        ? `${_shellQuote(_py)} -m pip install -U vllm`
         : `${_shellQuote(_py)} -m pip install${upgrade ? ' -U' : ''}${_pipFlags} ${pipArgs}`;
       let envPrefix = '';
       if (_isWindows()) {
@@ -1771,7 +1856,9 @@ async function _fetchDependencies() {
         // model) so the running-task card doesn't offer a "Serve →" button.
         const payload = { repo_id: depTaskId, _cmd: cmd, remote_host: targetRemoteHost || '', _dep: true, env_path: targetEnvPath || '', platform: targetPlatform || '' };
         _addTask(data.session_id, 'pip ' + pkgName, 'download', payload);
-        const verb = _managedVllm ? 'Reconciling' : (upgrade ? 'Updating' : 'Installing');
+        const verb = _managedVllm
+          ? (managedInstall.mode === 'uv-lock' ? 'Reconciling' : (upgrade ? 'Updating' : 'Installing'))
+          : (upgrade ? 'Updating' : 'Installing');
         if (statusEl) { statusEl.textContent = `${verb}...`; statusEl.disabled = true; }
         uiModule.showToast(`${verb} ${pkgName} on ${targetHost}...`);
       } catch (err) {
@@ -1790,9 +1877,9 @@ async function _fetchDependencies() {
         const pipName = btn.dataset.depPip;
         const row = btn.closest('.cookbook-dep-row');
         const pkgName = row?.querySelector('.memory-item-title')?.textContent || pipName;
-        const managedInstall = row?.dataset.managedInstallMode === 'uv-lock'
+        const managedInstall = ['uv-lock', 'cuda13-nightly'].includes(row?.dataset.managedInstallMode)
           ? {
-              mode: 'uv-lock',
+              mode: row.dataset.managedInstallMode,
               lock: row.dataset.managedLock || '',
               python: row.dataset.managedPython || '',
               venv: row.dataset.managedVenv || '',
@@ -2134,9 +2221,9 @@ async function _fetchDependencies() {
       it.addEventListener('click', async (e) => {
         e.stopPropagation();
         close();
-        const managedInstall = row.dataset.managedInstallMode === 'uv-lock'
+        const managedInstall = ['uv-lock', 'cuda13-nightly'].includes(row.dataset.managedInstallMode)
           ? {
-              mode: 'uv-lock',
+              mode: row.dataset.managedInstallMode,
               lock: row.dataset.managedLock || '',
               python: row.dataset.managedPython || '',
               venv: row.dataset.managedVenv || '',
@@ -2526,22 +2613,26 @@ function _wireTabEvents(body) {
       if (sel) _applyServerSelection(sel.value);
       const host = _envState.remoteHost || '';
       const where = host || 'this server';
-      const managed = btn.dataset.managedInstallMode === 'uv-lock';
+      const managedMode = btn.dataset.managedInstallMode || '';
+      const managed = managedMode === 'uv-lock' || managedMode === 'cuda13-nightly';
       if (managed) {
-        const lock = btn.dataset.managedLock || '';
         const python = btn.dataset.managedPython || '';
         const venv = btn.dataset.managedVenv || '';
-        if (!lock || !python || !venv || host) {
-          uiModule.showToast('Managed vLLM reconcile is available only for this Diogenes host and its configured inner .venv.', 9000);
+        if (!python || !venv || host) {
+          uiModule.showToast('Managed vLLM actions are available only for this Ɗiogenēs host and its active inner .venv.', 9000);
           return;
         }
-        if (!confirm(`Reconcile the verified vLLM/CUDA stack in ${venv}?\n\nThis uses uv and the configured exact lock. It will not upgrade to latest.`)) return;
+        const frozen = managedMode === 'uv-lock';
+        const prompt = frozen
+          ? `Reconcile the explicitly configured frozen vLLM stack in ${venv}?\n\nThe server will apply the selected uv lock and run postflight checks.`
+          : `Update the CUDA 13 nightly vLLM stack in ${venv}?\n\nThis resolves current compatible vLLM/Torch wheels, may replace tokenizers or protobuf to satisfy them, and finishes with uv pip check plus import/version probes. It never touches system Python.`;
+        if (!confirm(prompt)) return;
         _envState.env = 'venv';
         _envState.envPath = venv;
         _launchServeTask(
-          'reconcile-vllm',
-          'uv-lock-reconcile',
-          `uv pip install --python ${_shellQuote(python)} -r ${_shellQuote(lock)} --strict`,
+          frozen ? 'reconcile-vllm' : 'update-vllm-cuda13',
+          frozen ? 'uv-lock-reconcile' : 'cuda13-nightly',
+          `${_shellQuote(python)} -m pip install -U vllm`,
         );
         return;
       }
@@ -2822,7 +2913,7 @@ function _wireTabEvents(body) {
           dlBtn.textContent = oldText;
         }
         if (!pickerInclude) {
-          uiModule.showToast('Pick a GGUF quant first. Odysseus will not download the whole GGUF repo without an include pattern.');
+          uiModule.showToast('Pick a GGUF quant first. Ɗiogenēs will not download the whole GGUF repo without an include pattern.');
           return;
         }
         uiModule.showToast('Pick the GGUF quant, then press Download again.');
@@ -3426,8 +3517,8 @@ function _renderRecipes() {
   html += '<button type="button" class="hwfit-gpu-btn hwfit-hw-manual-btn" id="hwfit-hw-manual-btn" title="Set hardware manually" style="flex-shrink:0;position:relative;top:-3px;left:-1px;display:inline-flex;align-items:center;gap:3px;"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>EDIT</button>';
   html += '<button type="button" class="hwfit-gpu-btn hwfit-advanced-btn" id="hwfit-advanced-btn" title="Scan settings" aria-label="Scan settings" aria-expanded="false" style="flex-shrink:0;position:relative;top:-3px;left:-3px;width:26px;height:26px;padding:0;display:inline-flex;align-items:center;justify-content:center;"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 15.5A3.5 3.5 0 1 0 12 8a3.5 3.5 0 0 0 0 7.5Z"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06A2 2 0 1 1 7.04 4.3l.06.06A1.65 1.65 0 0 0 8.92 4a1.65 1.65 0 0 0 1-1.51V2a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82 1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z"/></svg></button>';
   html += '<button type="button" class="hwfit-gpu-btn hwfit-hw-refresh-btn" id="hwfit-hw-refresh-btn" title="Refresh selected server hardware and cached models" aria-label="Refresh selected server hardware and cached models" style="flex-shrink:0;position:relative;top:-3px;left:-5px;width:26px;height:26px;padding:0;display:inline-flex;align-items:center;justify-content:center;"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1 4v6h6"/><path d="M23 20v-6h-6"/><path d="M20.49 9A9 9 0 0 0 5.64 5.64L1 10"/><path d="M3.51 15a9 9 0 0 0 14.85 3.36L23 14"/></svg></button>';
-  // Sort state — the clickable column headers read/write this (pewds' original
-  // sort paradigm). Newest is reachable by clicking the Model column header.
+  // Sort state — the clickable column headers share this sort selection.
+  // Newest is reachable by clicking the Model column header.
   html += '<select class="cookbook-field-input hwfit-sort" id="hwfit-sort" style="display:none">';
   html += '<option value="newest" selected>Latest</option>';
   html += '<option value="fit">Fit</option><option value="score">Score</option><option value="vram">VRAM</option>';
@@ -3442,6 +3533,7 @@ function _renderRecipes() {
   html += '<option value="ollama">Ollama</option>';
   html += '<option value="mlx">MLX</option>';
   html += '<option value="vllm">vLLM</option>';
+  html += '<option value="prism">PrismML</option>';
   html += '<option value="sglang">SGLang</option>';
   html += '<option value="diffusers">Diffusers</option>';
   html += '</select>';
@@ -3451,7 +3543,7 @@ function _renderRecipes() {
   html += '<svg class="hwfit-engine-caret" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"></polyline></svg>';
   html += '</button>';
   html += '<div class="hwfit-engine-menu" data-hwfit-engine-menu role="listbox" hidden></div>';
-  html += '<span class="hwfit-help-chip hwfit-help-chip-inline hwfit-engine-help" title="Rule of thumb: GGUF on single GPU / CPU+RAM → llama.cpp (or Ollama). Safetensors on multi-GPU NVIDIA → vLLM. SGLang is a vLLM-class alternative, sometimes faster on big-MoE / long-context.">?</span>';
+  html += '<span class="hwfit-help-chip hwfit-help-chip-inline hwfit-engine-help" title="Rule of thumb: GGUF on single GPU / CPU+RAM → llama.cpp (or Ollama). Prism Bonsai GGUFs → the native PrismML engine. Safetensors on multi-GPU NVIDIA → vLLM. SGLang is a vLLM-class alternative, sometimes faster on big-MoE / long-context.">?</span>';
   html += '</span>';
   // Quant (Q4/Q8/…). Default is "All" so the list shows the best-scoring
   // quant for every model instead of silently filtering to Q4.
@@ -3545,7 +3637,7 @@ function _renderRecipes() {
   html += _buildServerOpts(false);
   html += '</select>';
   html += '</div>';
-  html += '<p class="memory-desc doclib-desc">Optional packages and native engines that extend Diogenes capabilities.</p>';
+  html += '<p class="memory-desc doclib-desc">Optional packages and native engines that extend Ɗiogenēs capabilities.</p>';
   html += '<div class="doclib-grid" id="cookbook-deps-list"></div>';
   html += '</div></div>';
 
@@ -3584,7 +3676,7 @@ function _renderRecipes() {
    // the same `.cal-add-btn-text` rules, so styling stays consistent.
   html += '<button class="cal-add-btn cal-add-btn-text" id="cookbook-server-add" title="Add server" style="margin-left:auto;"><span class="cal-add-plus">+</span><span class="cal-add-label">Add</span></button>';
   html += '</div>';
-  html += '<p class="memory-desc doclib-desc">Configure SSH servers, install Diogenes keys, choose model directories, and set the default server. Local is this machine.</p>';
+  html += '<p class="memory-desc doclib-desc">Configure SSH servers, install Ɗiogenēs keys, choose model directories, and set the default server. Local is this machine.</p>';
   html += '<div class="memory-toolbar cookbook-servers-toolbar" style="margin-top:4px;">';
   html += `<div id="cookbook-servers-list">`;
   for (let i = 0; i < _es.servers.length; i++) {

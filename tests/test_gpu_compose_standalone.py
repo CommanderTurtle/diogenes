@@ -1,29 +1,23 @@
-"""Guards the standalone GPU compose files against drift.
+"""Guard GPU Compose overrides against copying or drifting from the base.
 
-Stack-management UIs (Portainer, Coolify, Dockhand, ...) often accept only a
-single compose file and do not honor COMPOSE_FILE or multiple ``-f`` overlays,
-so the repo ships standalone ``docker-compose.gpu-*.yml`` files that inline the
-GPU overlay. The base ``docker-compose.yml`` plus ``docker/gpu.*.yml`` overlays
-remain the source of truth; these tests assert each standalone file equals the
-base compose with only the matching overlay merged into the ``odysseus``
-service. No Docker / docker compose is required — everything is pure YAML.
+The base ``docker-compose.yml`` is the only full stack definition. Canonical
+GPU overlays live under ``docker/``; the root ``docker-compose.gpu-*.yml``
+filenames are thin compatibility aliases and must remain equivalent.
 """
 
 import copy
 from pathlib import Path
 
-import pytest
 import yaml
 
-ROOT = Path(__file__).resolve().parents[1]
 
+ROOT = Path(__file__).resolve().parents[1]
 BASE = ROOT / "docker-compose.yml"
 NVIDIA_OVERLAY = ROOT / "docker" / "gpu.nvidia.yml"
 AMD_OVERLAY = ROOT / "docker" / "gpu.amd.yml"
 HOST_DOCKER_OVERLAY = ROOT / "docker" / "host-docker.yml"
-NVIDIA_STANDALONE = ROOT / "docker-compose.gpu-nvidia.yml"
-AMD_STANDALONE = ROOT / "docker-compose.gpu-amd.yml"
-
+NVIDIA_COMPAT = ROOT / "docker-compose.gpu-nvidia.yml"
+AMD_COMPAT = ROOT / "docker-compose.gpu-amd.yml"
 SERVICE = "odysseus"
 
 
@@ -32,15 +26,7 @@ def _load(path: Path) -> dict:
 
 
 def _deep_merge(base: dict, overlay: dict) -> dict:
-    """Mirror docker compose overlay semantics for the keys these files use.
-
-    Mappings merge recursively; list-valued service fields are concatenated
-    (compose appends override sequences such as ``environment`` rather than
-    replacing them); scalars are overwritten. The overlays here only append to
-    ``environment`` and add otherwise-absent keys (``deploy``, ``devices``,
-    ``group_add``), so this keeps the expected merge explicit without invoking
-    docker compose.
-    """
+    """Mirror the Compose mapping/list merge used by these narrow overlays."""
     result = copy.deepcopy(base)
     for key, value in overlay.items():
         if isinstance(value, dict) and isinstance(result.get(key), dict):
@@ -52,151 +38,99 @@ def _deep_merge(base: dict, overlay: dict) -> dict:
     return result
 
 
-def _merge_overlay_into_base(base: dict, overlay: dict) -> dict:
-    """Build the expected standalone config: base + overlay on odysseus only."""
-    expected = copy.deepcopy(base)
-    overlay_service = overlay["services"][SERVICE]
-    expected["services"][SERVICE] = _deep_merge(
-        expected["services"][SERVICE], overlay_service
-    )
-    return expected
-
-
-def _merge_overlays_into_base(base: dict, *overlays: dict) -> dict:
+def _merge_overlays(base: dict, *overlays: dict) -> dict:
     merged = copy.deepcopy(base)
     for overlay in overlays:
-        merged = _merge_overlay_into_base(merged, overlay)
+        overlay_service = overlay["services"][SERVICE]
+        merged["services"][SERVICE] = _deep_merge(
+            merged["services"][SERVICE], overlay_service
+        )
     return merged
 
 
-@pytest.fixture(scope="module")
-def base():
-    return _load(BASE)
+def test_root_gpu_filenames_are_exact_aliases_of_canonical_overlays():
+    assert _load(NVIDIA_COMPAT) == _load(NVIDIA_OVERLAY)
+    assert _load(AMD_COMPAT) == _load(AMD_OVERLAY)
 
 
-# --- Equivalence: standalone == base + overlay -----------------------------
+def test_gpu_aliases_are_thin_overrides_not_full_stack_copies():
+    for path in (NVIDIA_COMPAT, AMD_COMPAT):
+        overlay = _load(path)
+        assert set(overlay) == {"services"}
+        assert set(overlay["services"]) == {SERVICE}
+        assert "build" not in overlay["services"][SERVICE]
+        assert "ports" not in overlay["services"][SERVICE]
+        assert "volumes" not in overlay["services"][SERVICE]
+        assert "chromadb" not in overlay["services"]
+        assert "searxng" not in overlay["services"]
+        assert "ntfy" not in overlay["services"]
 
 
-def test_nvidia_standalone_equals_base_plus_overlay(base):
-    overlay = _load(NVIDIA_OVERLAY)
-    standalone = _load(NVIDIA_STANDALONE)
-    assert standalone == _merge_overlay_into_base(base, overlay)
+def test_nvidia_overlay_adds_only_gpu_reservation_and_driver_environment():
+    base = _load(BASE)
+    merged = _merge_overlays(base, _load(NVIDIA_COMPAT))
+    service = merged["services"][SERVICE]
 
-
-def test_amd_standalone_equals_base_plus_overlay(base):
-    overlay = _load(AMD_OVERLAY)
-    standalone = _load(AMD_STANDALONE)
-    assert standalone == _merge_overlay_into_base(base, overlay)
-
-
-# --- Non-odysseus services and volumes untouched ---------------------------
-
-
-@pytest.mark.parametrize("standalone_path", [NVIDIA_STANDALONE, AMD_STANDALONE])
-def test_non_odysseus_services_match_base(base, standalone_path):
-    standalone = _load(standalone_path)
-    for name, definition in base["services"].items():
-        if name == SERVICE:
-            continue
-        assert standalone["services"][name] == definition
-    assert set(standalone["services"]) == set(base["services"])
-
-
-@pytest.mark.parametrize("standalone_path", [NVIDIA_STANDALONE, AMD_STANDALONE])
-def test_top_level_volumes_match_base(base, standalone_path):
-    standalone = _load(standalone_path)
-    assert standalone.get("volumes") == base.get("volumes")
-
-
-# --- odysseus = base service + only the overlay additions ------------------
-
-
-def test_nvidia_odysseus_adds_only_overlay(base):
-    standalone = _load(NVIDIA_STANDALONE)
-    svc = standalone["services"][SERVICE]
-    base_svc = base["services"][SERVICE]
-
-    # Base environment preserved, plus exactly the two NVIDIA variables.
-    assert "NVIDIA_VISIBLE_DEVICES=all" in svc["environment"]
-    assert "NVIDIA_DRIVER_CAPABILITIES=compute,utility" in svc["environment"]
-    added_env = set(svc["environment"]) - set(base_svc["environment"])
-    assert added_env == {
+    assert set(service["environment"]) - set(
+        base["services"][SERVICE]["environment"]
+    ) == {
         "NVIDIA_VISIBLE_DEVICES=all",
         "NVIDIA_DRIVER_CAPABILITIES=compute,utility",
     }
-
-    # deploy block is new and matches the overlay's GPU reservation exactly.
-    assert "deploy" not in base_svc
-    devices = svc["deploy"]["resources"]["reservations"]["devices"]
-    assert devices == [
+    assert service["deploy"]["resources"]["reservations"]["devices"] == [
         {"driver": "nvidia", "count": "all", "capabilities": ["gpu"]}
     ]
-
-    # No Docker or AMD groups are added.
-    assert "devices" not in svc
-    assert "group_add" not in base_svc
-    assert "group_add" not in svc
-
-
-def test_amd_odysseus_adds_only_overlay(base):
-    standalone = _load(AMD_STANDALONE)
-    svc = standalone["services"][SERVICE]
-    base_svc = base["services"][SERVICE]
-
-    # Environment is unchanged from base for AMD.
-    assert svc["environment"] == base_svc["environment"]
-
-    # Devices and GPU-only groups are added.
-    assert "devices" not in base_svc
-    assert svc["devices"] == ["/dev/kfd", "/dev/dri"]
-    assert "group_add" not in base_svc
-    assert svc["group_add"] == ["video", "${RENDER_GID:-render}"]
-
-    # No NVIDIA-only keys leaked in.
-    assert "deploy" not in svc
-
-
-# --- Host Docker opt-in combinations ---------------------------------------
-
-
-def test_base_has_no_host_docker_access(base):
-    service = base["services"][SERVICE]
-
-    assert "/var/run/docker.sock:/var/run/docker.sock" not in service["volumes"]
-    assert "ODYSSEUS_ENABLE_HOST_DOCKER=true" not in service["environment"]
+    assert "devices" not in service
     assert "group_add" not in service
 
 
-def test_base_plus_host_docker_overlay_has_explicit_access(base):
-    merged = _merge_overlays_into_base(base, _load(HOST_DOCKER_OVERLAY))
+def test_amd_overlay_adds_only_gpu_devices_and_groups():
+    base = _load(BASE)
+    merged = _merge_overlays(base, _load(AMD_COMPAT))
     service = merged["services"][SERVICE]
 
-    assert "/var/run/docker.sock:/var/run/docker.sock" in service["volumes"]
-    assert "ODYSSEUS_ENABLE_HOST_DOCKER=true" in service["environment"]
-    assert service["group_add"] == ["${DOCKER_GID:-963}"]
+    assert service["environment"] == base["services"][SERVICE]["environment"]
+    assert service["devices"] == ["/dev/kfd", "/dev/dri"]
+    assert service["group_add"] == ["video", "${RENDER_GID:-render}"]
+    assert "deploy" not in service
 
 
-def test_nvidia_plus_host_docker_preserves_gpu_and_docker_access(base):
-    merged = _merge_overlays_into_base(
-        base,
-        _load(NVIDIA_OVERLAY),
+def test_base_contract_survives_either_gpu_override():
+    base = _load(BASE)
+    for overlay in (_load(NVIDIA_COMPAT), _load(AMD_COMPAT)):
+        merged = _merge_overlays(base, overlay)
+        service = merged["services"][SERVICE]
+        assert "${APP_DATA_DIR:-./data}/bun:/app/.bun:z" in service["volumes"]
+        assert (
+            "CAMOFOX_URL=${CAMOFOX_DOCKER_URL:-http://host.docker.internal:9377}"
+            in service["environment"]
+        )
+        assert "DO_NOT_TRACK=1" in service["environment"]
+        assert merged["services"]["chromadb"]["volumes"] == [
+            "${APP_DATA_DIR:-./data}/chromadb:/data:z"
+        ]
+
+
+def test_host_docker_overlay_composes_with_nvidia():
+    merged = _merge_overlays(
+        _load(BASE),
+        _load(NVIDIA_COMPAT),
         _load(HOST_DOCKER_OVERLAY),
     )
     service = merged["services"][SERVICE]
 
-    devices = service["deploy"]["resources"]["reservations"]["devices"]
-    assert devices == [
-        {"driver": "nvidia", "count": "all", "capabilities": ["gpu"]}
-    ]
+    assert service["deploy"]["resources"]["reservations"]["devices"][0][
+        "capabilities"
+    ] == ["gpu"]
     assert "/var/run/docker.sock:/var/run/docker.sock" in service["volumes"]
     assert "ODYSSEUS_ENABLE_HOST_DOCKER=true" in service["environment"]
     assert service["group_add"] == ["${DOCKER_GID:-963}"]
 
 
-def test_amd_plus_host_docker_preserves_gpu_and_docker_groups(base):
-    merged = _merge_overlays_into_base(
-        base,
-        _load(AMD_OVERLAY),
+def test_host_docker_overlay_composes_with_amd():
+    merged = _merge_overlays(
+        _load(BASE),
+        _load(AMD_COMPAT),
         _load(HOST_DOCKER_OVERLAY),
     )
     service = merged["services"][SERVICE]

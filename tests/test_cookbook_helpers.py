@@ -244,11 +244,11 @@ def test_pip_install_fallback_chain_prefers_venv_safe_install():
 
 
 def test_pip_install_fallback_chain_allows_custom_python_command():
-    chain = _pip_install_fallback_chain("hf_transfer", python_cmd="pip", upgrade=False)
-    assert "pip install -q hf_transfer" in chain
-    assert "pip install --user -q hf_transfer" in chain
+    chain = _pip_install_fallback_chain("hf_xet", python_cmd="pip", upgrade=False)
+    assert "pip install -q hf_xet" in chain
+    assert "pip install --user -q hf_xet" in chain
     assert "pip install --help 2>/dev/null | grep -q -- --break-system-packages" in chain
-    assert "pip install --user --break-system-packages -q hf_transfer" in chain
+    assert "pip install --user --break-system-packages -q hf_xet" in chain
     # venv check uses the python executable derived from the pip command
     assert 'python -c "import sys; sys.exit(0 if sys.prefix != sys.base_prefix else 1)"' in chain
     # All install attempts are wrapped in bash -c subshells
@@ -321,8 +321,8 @@ def test_pip_install_fallback_chain_quotes_extras_spec():
     # Never the unquoted form (bracket-glob risk).
     assert "install -q llama-cpp-python[server]" not in chain
     # A plain package name is still passed through unquoted (no regression).
-    plain = _pip_install_fallback_chain("hf_transfer", python_cmd="pip")
-    assert "install -q hf_transfer" in plain
+    plain = _pip_install_fallback_chain("hf_xet", python_cmd="pip")
+    assert "install -q hf_xet" in plain
 
 
 def test_serve_runner_installs_llama_cpp_server_extra():
@@ -898,7 +898,7 @@ def test_pip_install_no_cache_is_idempotent_and_scoped():
 def test_validate_serve_cmd_accepts_only_uv_pip_install():
     cmd = (
         "uv pip install --python /srv/Diogenes/.venv/bin/python "
-        "-r /srv/Diogenes-state/locks/vllm.lock --strict"
+        "-r /srv/pinned-locks/vllm.lock --strict"
     )
     assert _validate_serve_cmd(cmd) == cmd
     with pytest.raises(HTTPException, match="only for a direct"):

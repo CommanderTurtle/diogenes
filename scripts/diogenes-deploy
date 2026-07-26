@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -12,6 +13,12 @@ from pathlib import Path
 
 SOURCE_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_RUNTIME_ROOT = SOURCE_ROOT.parent / "Diogenes-prod"
+EXPECTED_UPSTREAM_URL = "https://github.com/odysseus-dev/odysseus.git"
+_GITHUB_REMOTE_RE = re.compile(
+    r"^(?:https://github\.com/|git@github\.com:|ssh://git@github\.com/)"
+    r"([^/\s]+)/([^/\s]+)/?$",
+    re.IGNORECASE,
+)
 
 
 class DeployError(RuntimeError):
@@ -47,9 +54,50 @@ def _git(root: Path, *args: str, check: bool = True) -> str:
     ).stdout.strip()
 
 
+def _canonical_github_remote(value: str) -> str | None:
+    match = _GITHUB_REMOTE_RE.fullmatch(value.strip())
+    if match is None:
+        return None
+    owner, repository = match.groups()
+    if repository.lower().endswith(".git"):
+        repository = repository[:-4]
+    if not owner or not repository:
+        return None
+    return (
+        f"https://github.com/{owner.casefold()}/"
+        f"{repository.casefold()}.git"
+    )
+
+
+def _validated_upstream_url(source_root: Path) -> str:
+    configured_url = _git(
+        source_root,
+        "config",
+        "--get",
+        "remote.upstream.url",
+        check=False,
+    )
+    normalized_url = _canonical_github_remote(configured_url)
+    if normalized_url != EXPECTED_UPSTREAM_URL:
+        configured = configured_url or "not configured"
+        raise DeployError(
+            "remote 'upstream' must resolve to "
+            f"{EXPECTED_UPSTREAM_URL}; found {configured}"
+        )
+    return normalized_url
+
+
 def source_contract(source_root: Path) -> dict:
     """Return source provenance, refusing a dirty or non-dev checkout."""
-    if not (source_root / ".git").is_dir():
+    if (
+        _git(
+            source_root,
+            "rev-parse",
+            "--is-inside-work-tree",
+            check=False,
+        )
+        != "true"
+    ):
         raise DeployError(f"source is not a Git checkout: {source_root}")
     dirty = _git(
         source_root,
@@ -67,6 +115,7 @@ def source_contract(source_root: Path) -> dict:
         raise DeployError(
             f"source branch must be dev, found {branch or 'detached HEAD'}"
         )
+    upstream_url = _validated_upstream_url(source_root)
     head = _git(source_root, "rev-parse", "HEAD")
     upstream = _git(
         source_root,
@@ -75,36 +124,56 @@ def source_contract(source_root: Path) -> dict:
         "upstream/dev",
         check=False,
     )
-    if upstream:
-        ancestor = (
-            _run(
-                [
-                    "git",
-                    "-C",
-                    str(source_root),
-                    "merge-base",
-                    "--is-ancestor",
-                    upstream,
-                    head,
-                ],
-                check=False,
-            ).returncode
-            == 0
+    if not upstream:
+        raise DeployError(
+            "upstream/dev is unavailable; configure the odysseus-dev/odysseus "
+            "upstream remote and fetch its dev branch"
         )
-        if not ancestor:
-            raise DeployError("upstream/dev is not an ancestor of source HEAD")
+    ancestor = (
+        _run(
+            [
+                "git",
+                "-C",
+                str(source_root),
+                "merge-base",
+                "--is-ancestor",
+                upstream,
+                head,
+            ],
+            check=False,
+        ).returncode
+        == 0
+    )
+    if not ancestor:
+        raise DeployError("upstream/dev is not an ancestor of source HEAD")
     return {
         "root": str(source_root.resolve()),
         "branch": branch,
         "head": head,
-        "upstream_dev": upstream or None,
-        "ahead": (
-            int(_git(source_root, "rev-list", "--count", f"{upstream}..{head}"))
-            if upstream
-            else None
+        "upstream_url": upstream_url,
+        "upstream_dev": upstream,
+        "ahead": int(
+            _git(source_root, "rev-list", "--count", f"{upstream}..{head}")
         ),
+        "upstream_ancestor_verified": True,
         "clean": True,
     }
+
+
+def fetch_upstream(source_root: Path) -> None:
+    """Refresh only upstream/dev before provenance inspection."""
+    _validated_upstream_url(source_root)
+    _run(
+        [
+            "git",
+            "-C",
+            str(source_root),
+            "fetch",
+            "--prune",
+            "upstream",
+            "dev:refs/remotes/upstream/dev",
+        ]
+    )
 
 
 def runtime_contract(runtime_root: Path) -> dict:
@@ -156,27 +225,45 @@ def prepare_runtime(source_root: Path, runtime_root: Path) -> dict:
     try:
         _git(runtime_root, "remote", "rename", "origin", "source")
         _git(runtime_root, "remote", "set-url", "--push", "source", "DISABLED")
-        upstream_url = _git(
-            source_root,
-            "config",
-            "--get",
-            "remote.upstream.url",
-            check=False,
+        _git(
+            runtime_root,
+            "remote",
+            "add",
+            "upstream",
+            provenance["upstream_url"],
         )
-        if upstream_url:
-            _git(runtime_root, "remote", "add", "upstream", upstream_url)
-            _git(
-                runtime_root,
-                "remote",
-                "set-url",
-                "--push",
-                "upstream",
-                "DISABLED",
-            )
+        _git(
+            runtime_root,
+            "remote",
+            "set-url",
+            "--push",
+            "upstream",
+            "DISABLED",
+        )
     except Exception:
         # The clone remains inspectable if post-clone metadata fails; never
         # erase an unexpected path as part of recovery.
         raise
+
+    runtime_head = _git(runtime_root, "rev-parse", "HEAD")
+    manifest = {
+        "schema_version": "diogenes.runtime.v1",
+        "self_contained": True,
+        "source": provenance,
+        "runtime": {
+            "root": str(runtime_root.resolve()),
+            "branch": _git(runtime_root, "branch", "--show-current"),
+            "head": runtime_head,
+        },
+    }
+    if runtime_head != provenance["head"]:
+        raise DeployError(
+            "prepared runtime HEAD does not match the reviewed source commit"
+        )
+    (runtime_root / ".diogenes-runtime.json").write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
     return {
         "ok": True,
         "runtime": runtime_contract(runtime_root),
@@ -191,6 +278,11 @@ def prepare_runtime(source_root: Path, runtime_root: Path) -> dict:
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="diogenes-deploy")
     parser.add_argument("--pretty", action="store_true")
+    parser.add_argument(
+        "--fetch-upstream",
+        action="store_true",
+        help="refresh upstream/dev before inspecting or preparing",
+    )
     parser.add_argument("--source-root", type=Path, default=SOURCE_ROOT)
     parser.add_argument(
         "--runtime-root",
@@ -206,6 +298,8 @@ def main(argv: list[str] | None = None) -> int:
     source_root = args.source_root.expanduser().resolve()
     runtime_root = args.runtime_root.expanduser().resolve()
     try:
+        if args.fetch_upstream:
+            fetch_upstream(source_root)
         payload = (
             {
                 "ok": True,

@@ -59,9 +59,16 @@ def test_browser_provider_defaults_to_camofox(monkeypatch):
     assert builtin_mcp._browser_server_config()["provider"] == "camofox"
 
 
-def test_browser_provider_can_select_camofox_without_playwright_args(monkeypatch):
+def test_browser_provider_can_select_camofox_without_playwright_args(
+    monkeypatch,
+    tmp_path,
+):
     monkeypatch.setenv("ODYSSEUS_BROWSER_MCP_PROVIDER", "camofox")
     monkeypatch.setenv("CAMOFOX_URL", "http://127.0.0.1:9377")
+    monkeypatch.setenv(
+        "CAMOFOX_MCP_ROOT",
+        str(tmp_path / "missing-camofox-mcp"),
+    )
     builtin_mcp = _load_builtin_mcp(monkeypatch)
 
     config = builtin_mcp._browser_server_config()
@@ -98,9 +105,16 @@ def test_invalid_browser_provider_fails_closed(monkeypatch):
     assert builtin_mcp._browser_server_config() is None
 
 
-def test_register_builtin_browser_uses_camofox_command_and_env(monkeypatch):
+def test_register_builtin_browser_uses_camofox_command_and_env(
+    monkeypatch,
+    tmp_path,
+):
     monkeypatch.setenv("ODYSSEUS_BROWSER_MCP_PROVIDER", "camofox")
     monkeypatch.setenv("CAMOFOX_URL", "http://127.0.0.1:9377")
+    monkeypatch.setenv(
+        "CAMOFOX_MCP_ROOT",
+        str(tmp_path / "missing-camofox-mcp"),
+    )
     monkeypatch.delenv("ODYSSEUS_BROWSER_MCP_REQUIRE_CACHE", raising=False)
     builtin_mcp = _load_builtin_mcp(monkeypatch)
     scheduled = []
@@ -194,6 +208,66 @@ def test_browser_mcp_args_can_keep_sandbox(monkeypatch):
 
     assert "--executable-path" in args
     assert "--no-sandbox" not in args
+
+
+def test_find_npx_prefers_configured_sandwich_over_host_path(
+    monkeypatch,
+    tmp_path,
+):
+    services_root = tmp_path / "Hermes"
+    sandwich_npx = services_root / "sandwich" / "bin" / "npx"
+    sandwich_npx.parent.mkdir(parents=True)
+    sandwich_npx.write_text("#!/usr/bin/env bash\n", encoding="utf-8")
+    sandwich_npx.chmod(0o755)
+    monkeypatch.setenv("ULYSSES_MICROSERVICES_ROOT", str(services_root))
+    monkeypatch.delenv("ULYSSES_SANDWICH_ROOT", raising=False)
+    builtin_mcp = _load_builtin_mcp(monkeypatch)
+    monkeypatch.setattr(
+        builtin_mcp,
+        "which_tool",
+        lambda _name: "/usr/bin/npx",
+    )
+
+    assert builtin_mcp._find_npx() == str(sandwich_npx)
+
+
+def test_find_npx_uses_host_path_when_configured_sandwich_is_invalid(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setenv(
+        "ULYSSES_SANDWICH_ROOT",
+        str(tmp_path / "missing-sandwich"),
+    )
+    builtin_mcp = _load_builtin_mcp(monkeypatch)
+    monkeypatch.setattr(
+        builtin_mcp,
+        "which_tool",
+        lambda _name: "/usr/bin/npx",
+    )
+
+    assert builtin_mcp._find_npx() == "/usr/bin/npx"
+
+
+def test_find_npx_preserves_windows_npx_cmd_discovery(
+    monkeypatch,
+    tmp_path,
+):
+    sandwich_npx = tmp_path / "sandwich" / "bin" / "npx"
+    sandwich_npx.parent.mkdir(parents=True)
+    sandwich_npx.write_text("not a Windows shim\n", encoding="utf-8")
+    monkeypatch.setenv("ULYSSES_SANDWICH_ROOT", str(sandwich_npx.parent.parent))
+    builtin_mcp = _load_builtin_mcp(monkeypatch)
+    monkeypatch.setattr(builtin_mcp, "IS_WINDOWS", True)
+    monkeypatch.setattr(
+        builtin_mcp,
+        "which_tool",
+        lambda name: r"C:\Program Files\nodejs\npx.cmd"
+        if name == "npx"
+        else None,
+    )
+
+    assert builtin_mcp._find_npx() == r"C:\Program Files\nodejs\npx.cmd"
 
 
 def test_npx_cache_check_detects_scoped_package_in_npx_cache(monkeypatch, tmp_path):

@@ -20,6 +20,22 @@ CRITICAL_PACKAGES = (
 )
 
 
+def _default_production_root(repository_root: Path) -> Path:
+    """Resolve the runtime tree without assuming one developer's home layout.
+
+    ``DIOGENES_PRODUCTION_ROOT`` is the public override.  The earlier
+    ``ULYSSES_PRODUCTION_ROOT`` name remains a compatibility alias for existing
+    deployments; neither value is written or mutated here.
+    """
+
+    configured = os.environ.get("DIOGENES_PRODUCTION_ROOT") or os.environ.get(
+        "ULYSSES_PRODUCTION_ROOT"
+    )
+    if configured:
+        return Path(configured).expanduser().resolve()
+    return (repository_root.parent / "Diogenes-prod").resolve()
+
+
 def _run(argv: list[str], *, timeout: int = 10) -> str:
     try:
         result = subprocess.run(
@@ -206,12 +222,10 @@ def collect_switchover_readiness(
 ) -> dict[str, Any]:
     repo = (repository_root or Path(__file__).resolve().parents[1]).resolve()
     prod = (
-        production_root
-        or Path(
-            os.environ.get("ULYSSES_PRODUCTION_ROOT")
-            or Path.home() / "Odysseus" / "odysseus"
-        )
-    ).resolve()
+        production_root.resolve()
+        if production_root is not None
+        else _default_production_root(repo)
+    )
     git = _git_state(repo)
     candidate_env = _environment(repo)
     production_env = _environment(prod)
@@ -224,7 +238,7 @@ def collect_switchover_readiness(
         _item(
             "source.branch.dev",
             "source",
-            "Candidate follows the Odysseus dev line",
+            "Ɗiogenēs candidate follows the upstream dev line",
             "passed" if git["branch"] == "dev" else "blocked",
             f"branch={git['branch'] or 'unknown'}; upstream={git['upstream'] or 'none'}",
             "Keep the Diogenes work on the local dev branch tracking upstream/dev.",

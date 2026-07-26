@@ -1,85 +1,24 @@
-# Sandwich Bun compatibility status
+# Sandwich integration
 
-Captured on 2026-07-25 without installing Node.
+Sandwich is an independent Bun compatibility runtime maintained at
+`CommanderTurtle/sandwich`. Diogenes never bundles or installs a second copy.
 
-## Current runtime
+The default checkout is:
 
-- Installed Bun: `1.3.14` (`0d9b296a`)
-- Sandwich component: `0.2.0`
-- Sandwich compatibility suite: 36 passed
-- Diogenes runtime-management, identity, and audit contract suites: passing
-- Detected installation: `/home/alienl/Hermes/sandwich`
-- Latest full isolated Diogenes run under the installed Bun: 4,890 passed,
-  3 skipped, 0 failed.
+```text
+${ULYSSES_MICROSERVICES_ROOT}/sandwich
+```
 
-Sandwich now handles:
+`uvsetup.sh` writes both `ULYSSES_MICROSERVICES_ROOT` and
+`ULYSSES_SANDWICH_ROOT` to `.env`. With `--with-sandwich`, setup clones the
+standalone repository and runs its confirmed user installer. The Services and
+Cookbook screens use the same path, manifest, Git checkout, and command shims.
 
-- Node-compatible version output;
-- eval, print, stdin, ESM/CommonJS `--input-type`;
-- `node --test` to `bun test`;
-- generated base64 JavaScript data modules within Bun's resolver limit;
-- `npm run`, `npm run --prefix`, and frozen-lock `npm ci`;
-- `npx` through Bun;
-- fail-loud ambiguous workspace installs.
+A ready installation has one valid `sandwich.component.v1` manifest and Bun
+facades for `node`, `npm`, `npx`, `pnpm`, `yarn`, and `corepack` that all
+resolve to that checkout. A system Node cannot satisfy the check. Update uses a
+clean fast-forward Git pull followed by the repository's own installer; dirty
+or unrelated directories are refused.
 
-The component is now bundled at `components/sandwich` with a validated
-`sandwich.component.v1` manifest. Diogenes resolves its doctor and maintenance
-commands to absolute component paths and supplies a sanitized Bun-only
-environment without inheriting Diogenes's Python virtual environment.
-
-Readiness is intentionally strict: `sandwich`, `node`, `npm`, `npx`, `pnpm`,
-and `yarn` must all resolve from the same Sandwich `bin` directory. A system
-Node mixed into `PATH` cannot make an incomplete installation appear ready.
-The live installation currently satisfies that contract and is byte-identical
-to the bundled core component.
-
-Cookbook Dependencies lists Sandwich under Extras. If it is absent, Diogenes
-can stage the exact bundled component at
-`${ULYSSES_MICROSERVICES_ROOT}/sandwich` after confirmation. If anything
-divergent already occupies that path, installation refuses to overwrite it.
-An installed exact component exposes its confirmation-gated doctor instead.
-Standalone update, rollback, and uninstall remain later lifecycle work.
-
-JavaScript and native tmux services are launched with explicit argv and a
-sanitized environment that removes `VIRTUAL_ENV`, `PYTHONHOME`, and
-`PYTHONPATH`. This prevents an Odysseus/Diogenes Python environment from leaking
-into Bun, MCP, browser, proxy, or native service processes.
-
-## Hermes profile
-
-The tested Hermes updater repair is preserved as a version-pinned Sandwich
-integration:
-
-- exact Hermes base revision;
-- reviewed Git patch;
-- validated `bun.lock` and `bunfig.toml`;
-- frozen root, TUI, and Web workspace installs;
-- TUI and Web rebuilds without a service restart;
-- active-process and protected-Compose refusal;
-- configurable Hermes, state, protected-root, and upstream paths.
-
-The read-only profile check matched the live Hermes revision and correctly
-refused to mutate it while the gateway, MCP watchdogs, Firecrawl, SearXNG, and
-Chroma were active. No override was used.
-
-## Known upstream limitation
-
-Bun 1.3.14 rejects dynamic `import()` of `data:text/javascript` module URLs
-longer than roughly 6,144 bytes as `NameTooLong`.
-
-- Upstream issue: <https://github.com/oven-sh/bun/issues/20374>
-- Open upstream fix: <https://github.com/oven-sh/bun/pull/33598>
-
-The bundled `node` compatibility preload resolves ordinary base64 JavaScript
-data modules without Node. Oversized generated modules are still rejected
-before Bun invokes plugin resolution, so the Diogenes test harnesses now write
-their generated source to temporary `.mjs` files. That is valid in both Bun and
-Node and exercises the same browser source without a canary runtime.
-
-Until a stable Bun release includes the upstream fix:
-
-- report the runtime as compatible with a known long-data-module limitation;
-- do not install Node as an invisible fallback;
-- do not carry a permanent canary binary;
-- use ordinary temporary module files for oversized generated source;
-- keep production runtime selection human-controlled.
+Diogenes itself uses `bun.lock` through `bunsetup.sh`. No Node, npm, pnpm, or
+Yarn installation is required.

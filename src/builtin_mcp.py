@@ -19,11 +19,44 @@ from src.runtime_paths import get_app_root
 logger = logging.getLogger(__name__)
 
 
+def _configured_sandwich_npx() -> str | None:
+    """Resolve the executable npx wrapper from the configured Sandwich tree."""
+    if IS_WINDOWS:
+        # Windows continues to use PATHEXT-aware npx.cmd discovery below.
+        return None
+    configured_root = os.environ.get("ULYSSES_SANDWICH_ROOT")
+    if configured_root:
+        raw_root = configured_root
+    else:
+        services_root = os.environ.get(
+            "ULYSSES_MICROSERVICES_ROOT",
+            os.path.join(os.path.expanduser("~"), "Hermes"),
+        )
+        raw_root = os.path.join(services_root, "sandwich")
+    expanded_root = raw_root
+    for _ in range(3):
+        expanded = os.path.expandvars(os.path.expanduser(expanded_root))
+        if expanded == expanded_root:
+            break
+        expanded_root = expanded
+    if not os.path.isabs(expanded_root):
+        return None
+    candidate = os.path.abspath(
+        os.path.join(expanded_root, "bin", "npx")
+    )
+    if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+        return candidate
+    return None
+
+
 def _find_npx() -> str:
-    """Find the npx binary, checking common locations if not on PATH.
+    """Find npx, preferring the configured Sandwich wrapper over host Node.
 
     On Windows the shim is `npx.cmd`, which `which_tool` resolves via PATHEXT.
     """
+    sandwich_npx = _configured_sandwich_npx()
+    if sandwich_npx:
+        return sandwich_npx
     npx = which_tool("npx")
     if npx:
         return npx

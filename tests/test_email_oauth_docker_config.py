@@ -7,14 +7,7 @@ import yaml
 
 
 ROOT = Path(__file__).resolve().parent.parent
-COMPOSE_PATHS = tuple(
-    ROOT / name
-    for name in (
-        "docker-compose.yml",
-        "docker-compose.gpu-nvidia.yml",
-        "docker-compose.gpu-amd.yml",
-    )
-)
+COMPOSE_PATHS = (ROOT / "docker-compose.yml",)
 ENV_EXAMPLE_PATH = ROOT / ".env.example"
 
 

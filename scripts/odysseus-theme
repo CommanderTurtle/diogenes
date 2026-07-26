@@ -62,19 +62,21 @@ def _save_prefs(data: dict) -> None:
 
 
 def _builtin_preset_names() -> list[str]:
-    """Read the THEMES export from theme.js. Uses node so we don't
-    have to write a JS parser. Falls back to a regex scrape if node
-    isn't available."""
+    """Read the THEMES export with Bun, then fall back to a regex scrape."""
     if not _THEME_JS.exists():
         return []
-    if shutil.which("node"):
+    bun = shutil.which("bun")
+    if not bun:
+        user_bun = Path.home() / ".bun" / "bin" / "bun"
+        bun = str(user_bun) if user_bun.is_file() else None
+    if bun:
         script = (
             f"const m = await import('{_THEME_JS.as_posix()}'); "
             "console.log(JSON.stringify(Object.keys(m.THEMES || {})));"
         )
         try:
             out = subprocess.run(
-                ["node", "--input-type=module", "-e", script],
+                [bun, "--eval", script],
                 capture_output=True, text=True, timeout=10,
             )
             if out.returncode == 0:
@@ -83,7 +85,7 @@ def _builtin_preset_names() -> list[str]:
                     return json.loads(lines[-1])
         except Exception:
             pass
-    # Fallback: regex-scrape from the file. Less precise than node,
+    # Fallback: regex-scrape from the file. Less precise than Bun,
     # but works without a JS runtime. We only match keys at depth 1
     # (exactly 2 leading spaces) so nested `advanced: { userBubbleBg: ... }`
     # entries don't leak into the preset list.

@@ -1,15 +1,27 @@
 venv/
 .venv/
+.venv-model-download/
+.bun/
+/uv.lock
 node_modules/
 services/node_modules/
+services/data/
 __pycache__/
 *.pyc
 *.pyo
+.mypy_cache/
+.hypothesis/
+.tox/
+.nox/
+.coverage
+coverage.xml
+htmlcov/
 *.egg-info/
 dist/
 build/
 .env
 .env.bak.*
+.diogenes-runtime.json
 # Secrets: keep plaintext and every transient secrets.env variant out of
 # the build context. If an encrypted secrets.env is used, it is mounted
 # at runtime — never baked into the image. Mirrored in .gitignore.
@@ -21,11 +33,17 @@ secrets.env~
 **/#secrets.env#
 !secrets.env.example
 /data/
+/backups/
 /logs/
+**/logs/
+cache/
+**/cache/
 .git/
 .claude/
+.aider*
 .playwright-mcp/
 .pytest_cache/
+.ruff_cache/
 .vscode/
 .idea/
 dev-docs/
@@ -39,6 +57,8 @@ docs/
 tasks/
 _scratch/
 compound.config.json
+scripts/compound/*.json
+output.txt.txt
 search_analytics.json
 **/search_analytics.json
 tests/
@@ -49,4 +69,5 @@ chart.png
 timetree*.png
 *_signin_page.png
 *_calendar_view.png
+/NUL
 .gitignore

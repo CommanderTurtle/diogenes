@@ -157,8 +157,8 @@ def default_runtime_registry(
     registry.register(
         sandwich_runtime_definition(
             layout=SandwichLayout.default(
-                repository_root=repo,
                 home=resolved_home,
+                microservices_root=microservices_root,
             )
         )
     )

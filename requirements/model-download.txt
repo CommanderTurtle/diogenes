@@ -1,0 +1,9 @@
+# Kept outside Diogenes' serving environment. uvsetup.sh creates
+# .venv-model-download from this file so large model transfers cannot change
+# the vLLM/Torch/tokenizers/protobuf resolution in .venv.
+huggingface_hub>=1.0,<2
+# Hugging Face Hub 1.x removed hf_transfer. hf_xet is the supported Rust
+# transfer backend; HF_XET_HIGH_PERFORMANCE replaces HF_HUB_ENABLE_HF_TRANSFER.
+hf_xet>=1.2,<2
+python-dotenv>=1.2,<2
+tqdm>=4.67,<5

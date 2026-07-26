@@ -5,6 +5,27 @@ from pathlib import Path
 import src.ulysses_readiness as readiness
 
 
+def test_default_production_root_is_portable_and_honors_aliases(
+    monkeypatch, tmp_path: Path
+) -> None:
+    repo = tmp_path / "checkouts" / "Diogenes"
+    repo.mkdir(parents=True)
+    monkeypatch.delenv("DIOGENES_PRODUCTION_ROOT", raising=False)
+    monkeypatch.delenv("ULYSSES_PRODUCTION_ROOT", raising=False)
+
+    assert readiness._default_production_root(repo) == (
+        repo.parent / "Diogenes-prod"
+    ).resolve()
+
+    legacy = tmp_path / "legacy-runtime"
+    monkeypatch.setenv("ULYSSES_PRODUCTION_ROOT", str(legacy))
+    assert readiness._default_production_root(repo) == legacy.resolve()
+
+    preferred = tmp_path / "preferred-runtime"
+    monkeypatch.setenv("DIOGENES_PRODUCTION_ROOT", str(preferred))
+    assert readiness._default_production_root(repo) == preferred.resolve()
+
+
 def test_cuda_launcher_requires_an_explicit_venv_override() -> None:
     script = (
         Path(__file__).resolve().parents[1]

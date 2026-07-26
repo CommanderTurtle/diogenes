@@ -536,6 +536,15 @@ def _cached_model_scan_script(model_dirs: list[str] | None = None, add_hf_cache:
         "                except Exception: pass",
         "        is_diff = os.path.exists(os.path.join(fp, 'model_index.json'))",
         "        models.append({'repo_id':d,'size_bytes':sz,'nb_files':nf,'has_incomplete':False,'path':p,'is_local_dir':True,'is_diffusion':is_diff,'is_adapter':is_adapter,'is_gguf':bool(gguf_files),'gguf_files':gguf_files})",
+        "def scan_model_root(p):",
+        "    p = normalize_model_dir(p)",
+        "    if not p or not safe_path(p): return",
+        "    # Cookbook downloads target <configured root>/hub so they keep the",
+        "    # standard resumable models--org--repo cache layout. Scan that cache",
+        "    # before direct local model folders; scan_dir intentionally skips",
+        "    # models--* entries.",
+        "    scan_hf(os.path.join(p, 'hub'))",
+        "    scan_dir(p)",
         "def parse_size(num, unit):",
         "    try: n = float(num)",
         "    except Exception: return 0",
@@ -577,12 +586,18 @@ def _cached_model_scan_script(model_dirs: list[str] | None = None, add_hf_cache:
         "            seen.add(name)",
         "            models.append({'repo_id':name,'size_bytes':size_bytes,'nb_files':1,'has_incomplete':False,'path':'ollama','backend':'ollama','is_ollama':True})",
         "        return",
-        "for _hf_cache in hf_cache_paths(): scan_hf(_hf_cache)",
-        "scan_ollama_api()",
-        "scan_ollama()",
     ]
+    # Explicit server/model roots are user-selected and therefore authoritative
+    # over a stale copy of the same repo in the process default HF cache.
     for model_dir in model_dirs or []:
-        lines.append(f"scan_dir({model_dir!r})")
+        lines.append(f"scan_model_root({model_dir!r})")
+    lines.extend(
+        [
+            "for _hf_cache in hf_cache_paths(): scan_hf(_hf_cache)",
+            "scan_ollama_api()",
+            "scan_ollama()",
+        ]
+    )
     lines.append("print(json.dumps(models))")
     return "\n".join(lines) + "\n"
 
@@ -1086,7 +1101,14 @@ class ModelDownloadRequest(BaseModel):
     ssh_port: str | None = None    # e.g. "8022" for Termux
     platform: str | None = None    # "linux", "termux", or "windows"
     local_dir: str | None = None   # base dir to download into (a per-model subfolder is created under it); None = default HF cache
-    disable_hf_transfer: bool = False  # skip the Rust hf_transfer downloader — slower but far more reliable on large files (used by retries)
+    reliable_download: bool = False  # disable Xet for a conservative resumable retry lane
+    # Backward-compatible API input retained for clients predating the hf_xet
+    # migration. New clients should send ``reliable_download``.
+    disable_hf_transfer: bool = False
+
+    @property
+    def use_reliable_download(self) -> bool:
+        return self.reliable_download or self.disable_hf_transfer
 
 
 class ServeRequest(BaseModel):
@@ -1099,6 +1121,7 @@ class ServeRequest(BaseModel):
     gpus: str | None = None
     platform: str | None = None    # "linux", "termux", or "windows"
     runtime_id: str | None = None
+    runtime_model_id: str | None = None
     runtime_settings: dict[str, str | bool | int | float | None] | None = None
     served_model_id: str | None = None
 
@@ -1118,7 +1141,7 @@ def _parse_serve_phase(snapshot: str, task_type: str = "serve") -> dict:
 
     load_matches = re.findall(r'Loading safetensors.*?(\d+)%', flat)
     # Prefer "Downloading (incomplete total...)" (real aggregate bytes) over
-    # "Fetching N files" (whole-file count, lags with hf_transfer's chunked pulls).
+    # "Fetching N files" (whole-file count, lags with parallel chunked pulls).
     downloading_matches = re.findall(r'Downloading.*?(\d+)%', flat)
     fetching_matches = re.findall(r'Fetching.*?(\d+)%', flat)
     dl_matches = downloading_matches if downloading_matches else fetching_matches

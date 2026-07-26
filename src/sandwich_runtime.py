@@ -1,7 +1,8 @@
-"""Validated bridge between Diogenes and its bundled Sandwich component.
+"""Validated bridge between Diogenes and the standalone Sandwich runtime.
 
 This module describes operations only. It never installs packages, patches
-Hermes, or starts a process while loading or probing the component.
+Hermes, contacts GitHub, or starts a process while loading or probing the
+configured checkout.
 """
 
 from __future__ import annotations
@@ -74,17 +75,27 @@ class SandwichLayout:
     def default(
         cls,
         *,
-        repository_root: Path | None = None,
         home: Path | None = None,
+        microservices_root: Path | None = None,
     ) -> "SandwichLayout":
-        repo = (
-            repository_root
-            if repository_root is not None
-            else Path(__file__).resolve().parents[1]
-        ).resolve()
         resolved_home = (home if home is not None else Path.home()).resolve()
+        raw_services = (
+            microservices_root
+            or Path(
+                os.environ.get("ULYSSES_MICROSERVICES_ROOT")
+                or resolved_home / "Hermes"
+            )
+        ).expanduser()
+        if not raw_services.is_absolute():
+            raise ValueError("ULYSSES_MICROSERVICES_ROOT must be absolute")
+        raw_component = Path(
+            os.environ.get("ULYSSES_SANDWICH_ROOT")
+            or raw_services / "sandwich"
+        ).expanduser()
+        if not raw_component.is_absolute():
+            raise ValueError("ULYSSES_SANDWICH_ROOT must be absolute")
         return cls(
-            component_root=(repo / "components" / "sandwich").resolve(),
+            component_root=raw_component.resolve(),
             home=resolved_home,
             bun_install=resolved_home / ".bun",
             user_bin=resolved_home / ".local" / "bin",
@@ -234,13 +245,13 @@ def collect_sandwich_status(
     microservices_root: Path | None = None,
     search_path: str | None = None,
 ) -> dict[str, object]:
-    """Describe the bundled component and the active user installation."""
+    """Describe the configured standalone checkout and active user shims.
 
-    repo = (
-        repository_root
-        if repository_root is not None
-        else Path(__file__).resolve().parents[1]
-    ).resolve()
+    ``repository_root`` remains accepted for older callers but is deliberately
+    ignored. Diogenes no longer carries a second, bundled Sandwich tree.
+    """
+
+    del repository_root
     resolved_home = (home or Path.home()).resolve()
     configured_root = microservices_root
     if configured_root is None:
@@ -256,7 +267,6 @@ def collect_sandwich_status(
         expected_root = raw_sandwich_root.resolve()
     else:
         expected_root = (configured_root.resolve() / "sandwich").resolve()
-    bundled = load_sandwich_manifest(repo / "components" / "sandwich")
     installation = observe_sandwich_installation(
         search_path=search_path,
         home=resolved_home,
@@ -268,16 +278,18 @@ def collect_sandwich_status(
         else None
     )
     installed_version: str | None = None
+    manifest_valid = False
     if installed_root is not None:
         try:
             installed_version = load_sandwich_manifest(installed_root).version
+            manifest_valid = True
         except SandwichManifestError:
             installed_version = None
     location_current = installed_root == expected_root
-    version_current = installed_version == bundled.version
-    ready = installation.installed and location_current and version_current
+    ready = installation.installed and location_current and manifest_valid
     sync_available = bool(
-        installed_root is not None
+        ready
+        and installed_root is not None
         and (installed_root / ".git").is_dir()
     )
     return {
@@ -285,13 +297,11 @@ def collect_sandwich_status(
         "repository": SANDWICH_REPOSITORY,
         "installed": installation.installed,
         "ready": ready,
-        "bundled_version": bundled.version,
         "installed_version": installed_version,
-        "bundled_root": str(bundled.component_root),
         "expected_root": str(expected_root),
         "source_root": str(installed_root) if installed_root is not None else None,
         "location_current": location_current,
-        "version_current": version_current,
+        "manifest_valid": manifest_valid,
         "commands": {
             name: str(path)
             for name, path in sorted(installation.command_paths.items())
@@ -331,11 +341,7 @@ def _component_file(root: Path, relative: object, label: str) -> Path:
 def load_sandwich_manifest(
     component_root: Path | None = None,
 ) -> SandwichManifest:
-    root = (
-        component_root
-        if component_root is not None
-        else Path(__file__).resolve().parents[1] / "components" / "sandwich"
-    ).resolve()
+    root = (component_root or SandwichLayout.default().component_root).resolve()
     manifest_path = root / "manifest.json"
     try:
         payload = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -467,17 +473,30 @@ def sandwich_runtime_definition(
     manifest: SandwichManifest | None = None,
 ) -> RuntimeDefinition:
     resolved_layout = layout or SandwichLayout.default()
-    resolved_manifest = manifest or load_sandwich_manifest(
-        resolved_layout.component_root
-    )
+    resolved_manifest = manifest
+    if resolved_manifest is None:
+        try:
+            resolved_manifest = load_sandwich_manifest(
+                resolved_layout.component_root
+            )
+        except SandwichManifestError:
+            resolved_manifest = None
     return RuntimeDefinition(
         runtime_id="sandwich.runtime",
-        label=f"Sandwich {resolved_manifest.version}",
+        label=(
+            f"Sandwich {resolved_manifest.version}"
+            if resolved_manifest is not None
+            else "Sandwich"
+        ),
         adapter=RuntimeAdapter.NATIVE,
-        execution=sandwich_operation_spec(
-            "doctor",
-            layout=resolved_layout,
-            manifest=resolved_manifest,
+        execution=(
+            sandwich_operation_spec(
+                "doctor",
+                layout=resolved_layout,
+                manifest=resolved_manifest,
+            )
+            if resolved_manifest is not None
+            else None
         ),
         ownership=OwnershipState.OBSERVED,
         source_root=resolved_layout.component_root,

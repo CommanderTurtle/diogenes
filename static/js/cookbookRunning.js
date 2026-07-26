@@ -11,13 +11,12 @@ import { computeProgressSignal } from './cookbookProgressSignal.js';
 import { portOf, nextFreePort } from './cookbookPorts.js';
 import { topPortalZ } from './toolWindowZOrder.js';
 
-// Human-friendly badge label for a task's internal status. Avoids surfacing
-// the word "error" in the sidebar — a server the user stopped or one that
-// quit cleanly reads as "stopped", not "error".
+// Human-friendly badge label for a task's internal status. A backend failure
+// is distinct from a service the user deliberately stopped.
 function _statusLabel(status, type) {
   if (status === 'running' && type === 'download') return 'downloading';
   if (status === 'done' && type === 'download') return 'finished';
-  if (status === 'error') return 'stopped';
+  if (status === 'error') return 'failed';
   return status || '';
 }
 
@@ -307,7 +306,7 @@ function _buildCrashReport(task, outputText) {
   const diag = _diagnose(capturedOutput);
   const started = task?.ts ? new Date(task.ts).toISOString() : '';
   const report = [
-    '## Odysseus Cookbook crash report',
+    '## Ɗiogenēs Cookbook crash report',
     '',
     'Please review this report for secrets before posting it publicly.',
     '',
@@ -531,7 +530,7 @@ export function _parseServePhase(snapshot) {
   const loadMatches = [...flat.matchAll(/Loading safetensors.*?(\d+)%/g)];
   // "Downloading (incomplete total...)" tracks real aggregate bytes; prefer it
   // over "Fetching N files" which only counts fully-closed files and lags badly
-  // with hf_transfer's parallel-chunk strategy (often sits at 0/N for most of the run).
+  // with parallel chunked transfers (often sits at 0/N for most of the run).
   const downloadingMatches = [...flat.matchAll(/Downloading.*?(\d+)%/g)];
   const fetchingMatches = [...flat.matchAll(/Fetching.*?(\d+)%/g)];
   const dlMatches = downloadingMatches.length ? downloadingMatches : fetchingMatches;
@@ -1568,10 +1567,10 @@ async function _retryTask(el, task) {
       _removeTask(task.sessionId);
       _launchServeTask(task.name, task.payload.repo_id, task.payload._cmd, task.payload._fields, task.remoteHost || '');
     } else {
-      uiModule.showToast('Retrying download — progress may look reset while HuggingFace checks cached files, then it should resume.', 7000);
+      uiModule.showToast('Retrying in reliable mode (Xet disabled). Hugging Face will verify cached files, then resume partial data.', 7000);
       _updateTask(task.sessionId, {
         status: 'running',
-        output: `${task.output || ''}\n\n[odysseus] Retrying download. Progress may briefly look like a fresh download while HuggingFace checks cached/incomplete files; cached partial files will be reused when available.`.trim(),
+        output: `${task.output || ''}\n\n[odysseus] Retrying in reliable mode with Xet disabled. Progress may briefly look fresh while Hugging Face verifies cached/incomplete files; cached partial data will be reused.`.trim(),
         _retrying: true,
       });
       _retryDownload(task.name, task.payload, task.sessionId);
@@ -1581,10 +1580,10 @@ async function _retryTask(el, task) {
 
 async function _retryDownload(name, payload, replaceSessionId = '') {
   try {
-    // A retry means the fast hf_transfer path already failed once — fall back to
-    // the plain, reliable downloader for this and any further attempt (it resumes
-    // from the cached .incomplete files, so no progress is lost).
-    const _payload = { ...(payload || {}), disable_hf_transfer: true };
+    // A retry means the fast Xet lane already failed once. Fall back to the
+    // conservative Hub lane for this and later attempts; cached partial data
+    // remains resumable.
+    const _payload = { ...(payload || {}), reliable_download: true };
     const res = await fetch('/api/model/download', {
       method: 'POST', credentials: 'same-origin',
       headers: { 'Content-Type': 'application/json' },
@@ -1623,7 +1622,7 @@ async function _retryDownload(name, payload, replaceSessionId = '') {
     } else {
       _addTask(data.session_id, name, 'download', _payload);
     }
-    uiModule.showToast(`Downloading ${name}...`);
+    uiModule.showToast(`Downloading ${name} in reliable mode (Xet disabled)...`);
   } catch (e) {
     uiModule.showToast('Download failed: ' + e.message);
     if (replaceSessionId) _updateTask(replaceSessionId, { status: 'crashed', _retrying: false });
@@ -2087,9 +2086,10 @@ export async function _launchServeTask(shortName, repo, cmd, fields, hostOverrid
     hf_token: _envState.hfToken || undefined,
     gpus: _usedGpus || undefined,
     platform: _hplatform || undefined,
-    runtime_id: fields?.colibri_provider_id || undefined,
-    runtime_settings: fields?._colibri_settings || undefined,
-    served_model_id: fields?.colibri_model_id || undefined,
+    runtime_id: fields?.colibri_provider_id || fields?.prism_provider_id || undefined,
+    runtime_model_id: fields?.prism_model_id || undefined,
+    runtime_settings: fields?._colibri_settings || fields?._prism_settings || undefined,
+    served_model_id: fields?.colibri_model_id || fields?.prism_api_model_id || undefined,
   };
 
   try {
@@ -3433,7 +3433,7 @@ async function _reconnectTask(el, task) {
             const lastPct = pctMatches.length ? pctMatches[pctMatches.length - 1][1] : null;
             const speedMatch = [...snapshot.matchAll(/([\d.]+)(?:MB|GB)\/s/g)];
             const lastSpeed = speedMatch.length ? speedMatch[speedMatch.length - 1][0] : null;
-            // hf_transfer prints "Downloading (incomplete total...): 73% | 1.81G/2.49G"
+            // Hugging Face prints "Downloading (incomplete total...): 73% | 1.81G/2.49G"
             // — the real aggregate byte progress. The "Fetching N files" line (often
             // last in the output) sits at 0%, so lastPct/_fetchPct can read 0 even at
             // 73% done. Prefer this aggregate when present.
@@ -3443,7 +3443,7 @@ async function _reconnectTask(el, task) {
             // Stale download detection.
             // Use the DOWNLOADED-BYTE count ("1.81G" from "1.81G/2.49G") as the
             // progress signal: it climbs continuously while transferring (even when
-            // the % plateaus during a big hf_transfer chunk) and FREEZES when stuck.
+            // the % plateaus during a large transfer chunk) and FREEZES when stuck.
             // The % alone plateaus (false stall), and a frozen frame still shows a
             // stale speed/ETA — so keying off speed masked real stalls (that's why a
             // 97%-stuck download went undetected). Bytes are the honest signal; fall
@@ -3480,7 +3480,7 @@ async function _reconnectTask(el, task) {
             } else if (!isPipDep && Date.now() - (el._lastProgressTime || 0) > _STALE_TIMEOUT && !task._autoRestarted) {
               task._autoRestarted = true;
               _updateTask(task.sessionId, { _autoRestarted: true });
-              badge.textContent = _startupStalled ? '0% stall — retrying' : 'stale — restarting';
+              badge.textContent = _startupStalled ? '0% stall — reliable retry' : 'stale — reliable retry';
               badge.className = 'cookbook-task-status cookbook-task-error';
               _showCookbookNotif(true);
               try {
@@ -3497,8 +3497,8 @@ async function _reconnectTask(el, task) {
                   ? { ...task.payload }
                   : { repo_id: task.repo || task.name, remote_host: task.remoteHost || '' };
                 if (_envState.hfToken) dlPayload.hf_token = _envState.hfToken;
-                // Stalled with hf_transfer — restart on the reliable downloader.
-                dlPayload.disable_hf_transfer = true;
+                // Stalled on Xet — restart on the conservative Hub lane.
+                dlPayload.reliable_download = true;
                 // Don't overwrite env_prefix — task.payload already has the correct
                 // "source <path>" form. The bare envPath would miss the `source` and
                 // the venv never activates (so hf CLI falls off PATH).
@@ -3527,7 +3527,7 @@ async function _reconnectTask(el, task) {
             // When the snapshot includes a shard-of-N marker (e.g.
             // "model-00006-of-00082.safetensors"), TRUE overall progress is
             // ((shard-1) + currentShardFraction) / totalShards. Before, _dlAgg
-            // (hf_transfer's per-current-shard aggregate, e.g. 53% of shard 6)
+            // (the transport's per-current-shard aggregate, e.g. 53% of shard 6)
             // was treated as overall and the row read "53%" while only 5 of
             // 82 shards were actually done.
             const _shardPat = [...snapshot.matchAll(/model-(\d+)-of-(\d+)\.(?:safetensors|bin)/g)];

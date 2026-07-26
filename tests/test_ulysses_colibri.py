@@ -63,6 +63,49 @@ def test_catalog_rejects_relative_model_paths(tmp_path: Path) -> None:
         )
 
 
+@pytest.mark.parametrize(
+    ("provider_id", "observed_origin"),
+    [
+        ("colibri.glm", "https://github.com/JustVugg/colibri"),
+        ("colibri.hy3", "git@github.com:ErikTromp/colibri-hy3.git"),
+        ("colibri.hy3", "ssh://git@github.com/ErikTromp/colibri-hy3"),
+    ],
+)
+def test_provider_origins_accept_canonical_github_variants(
+    tmp_path: Path,
+    provider_id: str,
+    observed_origin: str,
+) -> None:
+    providers = colibri.load_colibri_catalog(
+        _catalog(tmp_path),
+        home=tmp_path,
+        environment={},
+    )
+    provider = next(
+        item for item in providers if item.provider_id == provider_id
+    )
+
+    assert colibri._github_origins_match(
+        observed_origin,
+        provider.source_url,
+    )
+
+
+def test_provider_origin_rejects_a_different_github_repository(
+    tmp_path: Path,
+) -> None:
+    provider = colibri.load_colibri_catalog(
+        _catalog(tmp_path),
+        home=tmp_path,
+        environment={},
+    )[0]
+
+    assert not colibri._github_origins_match(
+        "git@github.com:JustVugg/not-colibri.git",
+        provider.source_url,
+    )
+
+
 def test_observation_is_read_only_and_port_collision_is_explicit(
     monkeypatch, tmp_path: Path
 ) -> None:
@@ -98,7 +141,9 @@ def test_observation_is_read_only_and_port_collision_is_explicit(
         finding["code"].endswith("port_collision")
         for finding in report["findings"]
     )
-    assert report["commands"]["serve"][0].endswith("/c/coli")
+    serve_cli = Path(report["commands"]["serve"][0])
+    assert serve_cli.name == "coli"
+    assert serve_cli.parent.name == "c"
 
 
 def test_healthy_provider_requires_matching_model_id(
@@ -139,8 +184,153 @@ def test_healthy_provider_requires_matching_model_id(
     report = colibri.observe_colibri_provider(provider)
 
     assert report["status"] == "running"
+    assert report["endpoint"]["state"] == "running"
+    assert report["endpoint"]["ownership"] == "owned"
     assert report["endpoint"]["served_models"] == ["glm-5.2-colibri"]
     assert report["actions"]["stop_available"] is True
+
+
+def test_healthy_provider_with_empty_model_catalog_is_starting_and_stoppable(
+    monkeypatch, tmp_path: Path
+) -> None:
+    provider = colibri.load_colibri_catalog(
+        _catalog(tmp_path),
+        home=tmp_path,
+        environment={},
+    )[0]
+    monkeypatch.setattr(
+        colibri,
+        "_git",
+        lambda _provider: {
+            "present": False,
+            "branch": None,
+            "commit": None,
+            "origin": None,
+            "dirty": False,
+            "minimum_commit_present": False,
+            "upstream_commit": None,
+            "ahead": 0,
+            "behind": 0,
+            "current": False,
+        },
+    )
+    monkeypatch.setattr(colibri, "_port_open", lambda _port: True)
+    monkeypatch.setattr(
+        colibri,
+        "_http_json",
+        lambda url: (
+            {"status": "ok"}
+            if url.endswith("/health")
+            else {"object": "list", "data": []}
+        ),
+    )
+
+    report = colibri.observe_colibri_provider(provider)
+
+    assert report["status"] == "starting"
+    assert report["endpoint"]["state"] == "starting"
+    assert report["endpoint"]["ownership"] == "owned"
+    assert report["endpoint"]["collision"] is False
+    assert report["actions"]["start_available"] is False
+    assert report["actions"]["stop_available"] is True
+    assert any(
+        finding["code"].endswith("endpoint_starting")
+        for finding in report["findings"]
+    )
+
+
+def test_healthy_provider_serving_other_model_is_foreign_collision(
+    monkeypatch, tmp_path: Path
+) -> None:
+    provider = colibri.load_colibri_catalog(
+        _catalog(tmp_path),
+        home=tmp_path,
+        environment={},
+    )[0]
+    monkeypatch.setattr(
+        colibri,
+        "_git",
+        lambda _provider: {
+            "present": False,
+            "branch": None,
+            "commit": None,
+            "origin": None,
+            "dirty": False,
+            "minimum_commit_present": False,
+            "upstream_commit": None,
+            "ahead": 0,
+            "behind": 0,
+            "current": False,
+        },
+    )
+    monkeypatch.setattr(colibri, "_port_open", lambda _port: True)
+    monkeypatch.setattr(
+        colibri,
+        "_http_json",
+        lambda url: (
+            {"status": "ok"}
+            if url.endswith("/health")
+            else {"object": "list", "data": [{"id": "another-model"}]}
+        ),
+    )
+
+    report = colibri.observe_colibri_provider(provider)
+
+    assert report["status"] == "collision"
+    assert report["endpoint"]["state"] == "collision"
+    assert report["endpoint"]["ownership"] == "foreign"
+    assert report["endpoint"]["collision"] is True
+    assert report["actions"]["start_available"] is False
+    assert report["actions"]["stop_available"] is False
+    assert any(
+        finding["code"].endswith("model_collision")
+        for finding in report["findings"]
+    )
+
+
+def test_healthy_provider_without_valid_model_catalog_is_degraded_not_owned(
+    monkeypatch, tmp_path: Path
+) -> None:
+    provider = colibri.load_colibri_catalog(
+        _catalog(tmp_path),
+        home=tmp_path,
+        environment={},
+    )[0]
+    monkeypatch.setattr(
+        colibri,
+        "_git",
+        lambda _provider: {
+            "present": False,
+            "branch": None,
+            "commit": None,
+            "origin": None,
+            "dirty": False,
+            "minimum_commit_present": False,
+            "upstream_commit": None,
+            "ahead": 0,
+            "behind": 0,
+            "current": False,
+        },
+    )
+    monkeypatch.setattr(colibri, "_port_open", lambda _port: True)
+    monkeypatch.setattr(
+        colibri,
+        "_http_json",
+        lambda url: {"status": "ok"} if url.endswith("/health") else None,
+    )
+
+    report = colibri.observe_colibri_provider(provider)
+
+    assert report["status"] == "degraded"
+    assert report["endpoint"]["state"] == "degraded"
+    assert report["endpoint"]["ownership"] == "unknown"
+    assert report["endpoint"]["collision"] is False
+    assert report["actions"]["start_available"] is False
+    assert report["actions"]["stop_available"] is False
+    assert any(
+        finding["code"].endswith("model_catalog_unavailable")
+        for finding in report["findings"]
+    )
 
 
 def test_model_completeness_requires_the_pinned_layout(tmp_path: Path) -> None:
