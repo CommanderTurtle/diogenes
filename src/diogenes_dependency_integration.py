@@ -279,14 +279,44 @@ def _shared_profiles() -> tuple[str, ...]:
     return tuple(profiles)
 
 
-def _mcp_servers(profile: str) -> dict[str, Any]:
-    result = _hermes(profile, "config", "get", "mcp_servers", "--json")
+def _read_config_value(profile: str, key: str) -> Any:
+    """Read a Hermes value while treating an unset key as normal first-run state."""
+    argv = _hermes_argv(profile, "config", "get", key, "--json")
+    print(f"$ {_display_argv(argv)}", flush=True)
+    result = subprocess.run(
+        argv,
+        env=_host_environment(),
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
+    )
+    detail = (result.stderr or result.stdout).strip()
+    if result.returncode:
+        if "Config key not set:" in detail:
+            print(f"Hermes {profile} {key}: not configured.")
+            return None
+        if result.stdout:
+            print(result.stdout.rstrip())
+        if result.stderr:
+            print(result.stderr.rstrip(), file=sys.stderr)
+        raise IntegrationError(
+            f"{Path(argv[0]).name} exited with status {result.returncode}"
+        )
+    if result.stdout:
+        print(result.stdout.rstrip())
+    if result.stderr:
+        print(result.stderr.rstrip(), file=sys.stderr)
     try:
-        value = json.loads(result.stdout)
+        return json.loads(result.stdout)
     except json.JSONDecodeError as exc:
         raise IntegrationError(
-            f"Hermes returned invalid MCP configuration for {profile}"
+            f"Hermes returned invalid configuration for {key}"
         ) from exc
+
+
+def _mcp_servers(profile: str) -> dict[str, Any]:
+    value = _read_config_value(profile, "mcp_servers")
     if value is None:
         return {}
     if not isinstance(value, dict):
@@ -639,11 +669,7 @@ def _ensure_context_plugin_files() -> None:
 
 
 def _config_value(profile: str, key: str) -> Any:
-    result = _hermes(profile, "config", "get", key, "--json")
-    try:
-        return json.loads(result.stdout)
-    except json.JSONDecodeError as exc:
-        raise IntegrationError(f"Hermes returned invalid configuration for {key}") from exc
+    return _read_config_value(profile, key)
 
 
 def _set_config_value(profile: str, key: str, value: Any) -> bool:
