@@ -50,6 +50,15 @@ let _colibriProvidersCache = null;
 let _colibriProvidersCachedAt = 0;
 const _CACHED_MODELS_SCAN_KEY = 'cookbook_cached_models_scan_v3_ltx_video';
 const _CACHED_MODELS_SCAN_TTL = 6 * 3600 * 1000;
+const _HIDDEN_LEGACY_COLIBRI_MODELS = [
+  'mateogrgic/glm-5.2-colibri-int4-with-int8-mtp',
+  'mateogrgic--glm-5.2-colibri-int4-with-int8-mtp',
+];
+
+function _isHiddenLegacyColibriModel(model) {
+  const identity = `${model?.repo_id || ''} ${model?.name || ''} ${model?.path || ''}`.toLowerCase();
+  return _HIDDEN_LEGACY_COLIBRI_MODELS.some(value => identity.includes(value));
+}
 
 function _colibriRuntimeIdForModel(model) {
   const identity = `${model?.repo_id || ''} ${model?.name || ''} ${model?.path || ''}`.toLowerCase();
@@ -4269,9 +4278,9 @@ export async function openServePanelForRepo(repo, fields) {
 function _renderCachedModelsData(list, data, host) {
   // CHANGELOG: 'ready' already excludes partial downloads;
   // show every complete model regardless of size/backend.
-  const ready = (data.models || []).filter(m => m.status === 'ready');
+  const ready = (data.models || []).filter(m => m.status === 'ready' && !_isHiddenLegacyColibriModel(m));
 
-  const downloading = (data.models || []).filter(m => m.status === 'downloading');
+  const downloading = (data.models || []).filter(m => m.status === 'downloading' && !_isHiddenLegacyColibriModel(m));
   const allModels = [...ready, ...downloading];
   _cachedAllModels = allModels;
 

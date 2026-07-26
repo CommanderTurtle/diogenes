@@ -1212,7 +1212,14 @@ async function _fetchDependencies() {
     const data = await resp.json();
     const _colibriExtras = colibriResp?.ok ? await colibriResp.json() : null;
     const _hermesExtra = hermesResp?.ok ? await hermesResp.json() : null;
-    const _sandwichExtra = sandwichResp?.ok ? await sandwichResp.json() : null;
+    const _sandwichExtra = sandwichResp?.ok
+      ? await sandwichResp.json()
+      : {
+          ready: false,
+          status_unavailable: true,
+          expected_root: '<services root>/sandwich',
+          repository: 'https://github.com/CommanderTurtle/sandwich',
+        };
     const pkgs = data.packages || [];
     if (!pkgs.length) { list.innerHTML = '<div class="hwfit-loading">No packages found</div>'; return; }
     const _winUnsupported = new Set(['hf_transfer', 'vllm', 'rembg', 'gfpgan']);
@@ -1222,7 +1229,7 @@ async function _fetchDependencies() {
       if (winBlocked) return `<span class="cookbook-dep-tag cookbook-dep-na">N/A</span>`;
       if (pkg.installed && isSystemDep) return `<span class="cookbook-dep-tag cookbook-dep-installed" title="Found on selected server">Installed</span>`;
       if (pkg.installed && pkg.pip_update_available === false && pkg.name !== 'llama_cpp') {
-        const tip = esc(pkg.update_note || pkg.status_note || 'Found externally; update outside Odysseus.');
+        const tip = esc(pkg.update_note || pkg.status_note || 'Found externally; update outside Diogenes.');
         return `<span class="cookbook-dep-tag cookbook-dep-installed" title="${tip}">Installed</span>`;
       }
       if (pkg.installed) return `<button class="cookbook-dep-tag cookbook-dep-installed cookbook-dep-installed-btn" title="Installed — click for actions"><span class="cookbook-dep-installed-label">Installed</span><span class="cookbook-dep-caret">&#9662;</span></button>`;
@@ -1319,9 +1326,14 @@ async function _fetchDependencies() {
           + `</div>`
         : '';
       const managed = pkg.managed_install || {};
+      const dependencyHelp = pkg.name === 'vllm' && managed.mode === 'uv-lock'
+        ? `This local Diogenes environment is pinned by ${managed.lock_path || 'the verified uv lock'}. Install and Reconcile use ${managed.python || 'the active inner .venv Python'} and never mutate a system Python. Set ULYSSES_VLLM_LOCK=disabled only to opt into normal upstream upgrades.`
+        : pkg.name === 'liburing-dev'
+          ? 'This is an operating-system development package, not a Python dependency. Colibri-Hy3 needs its headers at native C/CUDA build time; it is intentionally detected outside .venv.'
+          : '';
       return `<div class="cookbook-dep-row${winBlocked ? ' cookbook-dep-blocked' : ''}" data-pkg-name="${esc(pkg.name)}" data-dep-pip="${esc(pkg.pip || '')}" data-dep-target="${isLocal ? 'local' : 'remote'}" data-dep-kind="${esc(pkg.kind || 'python')}" data-managed-install-mode="${esc(managed.mode || '')}" data-managed-lock="${esc(managed.lock_path || '')}" data-managed-python="${esc(managed.python || '')}" data-managed-venv="${esc(managed.venv || '')}">`
         + `<div class="cookbook-dep-info">`
-        + `<div class="memory-item-title">${_depGlyphHtml(pkg.name)}${esc(pkg.name)}</div>`
+        + `<div class="memory-item-title">${_depGlyphHtml(pkg.name)}${esc(pkg.name)}${dependencyHelp ? ` <span class="hwfit-help-chip hwfit-help-chip-inline" title="${esc(dependencyHelp)}" aria-label="${esc(dependencyHelp)}">?</span>` : ''}</div>`
         + `<div class="memory-item-meta" style="font-size:10px;opacity:0.5;margin-top:2px;">${esc(pkg.desc)}</div>`
         + note
         + updateNote
@@ -1404,24 +1416,35 @@ async function _fetchDependencies() {
     const _section = (title, note, items) =>
       items.length ? _sectionHeader(title, note) + _rowsHtml(items) : '';
     const _extraAction = (runtimeId, action, label, enabled = true, title = '') =>
-      `<button type="button" class="cookbook-dep-tag cookbook-dep-install" data-native-extra="${esc(runtimeId)}" data-native-extra-action="${esc(action)}"${enabled ? '' : ' disabled'} title="${esc(title)}">${esc(label)}</button>`;
+      `<span style="display:inline-flex;align-items:center;gap:3px;">`
+      + `<button type="button" class="cookbook-dep-tag cookbook-dep-install" data-native-extra="${esc(runtimeId)}" data-native-extra-action="${esc(action)}"${enabled ? '' : ' disabled'} title="${esc(title)}">${esc(label)}</button>`
+      + (title ? `<span class="hwfit-help-chip hwfit-help-chip-inline" title="${esc(title)}" aria-label="${esc(title)}">?</span>` : '')
+      + `</span>`;
     const _extrasHtml = (group = 'runtimes') => {
       if (_viewingRemote) return '';
       const rows = [];
-      if (group === 'runtimes' && _sandwichExtra) {
+      if (group === 'runtimes') {
         const ready = !!_sandwichExtra.ready;
+        const unavailable = !!_sandwichExtra.status_unavailable;
         const action = ready ? 'doctor' : 'install';
         const detail = ready
           ? `${_sandwichExtra.installed_version || 'version unknown'} · ${_sandwichExtra.source_root || 'source not detected'}`
-          : `bundled ${_sandwichExtra.bundled_version || 'version unknown'} · target ${_sandwichExtra.expected_root || '~/Hermes/sandwich'}`;
+          : unavailable
+            ? `Status request unavailable · expected ${_sandwichExtra.expected_root}`
+            : `source ${_sandwichExtra.repository || 'CommanderTurtle/sandwich'} · target ${_sandwichExtra.expected_root || '<services root>/sandwich'}`;
         rows.push(
           `<div class="cookbook-dep-row" data-pkg-name="sandwich" data-dep-kind="native">`
           + `<div class="cookbook-dep-info"><div class="memory-item-title">${_depGlyphHtml('sandwich')}Sandwich</div>`
           + `<div class="memory-item-meta" style="font-size:10px;opacity:.5;margin-top:2px;">Bun compatibility layer · never installs Node</div>`
           + `<div class="memory-item-meta" style="font-size:10px;opacity:.65;margin-top:3px;">${esc(detail)}</div></div>`
-          + _extraAction('sandwich.runtime', action, ready ? 'Doctor' : 'Install', true, ready ? 'Run the compatibility suite and doctor.' : 'Install the bundled component at the configured microservices root.')
+          + (ready
+            ? _extraAction('sandwich.runtime', 'doctor', 'Doctor', true, 'Run the offline compatibility contract and verify every Bun façade resolves to this source tree.')
+              + _extraAction('sandwich.runtime', 'sync', 'Sync', !!_sandwichExtra.actions?.sync_available, _sandwichExtra.actions?.sync_available
+                ? 'Fast-forward the clean CommanderTurtle/sandwich checkout, then reconcile both user-bin shim locations and shell configuration.'
+                : 'This installation is not a Git checkout. Preserve it, then install the standalone CommanderTurtle/sandwich repository to enable Sync.')
+            : _extraAction('sandwich.runtime', action, unavailable ? 'Retry' : 'Install', !unavailable, unavailable ? 'Reload Dependencies to retry the native status endpoint.' : 'Clone CommanderTurtle/sandwich into the configured services root and install its user shims.'))
           + `<span class="cookbook-dep-tag cookbook-dep-cat">Runtime</span>`
-          + `<span class="cookbook-dep-tag ${ready ? 'cookbook-dep-installed' : 'cookbook-dep-na'}">${ready ? 'Installed' : 'Missing'}</span>`
+          + `<span class="cookbook-dep-tag ${ready ? 'cookbook-dep-installed' : 'cookbook-dep-na'}">${ready ? 'Installed' : unavailable ? 'Unavailable' : 'Missing'}</span>`
           + `</div>`
         );
       }
@@ -1470,8 +1493,8 @@ async function _fetchDependencies() {
           + `<div class="cookbook-dep-info"><div class="memory-item-title">${_depGlyphHtml(name)}${esc(provider.label)}</div>`
           + `<div class="memory-item-meta" style="font-size:10px;opacity:.5;margin-top:2px;">Independent native C/CUDA source and OpenAI-compatible model runtime</div>`
           + `<div class="memory-item-meta" style="font-size:10px;opacity:.65;margin-top:3px;">${esc(detail)}</div></div>`
-          + _extraAction(provider.id, 'sync', source.present ? 'Sync' : 'Clone', !!actions.sync_available, source.dirty ? 'Preserve or commit local source changes before syncing.' : 'Fetch the official source with a fast-forward-only update.')
-          + _extraAction(provider.id, 'build', 'Build CUDA', !!actions.build_available, 'Run the provider-specific native CUDA build and record a build manifest.')
+          + _extraAction(provider.id, 'sync', source.present ? 'Sync' : 'Clone', !!actions.sync_available, source.unexpected_dirty ? 'The official source has unexpected local changes. Preserve or commit them before syncing.' : 'Clone the official provider repository when absent. Otherwise fetch its configured branch and fast-forward only; declared build manifests and provider binaries are recognized as expected artifacts.')
+          + _extraAction(provider.id, 'build', 'Build CUDA', !!actions.build_available, isGlm ? 'Build the official GLM Colibri target with CUDA_ARCH=native, run its declared validation steps, and record the exact source revision and binary hashes.' : 'Build the independent Hy3 target with CUDA and io_uring, apply only the declared source-compatibility patch when its exact preimage matches, run validation, and record the revision and binary hashes.')
           + `<span class="cookbook-dep-tag cookbook-dep-cat">LLM</span>`
           + `<span class="cookbook-dep-tag ${actions.start_available ? 'cookbook-dep-installed' : 'cookbook-dep-na'}">${esc(status)}</span>`
           + `</div>`
@@ -1550,7 +1573,7 @@ async function _fetchDependencies() {
         if (!byCat.has(cat)) byCat.set(cat, []);
         byCat.get(cat).push(item);
       }
-      const parts = [_sectionHeader('Odysseus app', 'Run inside the Odysseus app itself.')];
+      const parts = [_sectionHeader('Diogenes app', 'Run inside the Diogenes app itself.')];
       const order = ['System', 'Tools', 'LLM', 'Image', 'Audio', 'Other'];
       for (const cat of order) {
         const catItems = _sortDeps(byCat.get(cat) || [], cat);
@@ -3522,7 +3545,7 @@ function _renderRecipes() {
   html += _buildServerOpts(false);
   html += '</select>';
   html += '</div>';
-  html += '<p class="memory-desc doclib-desc">Optional packages that extend Odysseus capabilities.</p>';
+  html += '<p class="memory-desc doclib-desc">Optional packages and native engines that extend Diogenes capabilities.</p>';
   html += '<div class="doclib-grid" id="cookbook-deps-list"></div>';
   html += '</div></div>';
 
@@ -3561,7 +3584,7 @@ function _renderRecipes() {
    // the same `.cal-add-btn-text` rules, so styling stays consistent.
   html += '<button class="cal-add-btn cal-add-btn-text" id="cookbook-server-add" title="Add server" style="margin-left:auto;"><span class="cal-add-plus">+</span><span class="cal-add-label">Add</span></button>';
   html += '</div>';
-  html += '<p class="memory-desc doclib-desc">Configure SSH servers, install Odysseus keys, choose model directories, and set the default server. Local is this machine.</p>';
+  html += '<p class="memory-desc doclib-desc">Configure SSH servers, install Diogenes keys, choose model directories, and set the default server. Local is this machine.</p>';
   html += '<div class="memory-toolbar cookbook-servers-toolbar" style="margin-top:4px;">';
   html += `<div id="cookbook-servers-list">`;
   for (let i = 0; i < _es.servers.length; i++) {

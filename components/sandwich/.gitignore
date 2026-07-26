@@ -1,0 +1,13 @@
+# Sandwich keeps runtime state outside the source tree. These entries also
+# protect a checkout if a tool ignores the configured state/cache locations.
+.cache/
+.state/
+.tmp/
+.sandbox/
+node_modules/
+bun-error.log
+*.log
+*.bak
+*.orig
+*.rej
+.DS_Store

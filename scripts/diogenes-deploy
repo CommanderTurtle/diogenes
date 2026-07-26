@@ -7,7 +7,6 @@ import argparse
 import json
 import subprocess
 import sys
-from datetime import datetime, timezone
 from pathlib import Path
 
 
@@ -174,17 +173,6 @@ def prepare_runtime(source_root: Path, runtime_root: Path) -> dict:
                 "upstream",
                 "DISABLED",
             )
-        manifest = {
-            "schema": 2,
-            "prepared_at": datetime.now(timezone.utc).isoformat(),
-            "source": provenance,
-            "runtime_root": str(runtime_root.resolve()),
-            "self_contained": True,
-        }
-        (runtime_root / ".ulysses-runtime.json").write_text(
-            json.dumps(manifest, indent=2, sort_keys=True) + "\n",
-            encoding="utf-8",
-        )
     except Exception:
         # The clone remains inspectable if post-clone metadata fails; never
         # erase an unexpected path as part of recovery.

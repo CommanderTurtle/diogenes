@@ -7,7 +7,7 @@
 //   - Other static assets (images/fonts/libs): cache-first with bg refresh.
 //   - API / non-GET: never cached.
 // Bump CACHE_NAME whenever the precache list or SW logic changes.
-const CACHE_NAME = 'odysseus-v377-ulysses-brand-css-command';
+const CACHE_NAME = 'odysseus-v378-diogenes-runtime-management';
 
 // Core shell precached on install so repeat opens are instant without any
 // network wait. Keep this list in sync with the <script type="module"> tags
@@ -39,6 +39,9 @@ const PRECACHE = [
   '/static/js/chatStream.js',
   '/static/js/chat.js',
   '/static/js/cookbook.js',
+  '/static/js/cookbookRunning.js',
+  '/static/js/cookbookServe.js',
+  '/static/js/ulyssesServices.js',
   '/static/js/search-chat.js',
   '/static/js/compare/index.js',
   '/static/js/theme.js',

@@ -42,7 +42,7 @@ def test_install_plan_targets_configured_microservices_root(
     control = SandwichControl(tmp_path / "state")
 
     plan, _token = control.create_plan(
-        {"ready": False, "bundled_version": "0.2.0"},
+        {"ready": False, "bundled_version": "0.3.0"},
         action="install",
     )
 
@@ -52,6 +52,8 @@ def test_install_plan_targets_configured_microservices_root(
         "-m",
         "src.ulysses_sandwich_install",
         "--stage",
+        "--source",
+        "git",
     ]
     assert plan["steps"][1]["argv"] == [
         str(target / "scripts" / "install-user.sh"),

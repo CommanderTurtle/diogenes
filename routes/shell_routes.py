@@ -117,12 +117,14 @@ def _ulysses_vllm_lock_contract(*, remote_host: str | None = None) -> dict | Non
     if not python_path.is_file() or not (venv_path / "pyvenv.cfg").is_file():
         return None
     configured = os.getenv("ULYSSES_VLLM_LOCK", "").strip()
+    if configured.lower() in {"disabled", "off", "latest", "unmanaged"}:
+        return None
     lock_path = (
         Path(configured).expanduser()
         if configured
         else Path(__file__).resolve().parents[1]
         / "requirements"
-        / "ulysses-vllm-cuda13.lock"
+        / "diogenes-vllm-cuda13.lock"
     )
     if not lock_path.is_absolute() or not lock_path.is_file():
         return None

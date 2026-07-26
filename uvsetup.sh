@@ -5,10 +5,12 @@
 set -Eeuo pipefail
 
 PYTHON_VERSION="3.13.12"
-SERVICES_ROOT="${ULYSSES_MICROSERVICES_ROOT:-${HOME}/Hermes}"
+SERVICES_ROOT="${ULYSSES_MICROSERVICES_ROOT:-}"
 WITH_CHROMA=0
 NON_INTERACTIVE=0
 SKIP_INSTALL=0
+SKIP_JAVASCRIPT=0
+SANDWICH_MODE=prompt
 
 usage() {
   cat <<'EOF'
@@ -19,6 +21,9 @@ Usage: ./uvsetup.sh [options]
   --with-chroma          start only the bundled Chroma Compose service
   --non-interactive      accept detected/default paths without prompting
   --skip-install         configure and validate without installing requirements
+  --skip-javascript      do not reconcile Diogenes' Bun lockfile
+  --with-sandwich        clone/install Sandwich when it is not detected
+  --skip-sandwich        leave a missing Sandwich installation untouched
   -h, --help             show this help
 
 The script never starts Diogenes, a model engine, or any host microservice.
@@ -49,6 +54,18 @@ while (($#)); do
       SKIP_INSTALL=1
       shift
       ;;
+    --skip-javascript)
+      SKIP_JAVASCRIPT=1
+      shift
+      ;;
+    --with-sandwich)
+      SANDWICH_MODE=install
+      shift
+      ;;
+    --skip-sandwich)
+      SANDWICH_MODE=skip
+      shift
+      ;;
     -h|--help)
       usage
       exit 0
@@ -69,6 +86,21 @@ command -v uv >/dev/null 2>&1 || {
   exit 1
 }
 
+if [[ -z "$SERVICES_ROOT" && -f .env ]]; then
+  SERVICES_ROOT="$(
+    awk '
+      /^ULYSSES_MICROSERVICES_ROOT=/ {
+        sub(/^[^=]*=/, "")
+        gsub(/^["'\'']|["'\'']$/, "")
+        print
+        exit
+      }
+    ' .env
+  )"
+  SERVICES_ROOT="${SERVICES_ROOT/#\$\{HOME\}/$HOME}"
+  SERVICES_ROOT="${SERVICES_ROOT/#\$HOME/$HOME}"
+fi
+SERVICES_ROOT="${SERVICES_ROOT:-${HOME}/Hermes}"
 SERVICES_ROOT="${SERVICES_ROOT/#\~/$HOME}"
 if [[ "$SERVICES_ROOT" != /* ]]; then
   echo "services root must be an absolute path: $SERVICES_ROOT" >&2
@@ -124,10 +156,26 @@ set_env ULYSSES_COLIBRI_GLM_MODEL "$HOME/colibri-models/mastouri--GLM-5.2-colibr
 set_env ULYSSES_COLIBRI_HY3_MODEL "$HOME/colibri-models/UnderstandLing--Hy3-colibri-int4"
 
 echo "[ok] configured native runtime paths in .env"
-if [[ -d "$SERVICES_ROOT/sandwich" ]]; then
-  echo "[ok] detected Sandwich at $SERVICES_ROOT/sandwich"
+if [[ ! -d "$SERVICES_ROOT/sandwich" && "$SANDWICH_MODE" == prompt && -t 0 && "$NON_INTERACTIVE" -eq 0 ]]; then
+  printf 'Sandwich is missing. Clone CommanderTurtle/sandwich to %s? [Y/n]: ' "$SERVICES_ROOT/sandwich"
+  read -r answer
+  [[ "${answer,,}" == n || "${answer,,}" == no ]] || SANDWICH_MODE=install
+fi
+if [[ "$SANDWICH_MODE" == install ]]; then
+  if [[ ! -d "$SERVICES_ROOT/sandwich" ]]; then
+    mkdir -p -- "$SERVICES_ROOT"
+    git clone https://github.com/CommanderTurtle/sandwich.git "$SERVICES_ROOT/sandwich"
+  fi
+  [[ -x "$SERVICES_ROOT/sandwich/install.sh" ]] || {
+    echo "Sandwich source is missing its executable install.sh: $SERVICES_ROOT/sandwich" >&2
+    exit 1
+  }
+  "$SERVICES_ROOT/sandwich/install.sh"
+fi
+if [[ -x "$SERVICES_ROOT/sandwich/bin/sandwich" ]]; then
+  echo "[ok] detected Sandwich source at $SERVICES_ROOT/sandwich"
 else
-  echo "[note] Sandwich is not installed at $SERVICES_ROOT/sandwich"
+  echo "[note] Sandwich is not installed at $SERVICES_ROOT/sandwich; JavaScript services remain unavailable"
 fi
 
 if [[ -e .venv && ! -f .venv/pyvenv.cfg ]]; then
@@ -156,6 +204,14 @@ if [[ "$SKIP_INSTALL" -eq 0 ]]; then
   uv pip check --python "$VENV_PYTHON"
 else
   echo "[skip] requirements and setup.py"
+fi
+
+if [[ "$SKIP_JAVASCRIPT" -eq 0 && -x "$HOME/.bun/bin/bun" ]]; then
+  "$ROOT/bunsetup.sh"
+elif [[ "$SKIP_JAVASCRIPT" -eq 0 ]]; then
+  echo "[skip] Diogenes JavaScript dependency lock (Bun is not installed)"
+else
+  echo "[skip] Diogenes JavaScript dependency lock"
 fi
 
 if [[ "$WITH_CHROMA" -eq 1 ]]; then

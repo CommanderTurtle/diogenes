@@ -5,9 +5,11 @@ set -euo pipefail
 root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
 mode="${1:---check}"
 local_bin="$HOME/.local/bin"
+bun_bin="${BUN_INSTALL:-$HOME/.bun}/bin"
 state_root="$HOME/.local/state/sandwich"
 bashrc="$HOME/.bashrc"
-commands=(sandwich node npm npx pnpm yarn)
+commands=(sandwich node npm npx pnpm yarn corepack)
+link_dirs=("$local_bin" "$bun_bin")
 
 case "$mode" in
     --check|--apply) ;;
@@ -19,7 +21,7 @@ esac
 
 printf 'Sandwich user install\n'
 printf '  source: %s\n' "$root"
-printf '  bin:    %s\n' "$local_bin"
+printf '  bins:   %s, %s\n' "$local_bin" "$bun_bin"
 printf '  bashrc: %s\n' "$bashrc"
 
 for name in "${commands[@]}"; do
@@ -27,10 +29,12 @@ for name in "${commands[@]}"; do
         printf 'missing executable: %s\n' "$root/bin/$name" >&2
         exit 1
     }
-    printf '  %-13s %s -> %s\n' \
-        "$name" \
-        "${local_bin}/${name}" \
-        "$root/bin/$name"
+    for link_dir in "${link_dirs[@]}"; do
+        printf '  %-13s %s -> %s\n' \
+            "$name" \
+            "${link_dir}/${name}" \
+            "$root/bin/$name"
+    done
 done
 
 if [[ "$mode" == "--check" ]]; then
@@ -41,19 +45,25 @@ fi
 
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
 backup="$state_root/backups/$timestamp"
-mkdir -p -- "$backup" "$local_bin"
+mkdir -p -- "$backup" "$local_bin" "$bun_bin"
 
-for name in "${commands[@]}"; do
-    target="$local_bin/$name"
-    if [[ -e "$target" || -L "$target" ]]; then
-        cp -a -- "$target" "$backup/$name"
-    fi
+for link_dir in "${link_dirs[@]}"; do
+    backup_dir="$backup/$(basename -- "$(dirname -- "$link_dir")")-$(basename -- "$link_dir")"
+    mkdir -p -- "$backup_dir"
+    for name in "${commands[@]}"; do
+        target="$link_dir/$name"
+        if [[ -e "$target" || -L "$target" ]]; then
+            cp -a -- "$target" "$backup_dir/$name"
+        fi
+    done
 done
 [[ -f "$bashrc" ]] && cp -a -- "$bashrc" "$backup/bashrc"
 [[ -f "$HOME/.bunfig.toml" ]] && cp -a -- "$HOME/.bunfig.toml" "$backup/bunfig.toml"
 
-for name in "${commands[@]}"; do
-    ln -sfn -- "$root/bin/$name" "$local_bin/$name"
+for link_dir in "${link_dirs[@]}"; do
+    for name in "${commands[@]}"; do
+        ln -sfn -- "$root/bin/$name" "$link_dir/$name"
+    done
 done
 install -m 0644 -- "$root/config/bunfig.toml" "$HOME/.bunfig.toml"
 

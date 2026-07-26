@@ -26,6 +26,7 @@ from src.ulysses_runtime import (
 SANDWICH_SCHEMA = "sandwich.component.v1"
 _OPERATION_ID = re.compile(r"^[a-z][a-z0-9_]{1,63}$")
 _SEMVER = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")
+SANDWICH_REPOSITORY = "https://github.com/CommanderTurtle/sandwich.git"
 
 
 class SandwichManifestError(ValueError):
@@ -160,6 +161,7 @@ def observe_sandwich_installation(
         "npx",
         "pnpm",
         "yarn",
+        "corepack",
     ):
         found = command_path(command)
         if found:
@@ -181,14 +183,30 @@ def observe_sandwich_installation(
     # A canonical source tree is usable even when the application process did
     # not inherit ~/.local/bin. Report those exact wrapper entrypoints.
     if source_root is not None:
-        for command in ("sandwich", "node", "npm", "npx", "pnpm", "yarn"):
+        for command in (
+            "sandwich",
+            "node",
+            "npm",
+            "npx",
+            "pnpm",
+            "yarn",
+            "corepack",
+        ):
             candidate = (source_root / "bin" / command).resolve()
             if command not in resolved and candidate.is_file():
                 resolved[command] = candidate
 
-    required = ("bun", "node", "npm", "npx", "pnpm", "yarn")
+    required = ("bun", "node", "npm", "npx", "pnpm", "yarn", "corepack")
     missing = tuple(command for command in required if command not in resolved)
-    wrapper_commands = ("sandwich", "node", "npm", "npx", "pnpm", "yarn")
+    wrapper_commands = (
+        "sandwich",
+        "node",
+        "npm",
+        "npx",
+        "pnpm",
+        "yarn",
+        "corepack",
+    )
     mismatched = (
         tuple(
             command
@@ -230,7 +248,14 @@ def collect_sandwich_status(
         configured_root = Path(raw_root) if raw_root else resolved_home / "Hermes"
     if not configured_root.is_absolute():
         raise ValueError("ULYSSES_MICROSERVICES_ROOT must be absolute")
-    expected_root = (configured_root.resolve() / "sandwich").resolve()
+    configured_sandwich = os.environ.get("ULYSSES_SANDWICH_ROOT")
+    if configured_sandwich:
+        raw_sandwich_root = Path(configured_sandwich).expanduser()
+        if not raw_sandwich_root.is_absolute():
+            raise ValueError("ULYSSES_SANDWICH_ROOT must be absolute")
+        expected_root = raw_sandwich_root.resolve()
+    else:
+        expected_root = (configured_root.resolve() / "sandwich").resolve()
     bundled = load_sandwich_manifest(repo / "components" / "sandwich")
     installation = observe_sandwich_installation(
         search_path=search_path,
@@ -251,8 +276,13 @@ def collect_sandwich_status(
     location_current = installed_root == expected_root
     version_current = installed_version == bundled.version
     ready = installation.installed and location_current and version_current
+    sync_available = bool(
+        installed_root is not None
+        and (installed_root / ".git").is_dir()
+    )
     return {
         "schema_version": "ulysses.sandwich-status.v1",
+        "repository": SANDWICH_REPOSITORY,
         "installed": installation.installed,
         "ready": ready,
         "bundled_version": bundled.version,
@@ -270,6 +300,7 @@ def collect_sandwich_status(
         "mismatched_commands": list(installation.mismatched_commands),
         "actions": {
             "install_available": not ready,
+            "sync_available": sync_available,
             "doctor_available": ready,
         },
     }

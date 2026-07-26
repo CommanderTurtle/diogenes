@@ -80,6 +80,7 @@ check "npx uses bunx with Bun runtime" \
     contains "$(cd "$fixture" && npx --no-install hello-bun)" "hello:$("$SANDWICH_BUN" --version)"
 check "npm version is valid semver" matches "$(npm --version)" '^[0-9]+\.[0-9]+\.[0-9]+$'
 check "npx version matches npm compatibility version" equals "$(npx --version)" "$(npm --version)"
+check "corepack resolves to Sandwich" contains "$(corepack --version)" "sandwich-"
 
 mkdir -p "$fixture/fixture-dep"
 cat >"$fixture/fixture-dep/package.json" <<'EOF'
@@ -157,6 +158,7 @@ fi
 for file in "$root"/bin/* "$root"/lib/*.sh "$root"/scripts/*.sh "$root"/tests/*.sh; do
     check "bash syntax: ${file#$root/}" bash -n "$file"
 done
+check "top-level installer syntax" bash -n "$root/install.sh"
 
 printf '\n%d passed, %d failed\n' "$passed" "$failed"
 ((failed == 0))

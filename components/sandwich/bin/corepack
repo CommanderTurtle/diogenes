@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+
+source "$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")/../lib/common.sh"
+
+case "${1:-}" in
+    --version|-v)
+        printf 'sandwich-%s\n' "$("$SANDWICH_ROOT/bin/sandwich" --version)"
+        ;;
+    enable)
+        # Sandwich installs deterministic user shims itself. Corepack's enable
+        # operation is therefore already satisfied.
+        "$SANDWICH_ROOT/scripts/install-user.sh" --apply
+        ;;
+    disable)
+        bs_die "corepack disable would remove Sandwich-owned shims; use the recorded installer backup explicitly"
+        ;;
+    prepare|install|use|up)
+        bs_die "Corepack package-manager downloads are disabled; Bun is the only package manager"
+        ;;
+    --help|-h|'')
+        cat <<'EOF'
+Sandwich Corepack compatibility
+
+  corepack enable     refresh Sandwich shims
+  corepack --version  report the Sandwich compatibility version
+
+Package-manager downloads are intentionally disabled. Use bun, bunx, or the
+Sandwich npm/npx/pnpm/yarn compatibility commands.
+EOF
+        ;;
+    *)
+        bs_die "unsupported corepack command '$1'; Bun is the only package manager"
+        ;;
+esac

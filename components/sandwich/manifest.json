@@ -1,16 +1,18 @@
 {
   "schema_version": "sandwich.component.v1",
   "id": "sandwich",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "runtime": "bun",
   "install_scope": "user",
+  "repository": "https://github.com/CommanderTurtle/sandwich.git",
   "entrypoints": {
     "sandwich": "bin/sandwich",
     "node": "bin/node",
     "npm": "bin/npm",
     "npx": "bin/npx",
     "pnpm": "bin/pnpm",
-    "yarn": "bin/yarn"
+    "yarn": "bin/yarn",
+    "corepack": "bin/corepack"
   },
   "operations": {
     "doctor": {

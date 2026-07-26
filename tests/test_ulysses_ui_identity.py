@@ -64,7 +64,7 @@ def test_services_window_preserves_agent_and_mcp_boundaries() -> None:
     assert "ulyssesServicesModule.init(API_BASE);" in app
     assert "'/services': () =>" in app
 
-    assert "Odysseus agent" in services
+    assert "Diogenes agent" in services
     assert "Hermes agent" in services
     assert "Settings → Integrations" in services
     assert "never copies or merges" in services

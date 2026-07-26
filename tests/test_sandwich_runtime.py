@@ -31,7 +31,7 @@ def _layout(tmp_path: Path) -> SandwichLayout:
 def test_bundled_manifest_is_valid_and_mutations_are_human_gated():
     manifest = load_sandwich_manifest(COMPONENT_ROOT)
 
-    assert manifest.version == "0.2.0"
+    assert manifest.version == "0.3.0"
     assert manifest.operations["install_preview"].mutating is False
     assert manifest.operations["hermes_check"].mutating is False
     assert manifest.operations["hermes_apply"].maintenance_window is True
@@ -116,7 +116,15 @@ def test_sandwich_install_is_detected_without_a_clone(tmp_path):
     user_bin = tmp_path / "user-bin"
     component_bin.mkdir(parents=True)
     user_bin.mkdir()
-    for command in ("sandwich", "node", "npm", "npx", "pnpm", "yarn"):
+    for command in (
+        "sandwich",
+        "node",
+        "npm",
+        "npx",
+        "pnpm",
+        "yarn",
+        "corepack",
+    ):
         executable = component_bin / command
         executable.write_text("#!/bin/sh\n", encoding="utf-8")
         executable.chmod(0o755)
@@ -142,7 +150,7 @@ def test_partial_wrapper_set_is_not_reported_installed(tmp_path):
     observed = observe_sandwich_installation(search_path=str(tmp_path))
 
     assert observed.installed is False
-    assert observed.missing_commands == ("pnpm", "yarn")
+    assert observed.missing_commands == ("pnpm", "yarn", "corepack")
 
 
 def test_mixed_system_node_is_not_reported_as_sandwich(tmp_path):
@@ -151,7 +159,7 @@ def test_mixed_system_node_is_not_reported_as_sandwich(tmp_path):
     path_bin = tmp_path / "path-bin"
     component_bin.mkdir(parents=True)
     path_bin.mkdir()
-    for command in ("sandwich", "npm", "npx", "pnpm", "yarn"):
+    for command in ("sandwich", "npm", "npx", "pnpm", "yarn", "corepack"):
         executable = component_bin / command
         executable.write_text("#!/bin/sh\n", encoding="utf-8")
         executable.chmod(0o755)
@@ -174,7 +182,15 @@ def test_status_requires_expected_services_location(tmp_path):
     path_bin = tmp_path / "path-bin"
     component_bin.mkdir(parents=True)
     path_bin.mkdir()
-    for command in ("sandwich", "node", "npm", "npx", "pnpm", "yarn"):
+    for command in (
+        "sandwich",
+        "node",
+        "npm",
+        "npx",
+        "pnpm",
+        "yarn",
+        "corepack",
+    ):
         executable = component_bin / command
         executable.write_text("#!/bin/sh\n", encoding="utf-8")
         executable.chmod(0o755)

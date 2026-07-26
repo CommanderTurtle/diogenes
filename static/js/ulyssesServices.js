@@ -34,7 +34,7 @@ const esc = (value) => uiModule.esc(String(value ?? ''));
 function scopeLabel(scope) {
   return {
     host: 'Host',
-    odysseus_agent: 'Odysseus agent',
+    odysseus_agent: 'Diogenes agent',
     hermes_agent: 'Hermes agent',
   }[scope] || scope || 'Host';
 }
@@ -187,9 +187,9 @@ function renderAgentBoundary() {
       </div>
       <div class="uly-agent-boundary">
         <article>
-          <span class="uly-scope-pill scope-odysseus_agent">Odysseus agent</span>
+          <span class="uly-scope-pill scope-odysseus_agent">Diogenes agent</span>
           <strong>Built-ins and Settings → Integrations</strong>
-          <p>The selected built-in browser MCP and MCP Tool Server entries here are launched for the Odysseus agent only.</p>
+          <p>The selected built-in browser MCP and MCP Tool Server entries here are launched for the Diogenes agent only.</p>
         </article>
         <div class="uly-boundary-line" aria-hidden="true"></div>
         <article>
@@ -246,7 +246,7 @@ function renderOverview() {
       </div>
       <div class="uly-scope-summary">
         <div><span class="uly-scope-pill scope-host">Host</span><strong>${scoped('host')}</strong><small>Shared infrastructure</small></div>
-        <div><span class="uly-scope-pill scope-odysseus_agent">Odysseus agent</span><strong>${scoped('odysseus_agent')}</strong><small>Odysseus-only integrations</small></div>
+        <div><span class="uly-scope-pill scope-odysseus_agent">Diogenes agent</span><strong>${scoped('odysseus_agent')}</strong><small>Diogenes-only integrations</small></div>
         <div><span class="uly-scope-pill scope-hermes_agent">Hermes agent</span><strong>${scoped('hermes_agent')}</strong><small>Hermes-only integrations</small></div>
       </div>
     </section>`;
@@ -307,7 +307,7 @@ function renderServices() {
       <select data-service-scope aria-label="Filter by runtime scope">
         <option value="all"${serviceScope === 'all' ? ' selected' : ''}>All scopes</option>
         <option value="host"${serviceScope === 'host' ? ' selected' : ''}>Host</option>
-        <option value="odysseus_agent"${serviceScope === 'odysseus_agent' ? ' selected' : ''}>Odysseus agent</option>
+        <option value="odysseus_agent"${serviceScope === 'odysseus_agent' ? ' selected' : ''}>Diogenes agent</option>
         <option value="hermes_agent"${serviceScope === 'hermes_agent' ? ' selected' : ''}>Hermes agent</option>
       </select>
       <span>${runtimes.length} shown</span>
@@ -616,7 +616,7 @@ function renderHermes() {
       </div>
       <div class="uly-runtime-document" style="margin-top:12px;padding:10px;border:1px solid var(--border);border-radius:6px;">
         <div class="uly-panel-heading">
-          <div><h3>Add stdio MCP to Hermes</h3><p>This writes only to the Hermes registry. Odysseus MCP configuration remains separate.</p></div>
+          <div><h3>Add stdio MCP to Hermes</h3><p>This writes only to the Hermes registry. Diogenes MCP configuration remains separate.</p></div>
         </div>
         <div class="uly-command-grid">
           <label><strong>Name</strong><input type="text" data-hermes-mcp-name-input placeholder="context-mode" autocomplete="off"></label>
@@ -975,7 +975,7 @@ async function planHermesMcpAction({
   }
   const verb = action === 'add' ? 'Add' : action === 'remove' ? 'Remove' : 'Test';
   const wantsPlan = await uiModule.styledConfirm(
-    `${verb} Hermes MCP server “${name}”? Diogenes creates a fixed Hermes CLI plan first; it does not touch the Odysseus MCP registry.`,
+    `${verb} Hermes MCP server “${name}”? Diogenes creates a fixed Hermes CLI plan first; it does not touch the Diogenes MCP registry.`,
     {
       title: `${verb} Hermes MCP`,
       confirmText: 'Create plan',

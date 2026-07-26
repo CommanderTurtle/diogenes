@@ -34,25 +34,6 @@
             "tokenizer_config.json"
           ],
           "quality_note": "Current upstream-recommended group-size-64 container; preserves substantially more quality than legacy per-row int4."
-        },
-        {
-          "id": "legacy-per-row-int8-mtp",
-          "label": "GLM-5.2 legacy per-row + int8 MTP",
-          "repository": "mateogrgic/GLM-5.2-colibri-int4-with-int8-mtp",
-          "revision": "3cc8db99b1b13fc79325d987ba3c1c430766b3b8",
-          "directory": "mateogrgic--GLM-5.2-colibri-int4-with-int8-mtp",
-          "recommended": false,
-          "model_type": "glm_moe_dsa",
-          "main_shards": 141,
-          "mtp_shards": 3,
-          "weight_bytes": 383739826712,
-          "required_files": [
-            "config.json",
-            "generation_config.json",
-            "tokenizer.json",
-            "tokenizer_config.json"
-          ],
-          "quality_note": "Legacy issue-#273 reference container. Upstream reports roughly nine percentage points lower quality and think-mode looping; accepted for reproducibility but not recommended."
         }
       ],
       "minimum_commit": "5f167e5964f40a3a62d4cadb911543ce0f15b49b",
