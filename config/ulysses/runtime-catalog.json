@@ -15,7 +15,7 @@
       "label": "vLLM model server",
       "adapter": "tmux",
       "ownership": "external",
-      "source_root": "${HOME}/Odysseus/odysseus",
+      "source_root": "${ULYSSES_REPOSITORY_ROOT}",
       "ports": [{"port": 8000, "host": "0.0.0.0"}],
       "capabilities": ["openai-api", "model-serving", "cuda"]
     },
@@ -24,7 +24,7 @@
       "label": "Chroma vector database",
       "adapter": "docker_compose",
       "ownership": "external",
-      "source_root": "${HOME}/Odysseus/odysseus",
+      "source_root": "${ULYSSES_REPOSITORY_ROOT}",
       "ports": [{"port": 8100, "host": "0.0.0.0"}],
       "capabilities": ["vector-store", "rag", "persistent-data"]
     },

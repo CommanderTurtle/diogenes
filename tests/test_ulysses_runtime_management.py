@@ -35,6 +35,33 @@ def test_catalog_resolves_project_native_paths(tmp_path: Path) -> None:
 
     assert item["root"] == (services / "example").resolve()
     assert item["documents"][0]["path"] == (services / "example" / ".env").resolve()
+    assert item["resource_kind"] == "service"
+
+
+def test_catalog_accepts_non_daemon_project_kinds(tmp_path: Path) -> None:
+    payload = {
+        "schema_version": manager.SCHEMA,
+        "runtimes": [
+            {
+                "id": "knowledge.skills",
+                "label": "Knowledge skills",
+                "category": "native",
+                "resource_kind": "skill_library",
+                "root": "${ULYSSES_MICROSERVICES_ROOT}/knowledge-skills",
+                "ports": [],
+            }
+        ],
+    }
+    catalog = tmp_path / "catalog.json"
+    catalog.write_text(json.dumps(payload), encoding="utf-8")
+
+    item = manager.load_runtime_management(
+        catalog,
+        home=tmp_path,
+        services_root=tmp_path / "services",
+    )[0]
+
+    assert item["resource_kind"] == "skill_library"
 
 
 def test_git_updates_require_a_pinned_official_source(tmp_path: Path) -> None:

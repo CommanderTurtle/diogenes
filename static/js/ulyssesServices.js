@@ -74,7 +74,7 @@ function formatObservedAt(value) {
 }
 
 function statusTone(status) {
-  if (status === 'running' || status === 'ready' || status === 'passed' || status === 'succeeded') return 'ok';
+  if (status === 'running' || status === 'ready' || status === 'passed' || status === 'succeeded' || status === 'installed' || status === 'registered') return 'ok';
   if (status === 'degraded' || status === 'starting' || status === 'pending' || status === 'planned') return 'warn';
   if (status === 'failed' || status === 'down' || status === 'blocked') return 'bad';
   return 'muted';
@@ -413,6 +413,11 @@ function managedRuntimeCard(item) {
   const compose = item.compose || null;
   const pkg = item.package || null;
   const isExpanded = expandedRuntime === item.id;
+  const kindLabel = {
+    mcp: 'Hermes MCP project',
+    repository: 'Managed source repository',
+    skill_library: 'Retrieval skill library',
+  }[item.resource_kind] || '';
   return `
     <article class="uly-service-card" data-managed-runtime="${esc(item.id)}" style="display:block;">
       <div class="uly-service-card-head">
@@ -422,12 +427,13 @@ function managedRuntimeCard(item) {
       <div class="uly-service-meta">
         ${item.capability_group ? `<span>${esc(item.capability_group)}</span>` : ''}
         ${item.role ? `<span>${esc(item.role)}</span>` : ''}
-        ${item.hermes_mcp ? '<span class="uly-scope-pill scope-hermes_agent">Hermes MCP project</span>' : ''}
+        ${kindLabel ? `<span class="uly-scope-pill scope-hermes_agent">${esc(kindLabel)}</span>` : ''}
+        ${item.hermes_mcp && item.resource_kind !== 'mcp' ? '<span class="uly-scope-pill scope-hermes_agent">Hermes MCP project</span>' : ''}
         ${item.git?.present ? `<span>Git ${esc(item.git.branch || 'detached')}</span>` : ''}
         ${item.git?.dirty ? '<span style="color:var(--orange,#ffb86c);">Git changes preserved · sync blocked</span>' : ''}
       </div>
       <div class="uly-service-path">${esc(item.root)}</div>
-      <div class="uly-service-ports">${ports.length ? ports.map((port) => `<span class="${port.active ? 'active' : ''}">127.0.0.1:${esc(port.port)}</span>`).join('') : '<span class="muted">Command/tool runtime</span>'}</div>
+      <div class="uly-service-ports">${ports.length ? ports.map((port) => `<span class="${port.active ? 'active' : ''}">127.0.0.1:${esc(port.port)}</span>`).join('') : `<span class="muted">${item.resource_kind === 'skill_library' ? 'Indexed on demand; never injected wholesale' : item.resource_kind === 'repository' ? 'Source and update lifecycle only' : 'Command/tool runtime'}</span>`}</div>
       ${capabilityChain(item)}
       ${compose ? `
         <div class="uly-service-deps"><b>Compose services</b>${(compose.services || []).map((service) => `<code>${esc(service)}</code>`).join('')}</div>
@@ -462,7 +468,7 @@ function renderManagedCategory(category) {
   const fallbackHeading = {
     docker: 'Docker projects',
     javascript: 'JavaScript tools',
-    native: 'Native services',
+    native: 'Native tools and libraries',
   }[category] || 'Managed runtimes';
   return [...groups.entries()].map(([group, rows]) => `
     <section class="uly-services-panel">
@@ -483,7 +489,7 @@ function renderDocker() {
 function renderNative() {
   return `
     <section class="uly-services-panel">
-      <div class="uly-panel-heading"><div><h3>Native runtimes</h3><p>Interactive host services run in dedicated tmux sessions with their original project configuration.</p></div></div>
+      <div class="uly-panel-heading"><div><h3>Native tools and libraries</h3><p>Interactive services retain dedicated tmux sessions; MCP sources and skill libraries remain independently updateable without being injected into every prompt.</p></div></div>
     </section>
     ${renderManagedCategory('native')}`;
 }

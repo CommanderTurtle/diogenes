@@ -207,6 +207,9 @@ def load_runtime_management(
         category = str(raw.get("category") or "")
         if category not in {"docker", "javascript", "native"}:
             raise RuntimeJobError("invalid runtime management category")
+        resource_kind = str(raw.get("resource_kind") or "service")
+        if resource_kind not in {"service", "mcp", "repository", "skill_library"}:
+            raise RuntimeJobError("invalid runtime management resource kind")
         launch = raw.get("launch") or []
         if (
             not isinstance(launch, list)
@@ -263,6 +266,7 @@ def load_runtime_management(
             repository_root=repo.resolve(),
         )
         item = dict(raw)
+        item["resource_kind"] = resource_kind
         item["root"] = root
         for field in ("compose", "package_json"):
             if raw.get(field):
@@ -534,6 +538,13 @@ def collect_managed_runtimes() -> dict[str, Any]:
         managed = state["managed"]
         running = state["running"]
         port_collision = state["port_collision"]
+        resource_kind = str(item.get("resource_kind") or "service")
+        if running:
+            status = "running"
+        elif resource_kind in {"mcp", "repository", "skill_library"} and item["root"].is_dir():
+            status = "installed"
+        else:
+            status = "stopped"
         compose_ready = bool(compose and compose.get("valid"))
         dependencies_unavailable = [
             dependency
@@ -553,6 +564,7 @@ def collect_managed_runtimes() -> dict[str, Any]:
                 "id": item["id"],
                 "label": item["label"],
                 "category": item["category"],
+                "resource_kind": resource_kind,
                 "capability_group": item.get("capability_group"),
                 "role": item.get("role"),
                 "depends_on": list(item.get("depends_on") or []),
@@ -563,7 +575,7 @@ def collect_managed_runtimes() -> dict[str, Any]:
                 "source_exists": item["root"].is_dir(),
                 "optional": bool(item.get("optional")),
                 "ports": ports,
-                "status": "running" if running else "stopped",
+                "status": status,
                 "git": git,
                 "package": _package(item),
                 "package_spec": item.get("package_spec"),
