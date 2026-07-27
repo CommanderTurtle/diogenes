@@ -34,7 +34,7 @@ def test_catalog_defines_official_distinct_providers(tmp_path: Path) -> None:
         "https://github.com/JustVugg/colibri.git"
     )
     assert by_id["colibri.glm"].source_branch == "dev"
-    assert by_id["colibri.glm"].port == 8642
+    assert by_id["colibri.glm"].port == 8650
     assert by_id["colibri.glm"].model_root == (
         tmp_path
         / "colibri-models"
@@ -45,7 +45,7 @@ def test_catalog_defines_official_distinct_providers(tmp_path: Path) -> None:
     assert by_id["colibri.hy3"].source_url == (
         "https://github.com/ErikTromp/colibri-hy3.git"
     )
-    assert by_id["colibri.hy3"].port == 8643
+    assert by_id["colibri.hy3"].port == 8651
     assert by_id["colibri.hy3"].model_id == "hy3-colibri"
     assert by_id["colibri.hy3"].supports_tools is True
     assert (
@@ -403,6 +403,8 @@ def test_model_completeness_requires_the_pinned_layout(tmp_path: Path) -> None:
 
 
 def test_build_manifest_requires_current_hashes(tmp_path: Path) -> None:
+    from src.ulysses_colibri_validation import validation_compatibility
+
     provider = colibri.load_colibri_catalog(
         _catalog(tmp_path),
         home=tmp_path,
@@ -420,6 +422,7 @@ def test_build_manifest_requires_current_hashes(tmp_path: Path) -> None:
         "source_commit": "a" * 40,
         "build_argv": list(provider.build_argv),
         "build_compatibility": None,
+        "validation_compatibility": validation_compatibility(provider),
         "validation_steps": list(provider.validation_steps),
         "build_config": build_config,
         "engine_path": str(provider.engine_path),

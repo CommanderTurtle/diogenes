@@ -12,6 +12,7 @@ from pathlib import Path
 from core.atomic_io import atomic_write_json
 from src.ulysses_colibri import default_colibri_catalog, resolve_cuda_compiler
 from src.ulysses_colibri_build import compatibility_manifest
+from src.ulysses_colibri_validation import validation_compatibility
 
 
 def _output(argv: list[str], cwd: Path | None = None) -> str:
@@ -65,6 +66,7 @@ def write_manifest(provider_id: str) -> Path:
         ),
         "build_argv": list(provider.build_argv),
         "build_compatibility": compatibility_manifest(provider),
+        "validation_compatibility": validation_compatibility(provider),
         "validation_steps": list(provider.validation_steps),
         "build_config": (
             build_config_path.read_text(encoding="utf-8", errors="replace").strip()

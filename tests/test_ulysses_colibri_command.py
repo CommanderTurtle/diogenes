@@ -44,7 +44,7 @@ def test_hy3_profile_uses_separate_binary_model_and_port() -> None:
     assert model.name == "UnderstandLing--Hy3-colibri-int4"
     assert model.parent.name == "colibri-models"
     assert argv[argv.index("--vram") + 1] == "28"
-    assert argv[argv.index("--port") + 1] == "8643"
+    assert argv[argv.index("--port") + 1] == "8651"
     assert env["PIPE"] == "2"
 
 

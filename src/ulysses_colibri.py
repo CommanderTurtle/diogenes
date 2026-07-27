@@ -480,6 +480,11 @@ def _git(provider: ColibriProvider) -> dict[str, Any]:
     expected_dirty_paths = {
         str(provider.engine_path.relative_to(provider.source_root)),
         str(
+            (provider.build_cwd / ".diogenes-build.json").relative_to(
+                provider.source_root
+            )
+        ),
+        str(
             (provider.build_cwd / ".ulysses-build.json").relative_to(
                 provider.source_root
             )
@@ -760,6 +765,7 @@ def _validate_build_manifest(
     build_config: str,
 ) -> tuple[bool, list[str]]:
     from src.ulysses_colibri_build import compatibility_manifest
+    from src.ulysses_colibri_validation import validation_compatibility
 
     if not isinstance(manifest, dict):
         return False, ["build manifest is missing or unreadable"]
@@ -771,6 +777,7 @@ def _validate_build_manifest(
         "source_commit": source_commit,
         "build_argv": list(provider.build_argv),
         "build_compatibility": compatibility_manifest(provider),
+        "validation_compatibility": validation_compatibility(provider),
         "validation_steps": list(provider.validation_steps),
         "build_config": build_config or None,
         "engine_path": str(provider.engine_path),
@@ -894,7 +901,9 @@ def observe_colibri_provider(provider: ColibriProvider) -> dict[str, Any]:
         ).strip()
     except OSError:
         build_config = ""
-    manifest_path = provider.build_cwd / ".ulysses-build.json"
+    manifest_path = provider.build_cwd / ".diogenes-build.json"
+    if not manifest_path.is_file():
+        manifest_path = provider.build_cwd / ".ulysses-build.json"
     try:
         build_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):

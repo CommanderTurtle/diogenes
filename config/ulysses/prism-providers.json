@@ -12,7 +12,7 @@
       "model_root_env": "ULYSSES_PRISM_MODEL_ROOT",
       "model_root_default": "prism-models",
       "port_env": "ULYSSES_PRISM_PORT",
-      "default_port": 8644,
+      "default_port": 8652,
       "build_directory": "build-diogenes-cuda13",
       "server_path": "build-diogenes-cuda13/bin/llama-server",
       "cuda_architecture": "120a",

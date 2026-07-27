@@ -40,7 +40,7 @@ export function prismSettingsFromFields(fields = {}) {
   const settings = {
     profile: String(fields.prism_profile || 'rtx5090-quality'),
     host: String(fields.prism_host || '0.0.0.0'),
-    port: String(fields.port || '8644'),
+    port: String(fields.port || '8652'),
     context: String(fields.prism_context || fields.ctx || '131072'),
     gpu_layers: String(fields.prism_gpu_layers || '999'),
     parallel: String(fields.prism_parallel || '1'),

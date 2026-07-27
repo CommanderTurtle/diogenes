@@ -778,7 +778,7 @@ export function _buildServeCmd(f, modelName, backend) {
       if (value) cmd += ` ${flag} ${value}`;
     }
     if (!isGlm && f.colibri_verbose) cmd += ' --verbose';
-    cmd += ` --host 127.0.0.1 --port ${f.port || (isGlm ? '8642' : '8643')}`;
+    cmd += ` --host 127.0.0.1 --port ${f.port || (isGlm ? '8650' : '8651')}`;
     cmd += ` --model-id ${f.colibri_model_id || (isGlm ? 'glm-5.2-colibri' : 'hy3-colibri')}`;
     cmd += ` --max-queue ${f.colibri_max_queue || '8'}`;
     cmd += ` --queue-timeout ${f.colibri_queue_timeout || '300'}`;

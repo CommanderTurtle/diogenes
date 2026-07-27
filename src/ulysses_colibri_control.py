@@ -182,14 +182,24 @@ class ColibriControl:
         nvcc = resolve_cuda_compiler()
         if nvcc is None:
             raise RuntimeJobError("CUDA compiler is not available")
+        application_root = Path(__file__).resolve().parents[1]
         validation_steps = [
             {
-                **step,
-                "cwd": str(provider.build_cwd),
+                "label": step["label"],
+                "argv": [
+                    sys.executable,
+                    "-m",
+                    "src.ulysses_colibri_validation",
+                    "--provider",
+                    provider.provider_id,
+                    "--step",
+                    str(index),
+                ],
+                "cwd": str(application_root),
+                "timeout": step["timeout"],
             }
-            for step in provider.validation_steps
+            for index, step in enumerate(provider.validation_steps)
         ]
-        application_root = Path(__file__).resolve().parents[1]
         build_argv = [
             sys.executable,
             "-m",

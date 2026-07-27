@@ -73,7 +73,7 @@ def test_prism_engine_uses_server_authoritative_preview_and_launch_identity() ->
     assert "['prism', 'PrismML']" in serve
     assert "renderPrismCommand(_prismModel?.id || '', settings)" in serve
     assert "await renderPrismCommand(" in serve
-    assert "cmdBox.readOnly = isManagedNative" in serve
+    assert "cmdBox.readOnly = false" in serve
     assert "synchronizePrismLaunchPort(" in serve
     assert (
         "runtime_id: fields?.colibri_provider_id || fields?.prism_provider_id"
@@ -94,7 +94,7 @@ async def test_prism_runner_executes_managed_command_without_stock_bootstrap(
     command = (
         "/managed/prism/build-cuda/bin/llama-server "
         "-m /managed/Ternary-Bonsai-27B-Q2_0.gguf "
-        "--alias ternary-bonsai-27b --host 0.0.0.0 --port 8644 --jinja"
+        "--alias ternary-bonsai-27b --host 0.0.0.0 --port 8652 --jinja"
     )
     report = {
         "providers": [
@@ -111,7 +111,7 @@ async def test_prism_runner_executes_managed_command_without_stock_bootstrap(
                         "mmproj": {"complete": False},
                     }
                 ],
-                "endpoint": {"port": 8644, "port_open": False},
+                "endpoint": {"port": 8652, "port_open": False},
             }
         ]
     }
@@ -173,7 +173,7 @@ async def test_prism_runner_executes_managed_command_without_stock_bootstrap(
             runtime_model_id="prism.ternary-bonsai-27b",
             runtime_settings={
                 "profile": "rtx5090-quality",
-                "port": 8644,
+                "port": 8652,
                 "speculative": False,
                 "vision": False,
             },

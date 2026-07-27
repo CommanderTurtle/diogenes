@@ -85,7 +85,7 @@ def test_prism_preview_posts_only_structured_settings() -> None:
               ok: true,
               json: async () => ({
                 command: '/managed/llama-server -m /managed/exact.gguf',
-                editable: false,
+                editable: true,
               }),
             };
           },

@@ -786,12 +786,14 @@ def _ensure_shell_environment() -> None:
         if (
             not managed
             and not line.startswith("export FIRECRAWL_API_URL=")
+            and not line.startswith("export FIRECRAWL_API_KEY=")
             and not line.startswith("export HERMES_PROJECTS_DIR=")
         ):
             kept.append(line)
     block = [
         MANAGED_SHELL_START,
         "export FIRECRAWL_API_URL=http://localhost:3002",
+        "export FIRECRAWL_API_KEY=fc-local",
         f'export HERMES_PROJECTS_DIR="{_services_root()}"',
         MANAGED_SHELL_END,
     ]
@@ -1075,6 +1077,7 @@ def _integrate_workspace() -> None:
 
 def _integrate_firecrawl() -> None:
     _set_config_value("default", "FIRECRAWL_API_URL", "http://localhost:3002")
+    _set_config_value("default", "FIRECRAWL_API_KEY", "fc-local")
     _set_config_value("default", "web.backend", "firecrawl")
     _set_config_value("default", "web.use_gateway", False)
     _ensure_shell_environment()
@@ -1093,6 +1096,7 @@ def _shell_environment_current() -> bool:
         return False
     expected = (
         "export FIRECRAWL_API_URL=http://localhost:3002",
+        "export FIRECRAWL_API_KEY=fc-local",
         f'export HERMES_PROJECTS_DIR="{_services_root()}"',
     )
     return all(line in value for line in expected)
@@ -1180,6 +1184,7 @@ def _contract_current(
         return bool(
             _config_value("default", "FIRECRAWL_API_URL")
             == "http://localhost:3002"
+            and _config_value("default", "FIRECRAWL_API_KEY") == "fc-local"
             and _config_value("default", "web.backend") == "firecrawl"
             and _config_value("default", "web.use_gateway") is False
             and _shell_environment_current()

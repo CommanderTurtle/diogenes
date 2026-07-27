@@ -1749,7 +1749,19 @@ function _rerenderCachedModels() {
         : _colibriProvider?.endpoint?.port
         ? String(_colibriProvider.endpoint.port)
         : defaultBackend === 'ollama' ? '11434' : _nextAvailablePort();
-      panelHtml += `<label>${_l('Port','HTTP port for the API server')}<input type="text" class="hwfit-sf" data-field="port" value="${esc(sv('port', defaultPort))}" /></label>`;
+      const legacyNativePorts = {
+        colibri_glm: '8642',
+        colibri_hy3: '8643',
+        prism: '8644',
+      };
+      const savedPort = String(sv('port', defaultPort));
+      // Diogenes originally overlapped GLM's 8642 with Hermes' local API.
+      // Migrate only those retired defaults; explicit non-default ports stay
+      // untouched and the final launch preflight still checks the live host.
+      const selectedPort = legacyNativePorts[defaultBackend] === savedPort
+        ? defaultPort
+        : savedPort;
+      panelHtml += `<label>${_l('Port','HTTP port for the API server')}<input type="text" class="hwfit-sf" data-field="port" value="${esc(selectedPort)}" /></label>`;
       const _activeGpus = (defaultGpus || '').split(',').map(s => s.trim()).filter(Boolean);
       const detectedGpuCount = Number(_getGpuToggleTotal?.() || 0);
       const _gpuMax = Math.max(detectedGpuCount || 8, ...(_activeGpus.map(Number).filter(n => !isNaN(n)).map(n => n + 1)));

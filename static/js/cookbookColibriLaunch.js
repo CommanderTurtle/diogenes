@@ -14,7 +14,10 @@ export function colibriSettingsFromFields(fields = {}) {
     vram: String(fields.colibri_vram ?? '0'),
     ctx: String(fields.colibri_ctx ?? '4096'),
     gpu: String(fields.gpus || '0'),
-    port: String(fields.port || '8642'),
+    port: String(
+      fields.port
+      || (fields.colibri_provider_id === 'colibri.hy3' ? '8651' : '8650')
+    ),
     policy: String(fields.colibri_policy || 'balanced'),
     auto_tier: !!fields.colibri_auto_tier,
     direct: !!fields.colibri_direct,
