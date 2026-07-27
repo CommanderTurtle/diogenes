@@ -1,6 +1,4 @@
-<p align="center">
-  <img src="docs/odysseus-wordmark.png" alt="Odysseus" width="238">
-</p>
+<h1 align="center">Ɗiogenēs</h1>
 
 <p align="center">
   A self-hosted AI workspace for chat, agents, research, documents, email, notes, calendar, and local model workflows.
@@ -8,6 +6,9 @@
 
 <p align="center">
   <a href="#diogenes-native-workstation-setup">Diogenes Native Setup</a> ·
+  <a href="#native-services-without-system-node">Services</a> ·
+  <a href="#native-model-engines">Native Engines</a> ·
+  <a href="#hermes-knowledge-orchestration">Hermes</a> ·
   <a href="#upstream-docker-quick-start">Upstream Docker</a> ·
   <a href="docs/setup.md">Setup Guide</a> ·
   <a href="CONTRIBUTING.md">Contributing</a>
@@ -18,7 +19,9 @@
 </p>
 
 <p align="center">
-  <img src="docs/odysseus-browser.jpg" alt="Odysseus interface">
+  <video controls width="640">
+    <source src="https://huggingface.co/sHEL1562/shelling/resolve/main/src/1-dashboard.mp4" type="video/mp4">
+  </video>
 </p>
 
 ---
@@ -50,6 +53,72 @@ From a reviewed `dev` checkout:
 `requirements.txt`, and runs the native setup. `startwithuv.sh` starts only the
 web application on `0.0.0.0:7000`. In-place update and runtime-state instructions are in
 [`docs/DIOGENES_DEPLOYMENT.md`](docs/DIOGENES_DEPLOYMENT.md).
+
+### Native services without system Node
+
+Diogenes integrates system services through a deliberately minimal control
+plane built around native Bun. Sandwich provides compatible `node`, `npm`,
+`npx`, and `pnpm` command surfaces without requiring system Node; Diogenes
+itself adds no telemetry and keeps the JavaScript ecosystem as low-friction as
+practical. The **Services** window discovers and manages Docker Compose
+projects, interactive tmux services, Git checkouts, configuration files,
+updates, and native integration jobs without conflating their runtimes.
+
+<p align="center">
+  <video controls width="640">
+    <source src="https://huggingface.co/sHEL1562/shelling/resolve/main/src/2-services.mp4" type="video/mp4">
+  </video>
+</p>
+
+### Cookbook dependencies
+
+The existing Cookbook dependency workflow remains intact and gains clearly
+separated native extras: Sandwich, independently built Colibri GLM and Colibri
+Hy3 engines, PrismML, and a lightweight Hermes installation. Python
+dependencies—including the guarded CUDA 13 vLLM nightly lane—stay inside the
+Diogenes `.venv`; native engines and service projects retain their own source,
+build, update, and configuration boundaries.
+
+<p align="center">
+  <video controls width="640">
+    <source src="https://huggingface.co/sHEL1562/shelling/resolve/main/src/3-cookbook.mp4" type="video/mp4">
+  </video>
+</p>
+
+### Native model engines
+
+The Launch view preserves Odysseus' editable commands, saved configurations,
+and advanced runtime controls while adding first-class Colibri GLM, Colibri
+Hy3, and PrismML engines. Hardware-aware profiles expose the supported Colibri
+flags directly, including tuned RTX 5090 starting points for serving GLM 5.2
+and Hy3 locally without hiding the final launch command.
+
+<p align="center">
+  <video controls width="640">
+    <source src="https://huggingface.co/sHEL1562/shelling/resolve/main/src/4-colibri.mp4" type="video/mp4">
+  </video>
+</p>
+
+### Hermes knowledge orchestration
+
+The optional Hermes integration extends the lightweight FastEmbed and Chroma
+retrieval pattern shipped with Odysseus across Hermes skills, sessions,
+Context Mode data, and project knowledge. A persistent watcher keeps those
+sources indexed as they change, so specialized skill libraries can remain
+searchable without bloating the always-active Hermes skill set.
+
+The in-house Librarian MCP can delegate a focused lookup to a second Hermes
+process, search disk-backed context, and return the relevant material to the
+calling model. Retrieval, Codebase Memory MCP, Context Mode MCP, and the
+context-saving integrations are wired alongside Hermes Workspace orchestration,
+allowing agents to work from task sheets and pursue defined background goals
+without merging the Odysseus and Hermes agents or their MCP registries.
+
+<p align="center">
+  <video controls width="640">
+    <source src="https://huggingface.co/sHEL1562/shelling/resolve/main/src/5-workspace.mp4" type="video/mp4">
+  </video>
+</p>
 
 ## Upstream Docker Quick Start
 
