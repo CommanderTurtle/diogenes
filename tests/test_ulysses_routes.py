@@ -213,11 +213,6 @@ def _client(
                 "sandwich_installed": True,
                 "runtimes": [{"id": "firecrawl.api", "category": "docker"}],
             },
-            readiness_collector=lambda _topology, _chroma, _hermes, _colibri, _managed: {
-                "schema_version": "ulysses.switchover-readiness.v1",
-                "mode": "read_only",
-                "transition_ready": False,
-            },
         )
     )
     return TestClient(app, raise_server_exceptions=False)
@@ -393,7 +388,7 @@ def test_admin_can_render_but_not_execute_a_colibri_command(monkeypatch):
     assert response.json()["command"] == (
         "canonical:colibri.glm:rtx5090-high-ram"
     )
-    assert response.json()["editable"] is False
+    assert response.json()["editable"] is True
 
 
 def test_admin_can_create_a_confirmed_colibri_build_plan(monkeypatch):
@@ -459,7 +454,7 @@ def test_admin_can_render_but_not_execute_a_prism_command(monkeypatch):
     assert response.json()["command"] == (
         "canonical:prism.ternary-bonsai-27b:rtx5090-quality"
     )
-    assert response.json()["editable"] is False
+    assert response.json()["editable"] is True
 
 
 def test_admin_can_create_a_confirmed_prism_build_plan(monkeypatch):
@@ -546,15 +541,3 @@ def test_runtime_job_execution_requires_admin(monkeypatch):
         },
     )
     assert response.status_code == 403
-
-
-def test_admin_receives_read_only_switchover_readiness(monkeypatch):
-    response = _client(monkeypatch, lambda _request: None).get(
-        "/api/odysseus/readiness"
-    )
-
-    assert response.status_code == 200
-    assert response.json()["schema_version"] == (
-        "ulysses.switchover-readiness.v1"
-    )
-    assert response.json()["transition_ready"] is False

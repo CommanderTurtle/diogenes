@@ -72,8 +72,8 @@
         },
         "rtx5090-throughput": {
           "label": "RTX 5090 · DSpark throughput",
-          "description": "Lossless model-matched DSpark decoding for roughly 1.8–2× decode on CUDA. Single-slot and 64K context; cross-request prompt-cache reuse is intentionally traded for decode speed.",
-          "context": 65536,
+          "description": "Lossless model-matched DSpark decoding at the official four-token draft depth. Prism reports roughly 1.8–2× on CUDA code/reasoning workloads; the exact 5090 gain depends on local acceptance and verification cost. The speed preset uses the documented 16K minimum, one slot, and intentionally trades cross-request prompt-cache reuse for decode throughput.",
+          "context": 16384,
           "gpu_layers": 999,
           "parallel": 1,
           "flash_attention": true,

@@ -307,7 +307,7 @@ def test_javascript_start_plan_requires_sandwich_and_uses_fixed_tmux(
         "category": "javascript",
         "root": runtime,
         "documents": (),
-        "launch": ["bun", "start"],
+        "launch": ["bash", "start.sh"],
         "tmux_session": "ulysses-example-browser",
         "ports": [],
     }
@@ -324,7 +324,7 @@ def test_javascript_start_plan_requires_sandwich_and_uses_fixed_tmux(
         action="start",
     )
 
-    assert plan["steps"][0]["argv"][:9] == [
+    assert plan["steps"][0]["argv"][:8] == [
         "tmux",
         "new-session",
         "-d",
@@ -333,11 +333,8 @@ def test_javascript_start_plan_requires_sandwich_and_uses_fixed_tmux(
         "ulysses-example-browser",
         "-c",
         str(runtime),
-        "/usr/bin/env",
     ]
-    assert plan["steps"][0]["argv"][-2:] == ["bun", "start"]
-    assert "/usr/bin/env" in plan["steps"][0]["argv"]
-    assert "VIRTUAL_ENV" in plan["steps"][0]["argv"]
+    assert plan["steps"][0]["argv"][-2:] == ["bash", "start.sh"]
 
 
 def test_open_and_initialize_actions_use_project_root(
@@ -428,21 +425,16 @@ def test_native_update_plan_verifies_before_restarting_managed_session(
         action="update",
     )
 
-    assert plan["steps"][0]["argv"][1:4] == [
+    assert plan["steps"][0]["argv"][1:] == [
         "-m",
-        "src.ulysses_signal_update",
-        "--install-user",
+        "src.diogenes_dependency_action",
+        "signal.cli",
+        "update",
     ]
-    assert plan["steps"][1]["argv"] == [
-        "tmux",
-        "kill-session",
-        "-t",
-        "ulysses-signal-cli",
-    ]
-    assert plan["steps"][2]["argv"][-2:] == ["bash", "runconfig.sh"]
+    assert plan["metadata"]["dependency_action"] == "update"
 
 
-def test_protected_docker_update_is_hidden_and_rejected(
+def test_protected_docker_update_remains_a_callable_native_check(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -497,13 +489,13 @@ def test_protected_docker_update_is_hidden_and_rejected(
 
     observed = manager.collect_managed_runtimes()["runtimes"][0]
 
-    assert observed["actions"]["update"] is False
+    assert observed["actions"]["update"] is True
     assert observed["update_blocked_reason"] == reason
-    with pytest.raises(manager.RuntimeJobError, match="durable Chroma snapshot"):
-        manager.ManagedRuntimeControl(tmp_path / "state").create_plan(
-            runtime_id="chroma.vector",
-            action="update",
-        )
+    plan, _token = manager.ManagedRuntimeControl(tmp_path / "state").create_plan(
+        runtime_id="chroma.vector",
+        action="update",
+    )
+    assert plan["steps"][0]["argv"][-2:] == ["chroma.vector", "update"]
 
 
 def test_stopped_compose_with_occupied_port_disables_start_and_update(
@@ -541,7 +533,7 @@ def test_stopped_compose_with_occupied_port_disables_start_and_update(
 
     assert runtime["port_collision"] is True
     assert runtime["actions"]["start"] is False
-    assert runtime["actions"]["update"] is False
+    assert runtime["actions"]["update"] is True
 
 
 def test_compose_update_preserves_stopped_state(
@@ -755,7 +747,8 @@ def test_port_only_process_at_a_missing_root_is_unmanaged(
             "category": "javascript",
             "root": tmp_path / "missing",
             "ports": [7999],
-        }
+        },
+        owned_sessions={},
     )
 
     assert observed["running"] is True
@@ -874,8 +867,7 @@ def test_native_git_update_never_installs_javascript_dependencies(
     argv = [argument for step in steps for argument in step["argv"]]
 
     assert [step["label"] for step in steps] == [
-        "Fetch project source",
-        "Fast-forward project source",
+        "Check and fast-forward project source",
         "Refresh project-native integration",
     ]
     assert "bun" not in argv
@@ -997,12 +989,10 @@ def test_searxng_uses_official_source_but_adopts_existing_legacy_compose(
         if item["id"] == "searxng.search"
     )
 
-    assert item["source_url"] == "https://github.com/searxng/searxng.git"
-    assert item["source_branch"] == "master"
+    assert item["git_update"] is False
+    assert item["allow_non_git_compose"] is True
     assert item["compose"] == legacy.resolve()
-    assert item["compose_primary"] == (
-        root / "container" / "docker-compose.yml"
-    ).resolve()
+    assert item["compose_primary"] == legacy.resolve()
 
 
 def test_non_git_searxng_update_is_an_image_only_compose_update(
@@ -1113,6 +1103,7 @@ def test_missing_declared_artifact_reports_incomplete_and_keeps_repair(
     monkeypatch.setattr(manager, "load_runtime_management", lambda: (item,))
     monkeypatch.setattr(manager, "_port_open", lambda _port: False)
     monkeypatch.setattr(manager, "_tmux_alive", lambda _name: False)
+    monkeypatch.setattr(manager.shutil, "which", lambda _name, **_kwargs: None)
     monkeypatch.setattr(
         manager,
         "observe_sandwich_installation",

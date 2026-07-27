@@ -78,7 +78,7 @@ def write_manifest(provider_id: str) -> Path:
         "nvcc": _output([str(nvcc), "--version"]),
         "recorded_at": time.time(),
     }
-    path = provider.build_cwd / ".ulysses-build.json"
+    path = provider.build_cwd / ".diogenes-build.json"
     atomic_write_json(str(path), payload, indent=2)
     return path
 

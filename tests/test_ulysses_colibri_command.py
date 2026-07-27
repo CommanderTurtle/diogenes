@@ -43,24 +43,29 @@ def test_hy3_profile_uses_separate_binary_model_and_port() -> None:
     model = Path(argv[argv.index("--model") + 1])
     assert model.name == "UnderstandLing--Hy3-colibri-int4"
     assert model.parent.name == "colibri-models"
-    assert argv[argv.index("--vram") + 1] == "0"
+    assert argv[argv.index("--vram") + 1] == "28"
     assert argv[argv.index("--port") + 1] == "8643"
     assert env["PIPE"] == "2"
-    assert "--verbose" in argv
 
 
-def test_command_round_trip_rejects_manual_mutation() -> None:
+def test_command_round_trip_allows_flags_but_protects_catalog_identity() -> None:
     settings = {"profile": "rtx5090-high-ram", "port": "8642"}
     command = render_colibri_serve_command("colibri.glm", settings)
 
     assert validate_colibri_serve_command(
         "colibri.glm", settings, command
     ) == command
-    with pytest.raises(ColibriCommandError, match="does not match"):
+    edited = validate_colibri_serve_command(
+        "colibri.glm",
+        settings,
+        command + " --verbose",
+    )
+    assert edited.endswith("--verbose")
+    with pytest.raises(ColibriCommandError):
         validate_colibri_serve_command(
             "colibri.glm",
             settings,
-            command + " --api-key leaked",
+            command.replace("glm-5.2-colibri", "wrong-model"),
         )
 
 

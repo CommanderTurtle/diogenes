@@ -46,7 +46,6 @@ from src.ulysses_prism_command import (
     render_prism_serve_command,
 )
 from src.ulysses_prism_control import PrismControl
-from src.ulysses_readiness import collect_switchover_readiness
 from src.ulysses_runtime_management import (
     ManagedRuntimeControl,
     collect_managed_runtimes,
@@ -147,6 +146,7 @@ class DockerDocumentSaveRequest(BaseModel):
 class TmuxShutdownRequest(BaseModel):
     confirmation_phrase: str
     include_agents: bool = False
+    identities: list[str] | None = None
 
 
 def _job_http_error(exc: RuntimeJobError) -> HTTPException:
@@ -184,9 +184,6 @@ def setup_ulysses_routes(
     sandwich_collector: Callable[[], dict] = collect_sandwich_status,
     managed_runtime_collector: Callable[[], dict] = collect_managed_runtimes,
     docker_project_collector: Callable[[], dict] = collect_docker_projects,
-    readiness_collector: Callable[
-        [dict, dict, dict, dict, dict], dict
-    ] = collect_switchover_readiness,
 ) -> APIRouter:
     router = APIRouter(prefix="/api/odysseus", tags=["odysseus"])
 
@@ -232,6 +229,7 @@ def setup_ulysses_routes(
         return await run_in_threadpool(
             shutdown_owned_sessions,
             include_agents=body.include_agents,
+            identities=set(body.identities) if body.identities is not None else None,
         )
 
     @router.get("/hermes/adoption")
@@ -650,31 +648,6 @@ def setup_ulysses_routes(
             limit=limit,
         )
         return {"schema_version": "ulysses.runtime-jobs.v1", "jobs": jobs}
-
-    @router.get("/readiness")
-    async def get_switchover_readiness(request: Request) -> dict:
-        require_admin(request)
-
-        def collect() -> dict:
-            snapshot = collector()
-            registry = default_runtime_registry()
-            sandwich = observe_sandwich_installation()
-            topology = build_topology_report(registry, snapshot, sandwich)
-            chroma = chroma_collector()
-            hermes = hermes_control_factory().decorate_report(
-                hermes_collector()
-            )
-            colibri = colibri_collector()
-            managed = managed_runtime_collector()
-            return readiness_collector(
-                topology,
-                chroma,
-                hermes,
-                colibri,
-                managed,
-            )
-
-        return await run_in_threadpool(collect)
 
     @router.get("/jobs/{job_id}")
     async def get_runtime_job(request: Request, job_id: str) -> dict:

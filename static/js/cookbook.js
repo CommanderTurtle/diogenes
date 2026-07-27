@@ -749,7 +749,7 @@ export function _buildServeCmd(f, modelName, backend) {
       }
     } else {
       env.DRAFT = f.colibri_cuda_mtp ? '3' : '0';
-      if (f.colibri_cuda_mtp) env.TREE_DRAFT = env.TREE_DRAFT || '1';
+      if (f.colibri_cuda_mtp) env.TREE_DRAFT = env.TREE_DRAFT || '0';
       else delete env.TREE_DRAFT;
     }
     if (f.colibri_tool_salvage) env.COLI_TOOL_SALVAGE = '1';
@@ -1586,8 +1586,9 @@ async function _fetchDependencies() {
             + `<div class="cookbook-dep-info"><div class="memory-item-title">${_depGlyphHtml('prism')}${esc(provider.label || 'PrismML')}</div>`
             + `<div class="memory-item-meta" style="font-size:10px;opacity:.5;margin-top:2px;">Official PrismML llama.cpp fork · independent native CUDA runtime</div>`
             + `<div class="memory-item-meta" style="font-size:10px;opacity:.65;margin-top:3px;">${esc(detail)}</div>`
-            + `<div class="memory-item-meta" style="font-size:10px;opacity:.65;margin-top:3px;" title="Downloads remain in Models; this dependency row never substitutes another quant.">${esc(modelDetail || 'Exact model readiness unavailable')} · download exact files in Models</div></div>`
+            + `<div class="memory-item-meta" style="font-size:10px;opacity:.65;margin-top:3px;" title="The exact pinned model, matched DSpark drafter, and projector are downloaded into the configured Prism model root.">${esc(modelDetail || 'Exact model readiness unavailable')}</div></div>`
             + _extraAction(provider.id, 'sync', source.present ? 'Sync' : 'Clone', !!actions.sync_available, 'Clone the official PrismML-Eng/llama.cpp prism branch when absent. Otherwise fetch and fast-forward only; dirty or mismatched checkouts are refused.')
+            + _extraAction(provider.id, 'download', readyCount ? 'Repair model' : 'Download model', !!actions.download_available, 'Use the isolated model-downloader environment and the pinned Hugging Face revision to materialize the exact Ternary Bonsai Q2_0_g128 weights, matched DSpark drafter, and mmproj file. This never changes the Diogenes Python environment.')
             + _extraAction(provider.id, 'build', 'Build CUDA', !!actions.build_available, 'Configure the official prism branch with CUDA 13, Ninja, Release mode, and CMAKE_CUDA_ARCHITECTURES=120a; build one internally consistent llama.cpp bundle and record its source/build manifest.')
             + `<span class="cookbook-dep-tag cookbook-dep-cat">LLM</span>`
             + `<span class="cookbook-dep-tag ${actions.start_available ? 'cookbook-dep-installed' : 'cookbook-dep-na'}">${esc(status)}</span>`

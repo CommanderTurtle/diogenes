@@ -179,7 +179,7 @@ required safety contract.
 | --- | --- | --- |
 | Diogenes API | native observation | managed |
 | vLLM model endpoint | native/tmux model endpoint | managed per checkout |
-| Chroma | Docker Compose/container | managed per runtime copy |
+| Chroma | Docker Compose/container | managed in the checkout data tree |
 | Hermes gateway | systemd user/native | external |
 | Camofox browser | native Bun service | external |
 | Camofox MCP | Sandwich stdio MCP | external |

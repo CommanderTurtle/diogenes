@@ -873,6 +873,10 @@ def _managed_tmux_start_steps(
     launch: list[str],
     label: str,
 ) -> list[dict[str, Any]]:
+    if launch != ["bash", "start.sh"]:
+        raise RuntimeJobError(
+            "interactive runtimes must launch the project-local start.sh"
+        )
     steps: list[dict[str, Any]] = [
         {
             "label": label,
@@ -896,6 +900,7 @@ def _managed_tmux_start_steps(
             session,
             kind="service",
             identity=str(item.get("id") or session),
+            port=next(iter(item.get("ports") or ()), None),
         )
     ):
         steps.append(
@@ -1720,7 +1725,7 @@ def save_runtime_document(
             raise RuntimeJobError(f"JSON configuration is invalid: {exc.msg}") from exc
     suffix = path.suffix or ".tmp"
     with tempfile.NamedTemporaryFile(
-        "w", encoding="utf-8", suffix=suffix, prefix=".ulysses-validate-", dir=path.parent, delete=False
+        "w", encoding="utf-8", suffix=suffix, prefix=".diogenes-validate-", dir=path.parent, delete=False
     ) as stream:
         stream.write(content)
         temp_path = Path(stream.name)
@@ -1762,7 +1767,12 @@ class ManagedRuntimeControl:
     def __init__(self, root: Path | None = None) -> None:
         self.root = (
             root
-            or Path(os.environ.get("ULYSSES_CONTROL_DIR") or DATA_DIR) / "ulysses"
+            or Path(
+                os.environ.get("DIOGENES_CONTROL_DIR")
+                or os.environ.get("ULYSSES_CONTROL_DIR")
+                or DATA_DIR
+            )
+            / "diogenes"
         ).resolve()
         self.jobs = RuntimeJobStore(self.root)
 

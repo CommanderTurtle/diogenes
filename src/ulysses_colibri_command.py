@@ -25,7 +25,7 @@ _CUSTOM_ENV_RE = re.compile(
     r"DIRECT|PIPE|PIPE_WORKERS|URING|"
     r"PREFETCH|PILOT_REAL|PILOT_EVICT_GUARD|"
     r"EXPERT_BUDGET|CACHE_ROUTE|ROUTE_J|ROUTE_M|ROUTE_ALPHA|"
-    r"DRAFT|TREE_DRAFT|KV_I8|IDOT|PERF"
+    r"DRAFT|TREE_DRAFT|SPEC_PIN|KV_I8|IDOT|PERF"
     r")$"
 )
 _PROTECTED_VALUE_FLAGS = {
@@ -129,6 +129,7 @@ def build_colibri_serve_argv(
         "CUDA_RESERVE_GB",
         "DRAFT",
         "TREE_DRAFT",
+        "SPEC_PIN",
         "KV_I8",
         "IDOT",
         "PERF",
@@ -224,9 +225,14 @@ def build_colibri_serve_argv(
         )
         if glm_mtp_enabled:
             env["COLI_CUDA_MTP"] = "1"
+            # Current upstream defaults this on, but keep it explicit in the
+            # generated command so a saved 5090 profile remains reproducible
+            # across source updates.
+            env["SPEC_PIN"] = "1"
             env.pop("DRAFT", None)
         else:
             env.pop("COLI_CUDA_MTP", None)
+            env.pop("SPEC_PIN", None)
             # The grouped checkpoint contains MTP weights. DRAFT=0 makes the
             # accuracy-first profile explicit even as upstream auto defaults
             # evolve between revisions.
@@ -254,7 +260,7 @@ def build_colibri_serve_argv(
             and _enabled(settings, "cuda_attention", env.get("CUDA_ATTN") == "1")
         ) else "0"
         hy3_mtp_enabled = _enabled(
-            settings, "cuda_mtp", env.get("DRAFT", "0") != "0"
+            settings, "cuda_mtp", env.get("DRAFT", "-1") != "0"
         )
         env["DRAFT"] = (
             _number(
@@ -268,7 +274,10 @@ def build_colibri_serve_argv(
             else "0"
         )
         if hy3_mtp_enabled:
-            env["TREE_DRAFT"] = env.get("TREE_DRAFT", "1")
+            # Linear drafting is the current native default. Tree drafting is
+            # retained as an explicit A/B profile because it is not universally
+            # faster at the same acceptance rate.
+            env["TREE_DRAFT"] = env.get("TREE_DRAFT", "0")
         else:
             env.pop("TREE_DRAFT", None)
         hy3_verbose = _enabled(

@@ -1,60 +1,33 @@
-# Ɗiogenēs release validation
+# Ɗiogenēs live validation
 
-This is the operator checklist for a reviewed runtime copy. It deliberately
-contains no host names, process IDs, benchmark claims, or historical machine
-state.
+This is the short operator pass for the canonical checkout.
 
-## Before switchover
+1. Confirm the application and owned model/service sessions are stopped.
+2. Fast-forward or merge the reviewed `dev` source.
+3. Run `./uvsetup.sh` when Python requirements changed.
+4. Start optional Chroma with `docker compose up -d chromadb`.
+5. Start the application with `./startwithuv.sh`.
+6. Sign in and inspect **Cookbook**, **Services**, **Active**, and **Settings**.
+7. In **Services**, confirm:
+   - Docker projects and resources report real Docker state;
+   - Camofox, Bifrost, and signal-cli start as owned `bash start.sh` tmux
+     sessions and expose individual plus grouped shutdown;
+   - dependency actions show their native Git/install/update/integration
+     results;
+   - completed command output can be scrolled, jumped to the latest entry, and
+     hidden from the current browser;
+   - Skills auditor separates Hermes prompt-active skills from Retrieval’s
+     indexed library.
+8. In **Cookbook**, confirm native engines expose independent source, model,
+   build, profile, editable command, launch, and stop flows.
+9. Launch at most one GPU engine at a time and inspect its health endpoint
+   before attaching an agent.
 
-1. Commit the development checkout on `dev`.
-2. Fetch `upstream/dev` and confirm that it is an ancestor of the candidate.
-3. Run `scripts/diogenes-deploy inspect`; resolve every blocked item.
-4. Prepare the sibling `Diogenes-prod` once with `scripts/diogenes-deploy
-   prepare`; use `scripts/diogenes-deploy update` for later fast-forwards.
-5. Run `./uvsetup.sh` for the initial runtime environment. Start Chroma
-   separately with `docker compose up -d chromadb` only when it is wanted;
-   source updates never recreate it.
-6. Run the static, focused, and full validation commands reported by the
-   release commit.
+The expected browser backend is Camofox. Playwright is not registered as an
+implicit built-in MCP. Sandwich reports Bun compatibility without requiring a
+system Node, npm, pnpm, or yarn installation.
 
-The live application, model server, Docker services, and Hermes gateway remain
-unchanged throughout these steps.
-
-## Maintenance window
-
-Only after the candidate is ready:
-
-1. stop the existing application and model tmux sessions;
-2. stop or migrate any Compose workload whose host ports would conflict;
-3. start Ɗiogenēs manually from `Diogenes-prod`;
-4. sign in and inspect **Cookbook**, **Services**, **Active**, and **Settings**;
-5. create and inspect lifecycle plans before executing them;
-6. launch exactly one model engine and validate its health endpoint before
-   starting dependent agents.
-
-Provider builds and model downloads are independent operations. A source
-checkout, CUDA build, and model artifact must all report ready before a Colibri
-or Prism launch is offered.
-
-## Required observations
-
-- The web UI binds only to the address selected by the operator.
-- No implicit Playwright server is registered; Camofox is the default browser
-  backend when configured.
-- Sandwich reports Bun and its compatibility commands as ready without a
-  system Node, npm, pnpm, or yarn dependency.
-- Managed services expose their real state: tools are not labelled stopped,
-  disabled integrations are not labelled failed, and crashed jobs remain
-  visible as failed.
-- Chroma data stays inside the runtime tree's configured data directory.
-- Hermes, Librarian, Retrieval, and MCP registries remain separate from the
-  Ɗiogenēs agent registry.
-- Configuration writes are confirmation-gated, atomic, and scoped to catalogued
-  project files.
-
-## Rollback
-
-Stop the candidate and restart the previous runtime tree. Do not delete the
-previous `.env`, `.venv`, or `data/` until the operator has accepted the new
-deployment. `scripts/diogenes-deploy` never removes or overwrites an existing
-runtime tree.
+All user settings, databases, auth state, caches, and runtime logs remain under
+ignored local paths in this checkout. A source rollback is a normal Git
+operation; it must not delete `.env`, `.venv`, `data/`, model caches, service
+configuration, or Docker volumes.

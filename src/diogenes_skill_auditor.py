@@ -7,6 +7,7 @@ import hashlib
 import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 from typing import Any
 
@@ -32,7 +33,79 @@ def _cli() -> Path:
     return path
 
 
-def collect_skills() -> dict[str, Any]:
+def _hermes_enabled_skills() -> list[dict[str, str]]:
+    """Return the skills enabled in Hermes' active profile.
+
+    Retrieval's ``state=active`` means that a file exists in one of its indexed
+    sources.  It does *not* mean that Hermes loads that skill.  Use Hermes'
+    native skill discovery and disabled-skill policy as the source of truth.
+    """
+
+    environment = native_host_environment()
+    executable = shutil.which("hermes", path=environment.get("PATH"))
+    if not executable:
+        raise RuntimeJobError("Hermes is not installed on the native host PATH")
+    try:
+        hermes_executable = Path(executable).resolve(strict=True)
+    except OSError as exc:
+        raise RuntimeJobError("Hermes executable could not be resolved") from exc
+    try:
+        agent_root = hermes_executable.parents[2]
+    except IndexError as exc:
+        raise RuntimeJobError("Hermes installation layout is not supported") from exc
+    python = agent_root / "venv" / "bin" / "python"
+    if not python.is_file() or not (agent_root / "tools" / "skills_tool.py").is_file():
+        raise RuntimeJobError("Hermes skill runtime could not be located")
+    script = """
+import json
+from tools.skills_tool import _find_all_skills
+from agent.skill_utils import get_disabled_skill_names
+
+disabled = set(get_disabled_skill_names())
+enabled = [
+    {
+        "name": str(skill.get("name") or ""),
+        "description": str(skill.get("description") or ""),
+        "category": str(skill.get("category") or ""),
+    }
+    for skill in _find_all_skills(skip_disabled=True)
+    if skill.get("name") and skill.get("name") not in disabled
+]
+print(json.dumps(enabled, ensure_ascii=False))
+"""
+    result = subprocess.run(
+        [str(python), "-c", script],
+        cwd=agent_root,
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
+    )
+    if result.returncode:
+        raise RuntimeJobError(
+            result.stderr.strip() or "Hermes could not list enabled skills"
+        )
+    try:
+        skills = json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        raise RuntimeJobError("Hermes returned an invalid enabled-skill list") from exc
+    if not isinstance(skills, list):
+        raise RuntimeJobError("Hermes returned an invalid enabled-skill list")
+    return [
+        {
+            "name": str(value.get("name") or ""),
+            "description": str(value.get("description") or ""),
+            "category": str(value.get("category") or ""),
+        }
+        for value in skills
+        if isinstance(value, dict) and value.get("name")
+    ]
+
+
+def _retrieval_skills() -> list[dict[str, Any]]:
+    """Read Retrieval's date-sorted indexed skill catalog."""
+
     cli = _cli()
     result = subprocess.run(
         [str(cli), "skills", "list", "--json"],
@@ -52,24 +125,108 @@ def collect_skills() -> dict[str, Any]:
         raise RuntimeJobError("Retrieval returned an invalid skill list") from exc
     if not isinstance(skills, list):
         raise RuntimeJobError("Retrieval returned an invalid skill list")
-    # Retrieval already sorts by modification time. Enforce the contract at
-    # the API boundary so a future CLI formatting change cannot reorder it.
-    skills = sorted(
-        (value for value in skills if isinstance(value, dict)),
+    return sorted(
+        (dict(value) for value in skills if isinstance(value, dict)),
         key=lambda value: (
             -int(value.get("mtime_ns") or 0),
             str(value.get("name") or "").casefold(),
             str(value.get("skill_id") or ""),
         ),
     )
+
+
+def _skill_directory_name(value: dict[str, Any]) -> str:
+    path = str(value.get("path") or value.get("canonical_path") or "")
+    return Path(path).parent.name if path else ""
+
+
+def _active_candidate_key(value: dict[str, Any], enabled_name: str) -> tuple[Any, ...]:
+    path = str(value.get("path") or "")
+    return (
+        value.get("state") != "active",
+        value.get("source") != "hermes-skills",
+        _skill_directory_name(value) != enabled_name,
+        "/.hermes/skills/" not in path,
+        not bool(value.get("symlinked")),
+        -int(value.get("mtime_ns") or 0),
+        str(value.get("skill_id") or ""),
+    )
+
+
+def collect_skills() -> dict[str, Any]:
+    retrieval_skills = _retrieval_skills()
+    enabled_skills = _hermes_enabled_skills()
+    selected_ids: set[str] = set()
+    active: list[dict[str, Any]] = []
+    for enabled in sorted(
+        enabled_skills,
+        key=lambda value: str(value.get("name") or "").casefold(),
+    ):
+        name = enabled["name"]
+        candidates = [
+            value
+            for value in retrieval_skills
+            if (
+                str(value.get("name") or "") == name
+                or _skill_directory_name(value) == name
+            )
+            and str(value.get("skill_id") or "") not in selected_ids
+        ]
+        source = min(candidates, key=lambda value: _active_candidate_key(value, name)) if candidates else {}
+        skill_id = str(source.get("skill_id") or f"hermes-enabled:{name}")
+        selected_ids.add(skill_id)
+        active.append(
+            {
+                **source,
+                "name": name,
+                "description": enabled.get("description") or source.get("description") or "",
+                "category": enabled.get("category") or source.get("category") or "",
+                "skill_id": skill_id,
+                "state": "active",
+                "retrieval_state": source.get("state"),
+                "editable": source.get("state") == "active" and bool(source.get("skill_id")),
+            }
+        )
+
+    library: list[dict[str, Any]] = []
+    seen_library_paths: set[str] = set()
+    enabled_names = {value["name"] for value in enabled_skills}
+    for source in retrieval_skills:
+        if str(source.get("skill_id") or "") in selected_ids:
+            continue
+        if (
+            str(source.get("name") or "") in enabled_names
+            or _skill_directory_name(source) in enabled_names
+        ):
+            continue
+        canonical_path = str(
+            source.get("canonical_path") or source.get("path") or source.get("skill_id") or ""
+        )
+        if canonical_path in seen_library_paths:
+            continue
+        seen_library_paths.add(canonical_path)
+        library.append(
+            {
+                **source,
+                "state": "library",
+                "retrieval_state": source.get("state"),
+                "editable": source.get("state") == "active" and bool(source.get("skill_id")),
+            }
+        )
+
+    skills = active + library
     return {
-        "schema_version": "diogenes.skills-auditor.v1",
+        "schema_version": "diogenes.skills-auditor.v2",
         "skills": skills,
-        "active": sum(value.get("state") == "active" for value in skills),
-        "archived": sum(value.get("state") == "archived" for value in skills),
+        "active": len(active),
+        "library": len(library),
+        "physically_archived": sum(
+            value.get("retrieval_state") == "archived" for value in library
+        ),
         "watcher_contract": (
-            "Retrieval observes file changes and refreshes affected sources; "
-            "manual periodic full refresh is not required."
+            "Hermes active skills are prompt-enabled. Retrieval library skills are "
+            "indexed for on-demand lookup and are not loaded into prompts. File "
+            "changes are indexed automatically."
         ),
     }
 
@@ -78,7 +235,12 @@ class SkillAuditorControl:
     def __init__(self, root: Path | None = None) -> None:
         self.root = (
             root
-            or Path(os.environ.get("ULYSSES_CONTROL_DIR") or DATA_DIR) / "ulysses"
+            or Path(
+                os.environ.get("DIOGENES_CONTROL_DIR")
+                or os.environ.get("ULYSSES_CONTROL_DIR")
+                or DATA_DIR
+            )
+            / "diogenes"
         ).resolve()
         self.jobs = RuntimeJobStore(self.root)
 
@@ -88,7 +250,7 @@ class SkillAuditorControl:
         skill_id: str,
         action: str,
     ) -> tuple[dict[str, Any], str]:
-        if action not in {"edit", "archive", "restore"}:
+        if action != "edit":
             raise RuntimeJobError("unsupported skill action")
         if not SKILL_ID_RE.fullmatch(skill_id):
             raise RuntimeJobError("invalid exact skill ID")
@@ -103,16 +265,10 @@ class SkillAuditorControl:
         )
         if skill is None:
             raise RuntimeJobError("skill changed after the auditor was opened; refresh it")
+        if not skill.get("editable"):
+            raise RuntimeJobError("this indexed skill does not have an editable source file")
         state = str(skill.get("state") or "")
-        if action in {"edit", "archive"} and state != "active":
-            raise RuntimeJobError("restore the archived skill before this action")
-        if action == "restore" and state != "archived":
-            raise RuntimeJobError("skill is already active")
-        label = {
-            "edit": "Open in Zed",
-            "archive": "Move to Retrieval archive",
-            "restore": "Restore to active skills",
-        }[action]
+        label = "Open in Zed"
         step: dict[str, Any] = {
             "label": label,
             "argv": [str(_cli()), "skills", action, skill_id],

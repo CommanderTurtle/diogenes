@@ -775,6 +775,7 @@ def observe_prism_provider(provider: PrismProvider) -> dict[str, Any]:
         "endpoint": endpoint,
         "actions": {
             "sync_available": not source["dirty"],
+            "download_available": not endpoint["port_open"],
             "build_available": bool(
                 source["ready"]
                 and not source["dirty"]

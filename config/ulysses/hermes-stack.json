@@ -110,6 +110,10 @@
     {
       "name": "workspace-dispatch",
       "source": "hermes-workspace/skills/workspace-dispatch"
+    },
+    {
+      "name": "make-interfaces-feel-better",
+      "source": "make-interfaces-feel-better/skills/make-interfaces-feel-better"
     }
   ],
   "native_workflows": [
@@ -145,6 +149,8 @@
     "hermes-agent-skill-authoring",
     "hermes-api-backend",
     "hermes-mcp-integration",
+    "humanizer",
+    "make-interfaces-feel-better",
     "mcp-integration",
     "mcp-registration",
     "plan",
@@ -206,7 +212,6 @@
     "heartmula",
     "hermes-desktop-plugins",
     "himalaya",
-    "humanizer",
     "jupyter-live-kernel",
     "llm-wiki",
     "manim-video",

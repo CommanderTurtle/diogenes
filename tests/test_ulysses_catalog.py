@@ -25,7 +25,7 @@ def test_default_catalog_resolves_portable_roots_and_sandwich(tmp_path):
 
     assert len(registry.definitions()) == 14
     assert registry.get("sandwich.runtime").source_root == (
-        REPOSITORY_ROOT / "components" / "sandwich"
+        microservices / "sandwich"
     ).resolve()
     assert registry.get("firecrawl.api").source_root == (
         microservices / "firecrawl" / "firecrawl"

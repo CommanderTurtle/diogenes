@@ -4,70 +4,52 @@ from pathlib import Path
 
 import pytest
 
-import src.ulysses_hermes_stack as stack
 from src.ulysses_hermes_stack import HermesStackControl
-from src.ulysses_jobs import RuntimeJobError
 
 
-def test_apply_plan_is_bounded_and_restarts_after_retrieval_sync(
+def test_apply_plan_reconciles_dependencies_without_implicit_restart(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
-    services = tmp_path / "Hermes"
-    retrieval = services / "retrieval" / ".venv" / "bin"
-    retrieval.mkdir(parents=True)
-    (retrieval / "hermes-retrieval").write_text("", encoding="utf-8")
     monkeypatch.setattr(
         HermesStackControl,
-        "observe",
-        staticmethod(
-            lambda: {
-                "services_root": str(services),
-                "hermes_available": True,
-                "default_config_present": True,
-                "artifacts": {
-                    "librarian": True,
-                    "retrieval": True,
-                    "context-mode": True,
-                },
-            }
-        ),
+        "_hermes",
+        classmethod(lambda _cls: "/usr/bin/hermes"),
     )
-    monkeypatch.setattr(stack, "which_tool", lambda _name: "/usr/bin/hermes")
 
     plan, token = HermesStackControl(tmp_path / "control").create_plan(
         action="apply"
     )
 
     assert token
-    assert plan["confirmation_phrase"] == "APPLY HERMES STACK"
-    assert [step["label"] for step in plan["steps"]] == [
-        "Apply portable Hermes MCP, plugin, hook, and skill policy",
-        "Refresh the Retrieval index from canonical sources",
-        "Restart the Hermes gateway",
-        "Verify the applied Hermes stack",
+    assert plan["confirmation_phrase"] == "INTEGRATE HERMES DEPENDENCIES"
+    assert len(plan["steps"]) == 1
+    assert plan["steps"][0]["argv"][1:] == [
+        "-m",
+        "src.diogenes_dependency_integration",
+        "--all",
     ]
-    assert plan["steps"][1]["argv"][-1] == "sync"
-    assert plan["steps"][2]["argv"] == ["/usr/bin/hermes", "gateway", "restart"]
-    assert plan["steps"][3]["expected_output_contains"] == '"ready": true'
+    assert plan["metadata"]["gateway_restart_is_separate"] is True
 
 
-def test_apply_plan_blocks_missing_integration_artifacts(
+def test_restart_plan_is_explicit_and_health_checked(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
     monkeypatch.setattr(
         HermesStackControl,
-        "observe",
-        staticmethod(
-            lambda: {
-                "services_root": str(tmp_path / "Hermes"),
-                "hermes_available": True,
-                "default_config_present": True,
-                "artifacts": {"librarian": False, "retrieval": True},
-            }
-        ),
+        "_hermes",
+        classmethod(lambda _cls: "/usr/bin/hermes"),
     )
 
-    with pytest.raises(RuntimeJobError, match="librarian"):
-        HermesStackControl(tmp_path / "control").create_plan(action="apply")
+    plan, token = HermesStackControl(tmp_path / "control").create_plan(
+        action="restart"
+    )
+
+    assert token
+    assert plan["confirmation_phrase"] == "RESTART HERMES"
+    assert [step["argv"] for step in plan["steps"]] == [
+        ["/usr/bin/hermes", "gateway", "restart"],
+        ["/usr/bin/hermes", "gateway", "status"],
+        ["/usr/bin/hermes", "status", "--deep"],
+    ]

@@ -21,7 +21,12 @@ class HermesStackControl:
     def __init__(self, root: Path | None = None) -> None:
         self.root = (
             root
-            or Path(os.environ.get("ULYSSES_CONTROL_DIR") or DATA_DIR) / "ulysses"
+            or Path(
+                os.environ.get("DIOGENES_CONTROL_DIR")
+                or os.environ.get("ULYSSES_CONTROL_DIR")
+                or DATA_DIR
+            )
+            / "diogenes"
         ).resolve()
         self.jobs = RuntimeJobStore(self.root)
 

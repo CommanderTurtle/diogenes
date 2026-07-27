@@ -111,7 +111,7 @@
         }
       ],
       "launch": ["bash", "start.sh"],
-      "tmux_session": "ulysses-camofox-browser",
+      "tmux_session": "diogenes-camofox-browser",
       "git_update": true,
       "source_url": "https://github.com/jo-inc/camofox-browser",
       "source_branch": "master",
@@ -163,7 +163,7 @@
         }
       ],
       "launch": ["bash", "start.sh"],
-      "tmux_session": "ulysses-bifrost",
+      "tmux_session": "diogenes-bifrost",
       "package_spec": "@maximhq/bifrost@latest",
       "git_update": false,
       "dashboard": {
@@ -397,7 +397,7 @@
       "recommended": true,
       "capability_group": "skill-libraries",
       "role": "Writing guidance",
-      "integration": "retrieval-index",
+      "integration": "humanizer",
       "root": "${ULYSSES_MICROSERVICES_ROOT}/humanizer",
       "env_files": [],
       "git_update": true,
@@ -449,7 +449,7 @@
       "recommended": true,
       "capability_group": "skill-libraries",
       "role": "Focused interaction and interface guidance",
-      "integration": "retrieval-index",
+      "integration": "interface-skills",
       "root": "${ULYSSES_MICROSERVICES_ROOT}/make-interfaces-feel-better",
       "env_files": [],
       "git_update": true,
@@ -484,7 +484,7 @@
         }
       ],
       "launch": ["bash", "start.sh"],
-      "tmux_session": "ulysses-signal-cli",
+      "tmux_session": "diogenes-signal-cli",
       "update_module": "src.ulysses_signal_update",
       "update_args": ["--install-user"],
       "git_update": false,

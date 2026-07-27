@@ -48,7 +48,7 @@ From a reviewed `dev` checkout:
 
 `uvsetup.sh` creates the Python 3.13.12 inner virtual environment, installs
 `requirements.txt`, and runs the native setup. `startwithuv.sh` starts only the
-web application on `0.0.0.0:7000`. Development and runtime-copy instructions are in
+web application on `0.0.0.0:7000`. In-place update and runtime-state instructions are in
 [`docs/DIOGENES_DEPLOYMENT.md`](docs/DIOGENES_DEPLOYMENT.md).
 
 ## Upstream Docker Quick Start

@@ -572,6 +572,7 @@ def _links_for_integration(integration: str) -> list[dict[str, Any]]:
         "camofox-mcp": ("camofox-mcp/",),
         "librarian": ("librarian/",),
         "workspace": ("hermes-workspace/",),
+        "interface-skills": ("make-interfaces-feel-better/",),
     }.get(integration, ())
     return [
         dict(link)
@@ -1228,6 +1229,13 @@ def _contract_current(
         return _workflows_current() and _skill_policy_current()
     if integration == "workspace":
         return _skill_links_current("workspace")
+    if integration == "humanizer":
+        return _skill_policy_current()
+    if integration == "interface-skills":
+        return (
+            _skill_links_current("interface-skills")
+            and _skill_policy_current()
+        )
     # Retrieval-index contracts are represented by the exact source
     # fingerprint written only after a successful targeted sync.
     return integration == "retrieval-index"
@@ -1275,11 +1283,16 @@ def integrate(runtime_id: str) -> bool:
         _integrate_agent_workflows()
     elif integration == "workspace":
         _integrate_workspace()
+    elif integration == "humanizer":
+        _retrieval_command("sync", "humanizer")
+        _apply_skill_activation_policy()
+    elif integration == "interface-skills":
+        _ensure_skill_links("interface-skills")
+        _retrieval_command("sync", "interface-skills")
+        _apply_skill_activation_policy()
     elif integration == "retrieval-index":
         source = {
-            "humanizer.skills": "humanizer",
             "cybersecurity.skills": "cybersecurity-skills",
-            "interface.skills": "interface-skills",
         }.get(runtime_id)
         _retrieval_command("sync", *([source] if source else []))
     elif integration == "firecrawl-cli":

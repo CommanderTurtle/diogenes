@@ -113,6 +113,30 @@ def synchronize_diogenes_tmux_environment(
         "PYTHONNOUSERSITE": "1",
         "PATH": _diogenes_path(venv),
     }
+    shell = shutil.which("bash") or os.environ.get("SHELL") or "/bin/sh"
+    # A new tmux session begins with the client environment before
+    # ``update-environment`` is considered.  That can discard the server's
+    # global PATH even when ``new-session -E`` is used.  Pin the command used
+    # only for otherwise commandless, interactive panes so a manually-created
+    # ``tmux new`` receives the same inner environment as Diogenes-owned
+    # panes.  No activation script is sourced, therefore ``deactivate`` is
+    # intentionally absent.
+    default_command = shlex.join(
+        [
+            "exec",
+            "env",
+            "-u",
+            "CONDA_DEFAULT_ENV",
+            "-u",
+            "CONDA_PREFIX",
+            "-u",
+            "PYTHONHOME",
+            "-u",
+            "PYTHONPATH",
+            *(f"{key}={value}" for key, value in environment.items()),
+            shell,
+        ]
+    )
     # Keep subprocesses started by the application on the same clean path even
     # before they ask tmux to create a session.
     os.environ.update(environment)
@@ -132,6 +156,16 @@ def synchronize_diogenes_tmux_environment(
         "-g",
         "update-environment",
         _TMUX_UPDATE_ENVIRONMENT,
+        ";",
+        "set-option",
+        "-g",
+        "default-shell",
+        shell,
+        ";",
+        "set-option",
+        "-g",
+        "default-command",
+        default_command,
     ]
     for key, value in environment.items():
         command.extend((";", "set-environment", "-g", key, value))
@@ -200,6 +234,7 @@ def synchronize_diogenes_tmux_environment(
         "status": "configured",
         "venv": str(venv),
         "python": sys.executable,
+        "default_command": default_command,
         "updated_sessions": updated_sessions,
     }
 
@@ -249,9 +284,13 @@ def tmux_tag_argv(
             else ""
         ),
     }
+    # Unset optional tags already render as empty through tmux's ``#{@name}``
+    # format.  Do not emit empty argv elements: the detached job boundary
+    # intentionally rejects them before execution.
     return [
         ["tmux", "set-option", "-t", session, key, value]
         for key, value in values.items()
+        if value
     ]
 
 
@@ -417,7 +456,10 @@ def stop_owned_session(
     colibri_result = _stop_colibri(session)
     try:
         _run("tmux", "send-keys", "-t", session.name, "C-c", timeout=3)
-        for _ in range(10):
+        # Every managed service is the foreground process started by
+        # ``bash start.sh``. Give that exact process group a short graceful
+        # Ctrl-C window before closing the owned tmux session.
+        for _ in range(20):
             if _run(
                 "tmux",
                 "has-session",
@@ -463,7 +505,11 @@ def stop_owned_session(
         }
 
 
-def shutdown_owned_sessions(*, include_agents: bool = False) -> dict[str, Any]:
+def shutdown_owned_sessions(
+    *,
+    include_agents: bool = False,
+    identities: set[str] | None = None,
+) -> dict[str, Any]:
     """Gracefully stop every verified local Diogenes session.
 
     Adopted/external and legacy untagged sessions never enter this inventory.
@@ -476,6 +522,10 @@ def shutdown_owned_sessions(*, include_agents: bool = False) -> dict[str, Any]:
 
     for session in list_owned_sessions():
         item = session.as_dict()
+        if identities is not None and session.identity not in identities:
+            item["reason"] = "outside the requested runtime set"
+            skipped.append(item)
+            continue
         if session.kind == "agent" and not include_agents:
             item["reason"] = "agent shells require explicit inclusion"
             skipped.append(item)
@@ -488,7 +538,7 @@ def shutdown_owned_sessions(*, include_agents: bool = False) -> dict[str, Any]:
         colibri_result = _stop_colibri(session)
         try:
             _run("tmux", "send-keys", "-t", session.name, "C-c", timeout=3)
-            for _ in range(10):
+            for _ in range(20):
                 probe = _run(
                     "tmux", "has-session", "-t", session.name, timeout=2
                 )
@@ -529,6 +579,7 @@ def shutdown_owned_sessions(*, include_agents: bool = False) -> dict[str, Any]:
         "already_gone": already_gone,
         "failed": failed,
         "skipped": skipped,
+        "requested_identities": sorted(identities) if identities is not None else None,
         "external_policy": "Legacy untagged and adopted/external sessions are never stopped.",
     }
 

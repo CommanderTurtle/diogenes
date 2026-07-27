@@ -97,7 +97,7 @@ def test_unsafe_or_unstructured_launch_settings_are_rejected(
         )
 
 
-def test_rendered_command_must_round_trip_exactly(provider) -> None:
+def test_rendered_command_allows_flags_but_protects_managed_binary(provider) -> None:
     settings = {
         "cuda_visible_devices": "0",
         "vision": True,
@@ -117,9 +117,15 @@ def test_rendered_command_must_round_trip_exactly(provider) -> None:
         settings,
         rendered,
     ) == rendered
-    with pytest.raises(command.PrismCommandError, match="does not match"):
+    edited = command.validate_prism_serve_command(
+        "prism.bonsai-27b-1bit",
+        settings,
+        rendered + " --threads 999",
+    )
+    assert edited.endswith("--threads 999")
+    with pytest.raises(command.PrismCommandError, match="managed llama-server"):
         command.validate_prism_serve_command(
             "prism.bonsai-27b-1bit",
             settings,
-            rendered + " --threads 999",
+            rendered.replace(str(provider.server_path), "/tmp/llama-server", 1),
         )

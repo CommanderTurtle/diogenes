@@ -5,7 +5,7 @@ import uiModule from './ui.js';
 import * as Modals from './modalManager.js';
 import { makeWindowDraggable } from './windowDrag.js';
 
-const MODAL_ID = 'ulysses-services-modal';
+const MODAL_ID = 'diogenes-services-modal';
 const SKILLS_MODAL_ID = 'diogenes-skills-auditor-modal';
 const SERVICE_ICON = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="6" rx="2"/><rect x="3" y="14" width="18" height="6" rx="2"/><path d="M7 7h.01M7 17h.01M11 7h7M11 17h7"/></svg>';
 const SKILLS_ICON = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h16v16H4z"/><path d="M8 9h8M8 13h5"/><path d="m15 16 1.5 1.5L20 14"/></svg>';
@@ -31,6 +31,10 @@ let sandwichReport = null;
 let jobs = [];
 let selectedJobId = '';
 let selectedJobLog = '';
+let followJobOutput = true;
+let completedJobsHiddenBefore = Number(
+  window.localStorage.getItem('diogenes-services-completed-hidden-before') || 0,
+);
 let expanded = '';
 let documentPayload = null;
 let selectedDocumentId = '';
@@ -43,7 +47,7 @@ let skillsLoading = false;
 let skillsError = '';
 let skillsReport = null;
 let skillsQuery = '';
-let skillsState = 'all';
+let skillsState = 'active';
 
 const esc = (value) => uiModule.esc(String(value ?? ''));
 
@@ -114,7 +118,7 @@ function ensureModal() {
     header: modal.querySelector('.uly-services-header'),
     minWidth: 480,
     minHeight: 380,
-    resizeStorageKey: 'winsize-ulysses-services-modal-v2',
+    resizeStorageKey: 'winsize-diogenes-services-modal-v2',
   });
   Modals.register(MODAL_ID, {
     restoreFn: () => { modal.classList.remove('hidden'); render(); },
@@ -167,8 +171,26 @@ function panelMessage(title, detail = '') {
   return `<div class="uly-empty-state compact"><strong>${esc(title)}</strong>${detail ? `<p>${esc(detail)}</p>` : ''}</div>`;
 }
 
+function visibleJobs() {
+  return jobs.filter((job) => (
+    !TERMINAL.has(job.status)
+    || Number(job.created_at || 0) > completedJobsHiddenBefore
+  ));
+}
+
+function jobTime(job) {
+  const timestamp = Number(job.ended_at || job.started_at || job.created_at || 0);
+  if (!timestamp) return '';
+  return new Date(timestamp * 1000).toLocaleTimeString([], {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  });
+}
+
 function renderJobOutput() {
-  const job = jobs.find((value) => value.id === selectedJobId) || jobs[0];
+  const visible = visibleJobs();
+  const job = visible.find((value) => value.id === selectedJobId) || visible[0];
   if (!job) return '';
   const selected = job.id === selectedJobId;
   return `
@@ -178,14 +200,34 @@ function renderJobOutput() {
         <strong>${esc(job.summary || job.action)}</strong>
         ${statusBadge(job.status)}
       </summary>
+      <div class="dio-command-toolbar">
+        <button type="button" data-job-latest title="Select the newest command and follow its output">Jump to latest</button>
+        <button type="button" data-job-clear title="Hide completed commands from this browser">Clear completed</button>
+      </div>
       <div class="dio-command-history">
-        ${jobs.slice(0, 8).map((value) => `
+        ${visible.slice(0, 25).map((value) => `
           <button type="button" data-job-log="${esc(value.id)}" class="${value.id === job.id ? 'active' : ''}">
-            <span>${esc(value.summary || value.action)}</span>${statusBadge(value.status)}
+            <span>${esc(value.summary || value.action)}</span>
+            <time datetime="${esc(new Date(Number(value.created_at || 0) * 1000).toISOString())}">${esc(jobTime(value))}</time>
+            ${statusBadge(value.status)}
           </button>`).join('')}
       </div>
-      <pre>${esc(selectedJobLog || (job.status === 'planned' ? 'Awaiting confirmation.' : 'Select the command to load its output.'))}</pre>
+      <pre data-command-log tabindex="0">${esc(selectedJobLog || (job.status === 'planned' ? 'Awaiting confirmation.' : 'Select the command to load its output.'))}</pre>
     </details>`;
+}
+
+function restoreCommandOutputPosition() {
+  const output = document.querySelector(`#${MODAL_ID} [data-command-log]`);
+  if (!output) return;
+  if (followJobOutput) {
+    window.requestAnimationFrame(() => {
+      output.scrollTop = output.scrollHeight;
+    });
+  }
+  output.addEventListener('scroll', () => {
+    const remaining = output.scrollHeight - output.clientHeight - output.scrollTop;
+    followJobOutput = remaining < 24;
+  }, { passive: true });
 }
 
 function renderDocumentEditor(kind, id) {
@@ -443,31 +485,60 @@ function runtimePorts(runtime) {
   }).join('')}</div>`;
 }
 
+function runtimeActionButton(runtime, action, label) {
+  const detail = runtime.action_details?.[action] || {};
+  const enabled = detail.enabled === true;
+  return `
+    <button
+      type="button"
+      data-runtime-action="${action}"
+      data-runtime="${esc(runtime.id)}"
+      ${enabled ? '' : 'disabled'}
+      title="${esc(detail.reason || '')}"
+    >${label}</button>`;
+}
+
 function renderInteractive() {
   const runtimes = (runtimeReport?.runtimes || []).filter((value) => INTERACTIVE_IDS.has(value.id));
+  const managedCount = runtimes.filter((value) => value.tmux?.managed).length;
   return `
     <div class="dio-section-heading">
       <div><h3>Interactive processes</h3><p>Camofox, Bifrost, and signal-cli run in owned tmux sessions.</p></div>
+      <button type="button" data-stop-interactive ${managedCount ? '' : 'disabled'}>
+        Stop all${managedCount ? ` (${managedCount})` : ''}
+      </button>
     </div>
     <div class="dio-card-list">
       ${runtimes.map((runtime) => `
         <article class="dio-service-card">
           <header><div><h3>${esc(runtime.label)}</h3><p>${esc(runtime.role || '')}</p></div>${statusBadge(runtime.status)}</header>
           ${runtimePorts(runtime)}
+          <div class="dio-runtime-session">
+            <code>${esc(runtime.tmux?.session || 'tmux session unavailable')}</code>
+            ${statusBadge(
+              runtime.tmux?.managed
+                ? 'owned'
+                : runtime.process_state === 'running_external'
+                  ? 'external'
+                  : 'inactive'
+            )}
+          </div>
           <div class="dio-action-row">
-            ${[['start', 'Start'], ['stop', 'Stop'], ['restart', 'Restart']].map(([action, label]) => `
-              <button type="button" data-runtime-action="${action}" data-runtime="${esc(runtime.id)}">${label}</button>`).join('')}
+            ${[['start', 'Start'], ['stop', 'Stop'], ['restart', 'Restart']]
+              .map(([action, label]) => runtimeActionButton(runtime, action, label))
+              .join('')}
           </div>
           <div class="dio-card-tools">
             <button type="button" data-expand-owner="runtime" data-owner="${esc(runtime.id)}">Files</button>
             <button type="button" data-load-log="runtime" data-owner="${esc(runtime.id)}">Console</button>
-            <button type="button" data-runtime-action="open" data-runtime="${esc(runtime.id)}">Zed</button>
+            ${runtimeActionButton(runtime, 'open', 'Zed')}
             <code>${esc(runtime.root)}</code>
           </div>
           ${renderDocumentEditor('runtime', runtime.id)}
           ${expanded === `runtime-log:${runtime.id}` ? `<pre class="dio-runtime-log">${esc(runtimeLog || 'No captured output.')}</pre>` : ''}
         </article>`).join('')}
     </div>
+    ${expanded === 'interactive-shutdown' ? `<pre class="dio-runtime-log">${esc(runtimeLog || 'No shutdown output.')}</pre>` : ''}
     ${renderJobOutput()}`;
 }
 
@@ -557,7 +628,7 @@ function renderSandwich() {
         <strong>Audit</strong><span>Inspect Bun compatibility and every detected JavaScript project.</span>
       </button>
       <button type="button" data-sandwich-action="self-update">
-        <strong>Update Diogenes</strong><span>Fast-forward the dev source; preserve the running production tree.</span>
+        <strong>Update Diogenes</strong><span>Fast-forward this checkout; preserve ignored runtime data and propose a restart.</span>
       </button>
     </div>
     ${renderJobOutput()}`;
@@ -582,6 +653,7 @@ function render() {
         ? renderDependencies()
         : renderSandwich();
   content.innerHTML = `${error}${body}`;
+  restoreCommandOutputPosition();
 }
 
 async function load() {
@@ -637,6 +709,7 @@ async function executePlan(endpoint, payload, { danger = false, after = null } =
     });
     selectedJobId = job.id;
     selectedJobLog = '';
+    followJobOutput = true;
     jobs = [job, ...jobs.filter((value) => value.id !== job.id)];
     render();
     monitorJob(job.id, after);
@@ -830,6 +903,7 @@ async function loadDockerContainerLog(id) {
 
 async function selectJob(jobId) {
   selectedJobId = jobId;
+  followJobOutput = true;
   try {
     const payload = await request(`/api/odysseus/jobs/${encodeURIComponent(jobId)}/log?max_chars=50000`);
     selectedJobLog = payload.text || '';
@@ -837,6 +911,66 @@ async function selectJob(jobId) {
     selectedJobLog = error?.message || String(error);
   }
   render();
+}
+
+async function selectLatestJob() {
+  const job = visibleJobs()[0];
+  if (!job) return;
+  return selectJob(job.id);
+}
+
+function clearCompletedJobs() {
+  completedJobsHiddenBefore = Date.now() / 1000;
+  window.localStorage.setItem(
+    'diogenes-services-completed-hidden-before',
+    String(completedJobsHiddenBefore),
+  );
+  const selected = jobs.find((job) => job.id === selectedJobId);
+  if (selected && TERMINAL.has(selected.status)) {
+    selectedJobId = '';
+    selectedJobLog = '';
+  }
+  followJobOutput = true;
+  render();
+}
+
+async function shutdownInteractive() {
+  const runtimes = (runtimeReport?.runtimes || [])
+    .filter((value) => INTERACTIVE_IDS.has(value.id) && value.tmux?.managed);
+  if (!runtimes.length) {
+    uiModule.showToast('No Diogenes-owned interactive sessions are running.', 4000);
+    return;
+  }
+  const confirmed = await uiModule.styledConfirm(
+    `Stop ${runtimes.map((value) => value.label).join(', ')}? Each owned tmux foreground process receives Ctrl+C before its session is closed.`,
+    {
+      title: 'Stop interactive services',
+      confirmText: 'Stop all',
+      cancelText: 'Cancel',
+      danger: true,
+    },
+  );
+  if (!confirmed) return;
+  try {
+    const result = await request('/api/odysseus/tmux/shutdown', {
+      method: 'POST',
+      body: JSON.stringify({
+        confirmation_phrase: 'STOP DIOGENES SESSIONS',
+        include_agents: false,
+        identities: runtimes.map((value) => value.id),
+      }),
+    });
+    expanded = 'interactive-shutdown';
+    runtimeLog = JSON.stringify(result, null, 2);
+    uiModule.showToast(
+      `Stopped ${(result.stopped || []).length} owned interactive session(s).`,
+      (result.failed || []).length ? 8000 : 4000,
+    );
+    await load();
+  } catch (error) {
+    loadError = error?.message || String(error);
+    render();
+  }
 }
 
 function handleServicesClick(event) {
@@ -850,6 +984,7 @@ function handleServicesClick(event) {
   }
   const port = event.target.closest('[data-open-port]');
   if (port) return openLocalPort(port.dataset.openPort);
+  if (event.target.closest('[data-stop-interactive]')) return shutdownInteractive();
   const runtimeAction = event.target.closest('[data-runtime-action]');
   if (runtimeAction) return planRuntimeAction(runtimeAction.dataset.runtime, runtimeAction.dataset.runtimeAction);
   const dockerAction = event.target.closest('[data-docker-action]');
@@ -877,6 +1012,8 @@ function handleServicesClick(event) {
   if (save) return saveDocument(save);
   const job = event.target.closest('[data-job-log]');
   if (job) return selectJob(job.dataset.jobLog);
+  if (event.target.closest('[data-job-latest]')) return selectLatestJob();
+  if (event.target.closest('[data-job-clear]')) return clearCompletedJobs();
 }
 
 function ensureSkillsModal() {
@@ -949,35 +1086,45 @@ function renderSkills() {
     return;
   }
   const query = skillsQuery.trim().toLowerCase();
-  const skills = (skillsReport?.skills || []).filter((value) => {
-    const matchesState = skillsState === 'all' || value.state === skillsState;
+  let skills = (skillsReport?.skills || []).filter((value) => {
+    const matchesState = skillsState === 'active'
+      ? value.state === 'active'
+      : value.state === 'library';
     const text = `${value.name} ${value.description} ${value.source} ${value.path}`.toLowerCase();
     return matchesState && (!query || text.includes(query));
   });
+  if (skillsState === 'recent') skills = skills.slice(0, 40);
+  const activeCount = Number(skillsReport?.active || 0);
+  const libraryCount = Number(skillsReport?.library || 0);
+  const context = skillsState === 'active'
+    ? 'Enabled by Hermes and available to agent sessions.'
+    : skillsState === 'recent'
+      ? 'Newest indexed references. Retrieved when needed; never prompt-loaded as a group.'
+      : 'The complete indexed Retrieval library. Search it without adding it to the prompt.';
   body.innerHTML = `
     <div class="dio-skills-toolbar">
       <input type="search" data-skills-search value="${esc(skillsQuery)}" placeholder="Find a skill…">
       <select data-skills-state>
-        <option value="all" ${skillsState === 'all' ? 'selected' : ''}>All</option>
-        <option value="active" ${skillsState === 'active' ? 'selected' : ''}>Active</option>
-        <option value="archived" ${skillsState === 'archived' ? 'selected' : ''}>Retrieval archive</option>
+        <option value="active" ${skillsState === 'active' ? 'selected' : ''}>Hermes active (${activeCount})</option>
+        <option value="recent" ${skillsState === 'recent' ? 'selected' : ''}>Recent library</option>
+        <option value="library" ${skillsState === 'library' ? 'selected' : ''}>Indexed library (${libraryCount})</option>
       </select>
-      <span>${skills.length} shown</span>
+      <span>${skills.length} shown · ${activeCount} active · ${libraryCount} indexed</span>
     </div>
+    <p class="dio-skills-context">${esc(context)}</p>
     <p class="dio-skills-note">${esc(skillsReport?.watcher_contract || '')}</p>
     <div class="dio-skills-list">
       ${skills.map((skill) => `
         <article>
           <div>
-            <strong>${esc(skill.name)}</strong>${statusBadge(skill.state)}
+            <strong>${esc(skill.name)}</strong>${statusBadge(skill.state === 'active' ? 'enabled' : 'indexed')}
             <p>${esc(skill.description || '')}</p>
             <code>${esc(skill.modified_at || '')} · ${esc(skill.source || '')}</code>
           </div>
           <div>
-            ${skill.state === 'active' ? `
-              <button type="button" data-skill-action="edit" data-skill="${esc(skill.skill_id)}">Zed</button>
-              <button type="button" data-skill-action="archive" data-skill="${esc(skill.skill_id)}">Archive</button>`
-              : `<button type="button" data-skill-action="restore" data-skill="${esc(skill.skill_id)}">Restore</button>`}
+            ${skill.editable
+              ? `<button type="button" data-skill-action="edit" data-skill="${esc(skill.skill_id)}">Zed</button>`
+              : ''}
           </div>
         </article>`).join('')}
     </div>`;

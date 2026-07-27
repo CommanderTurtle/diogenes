@@ -694,9 +694,12 @@ def _docker_networks() -> list[dict[str, Any]]:
 def _status(
     expected_services: list[str],
     containers: list[dict[str, Any]],
+    *,
+    one_shot_services: set[str] | None = None,
 ) -> tuple[str, str]:
     if not containers:
         return "stopped", "No project containers exist."
+    declared_one_shots = one_shot_services or set()
     running = [
         container
         for container in containers
@@ -707,11 +710,23 @@ def _status(
     running_services = {
         str(container.get("service") or "") for container in running
     }
-    missing = set(expected_services) - running_services
+    completed_one_shots = {
+        str(container.get("service") or "")
+        for container in containers
+        if (
+            str(container.get("service") or "") in declared_one_shots
+            and container.get("state") == "exited"
+            and container.get("exit_code") == 0
+        )
+    }
+    missing = set(expected_services) - running_services - completed_one_shots
     non_running = [
         container
         for container in containers
-        if container.get("state") != "running"
+        if (
+            container.get("state") != "running"
+            and str(container.get("service") or "") not in completed_one_shots
+        )
     ]
     if missing or non_running:
         return "partial", "Only part of the Compose project is running."
@@ -737,7 +752,25 @@ def _project_payload(
     *,
     roots: tuple[Path, ...],
 ) -> dict[str, Any]:
-    status, summary = _status(config["services"], containers)
+    raw_services = (
+        config.get("raw", {}).get("services")
+        if isinstance(config.get("raw"), dict)
+        and isinstance(config.get("raw", {}).get("services"), dict)
+        else {}
+    )
+    one_shot_services = {
+        str(name)
+        for name, service in raw_services.items()
+        if (
+            isinstance(service, dict)
+            and str(service.get("restart") or "").strip().lower() == "no"
+        )
+    }
+    status, summary = _status(
+        config["services"],
+        containers,
+        one_shot_services=one_shot_services,
+    )
     ports: list[dict[str, Any]] = []
     seen_ports: set[tuple[str, int, str]] = set()
     for container in containers:
@@ -1229,8 +1262,12 @@ class DockerProjectControl:
     def __init__(self, root: Path | None = None) -> None:
         self.root = (
             root
-            or Path(os.environ.get("ULYSSES_CONTROL_DIR") or DATA_DIR)
-            / "ulysses"
+            or Path(
+                os.environ.get("DIOGENES_CONTROL_DIR")
+                or os.environ.get("ULYSSES_CONTROL_DIR")
+                or DATA_DIR
+            )
+            / "diogenes"
         ).resolve()
         self.jobs = RuntimeJobStore(self.root)
 
@@ -1455,8 +1492,12 @@ class DockerResourceControl:
     def __init__(self, root: Path | None = None) -> None:
         self.root = (
             root
-            or Path(os.environ.get("ULYSSES_CONTROL_DIR") or DATA_DIR)
-            / "ulysses"
+            or Path(
+                os.environ.get("DIOGENES_CONTROL_DIR")
+                or os.environ.get("ULYSSES_CONTROL_DIR")
+                or DATA_DIR
+            )
+            / "diogenes"
         ).resolve()
         self.jobs = RuntimeJobStore(self.root)
 

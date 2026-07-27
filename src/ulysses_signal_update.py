@@ -159,7 +159,7 @@ def install_user(destination: Path | None = None) -> dict[str, str]:
         )
     target = requested.resolve()
     target.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix="ulysses-signal-cli-") as temporary:
+    with tempfile.TemporaryDirectory(prefix="diogenes-signal-cli-") as temporary:
         temporary_root = Path(temporary)
         archive = temporary_root / "signal-cli.tar.gz"
         candidate = temporary_root / "signal-cli"
@@ -173,8 +173,8 @@ def install_user(destination: Path | None = None) -> dict[str, str]:
         observed = _version(candidate)
         if not _version_matches(version, observed):
             raise SignalUpdateError("downloaded signal-cli version does not match the release tag")
-        staged = target.parent / f".{target.name}.ulysses-new"
-        previous = target.parent / f".{target.name}.ulysses-previous"
+        staged = target.parent / f".{target.name}.diogenes-new"
+        previous = target.parent / f".{target.name}.diogenes-previous"
         try:
             shutil.copyfile(candidate, staged)
             staged.chmod(0o755)

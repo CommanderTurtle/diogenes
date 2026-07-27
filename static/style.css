@@ -42134,6 +42134,20 @@ details.uly-services-advanced .uly-advanced-section > p {
   opacity: .52;
 }
 
+.dio-skills-context {
+  margin: 0 0 4px;
+  font-size: 9px;
+  line-height: 1.45;
+  opacity: .78;
+}
+
+.dio-skills-note {
+  margin: 0 0 11px;
+  font-size: 8px;
+  line-height: 1.45;
+  opacity: .48;
+}
+
 .dio-section-heading > span,
 .dio-dependency-toolbar > span,
 .dio-skills-toolbar > span {
@@ -42279,6 +42293,7 @@ details.uly-services-advanced .uly-advanced-section > p {
 
 .dio-service-select,
 .dio-port-row,
+.dio-runtime-session,
 .dio-action-row,
 .dio-card-tools {
   display: flex;
@@ -42286,6 +42301,18 @@ details.uly-services-advanced .uly-advanced-section > p {
   flex-wrap: wrap;
   gap: 5px;
   margin-top: 9px;
+}
+
+.dio-runtime-session {
+  min-width: 0;
+  justify-content: space-between;
+  padding: 6px 7px;
+  border: 1px solid color-mix(in srgb, var(--fg) 8%, transparent);
+  border-radius: 6px;
+}
+
+.dio-runtime-session code {
+  flex: 1 1 auto;
 }
 
 .dio-service-select {
@@ -42651,22 +42678,62 @@ details.uly-services-advanced .uly-advanced-section > p {
   font-weight: 500;
 }
 
-.dio-command-history {
+.dio-command-toolbar {
   display: flex;
+  justify-content: flex-end;
   gap: 5px;
-  overflow-x: auto;
+  padding: 6px 8px;
+  border-top: 1px solid color-mix(in srgb, var(--fg) 7%, transparent);
+}
+
+.dio-command-toolbar button {
+  min-height: 25px;
+  padding: 3px 7px;
+  border: 1px solid color-mix(in srgb, var(--fg) 14%, transparent);
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 8px;
+  cursor: pointer;
+}
+
+.dio-command-toolbar button:hover {
+  border-color: color-mix(in srgb, var(--accent, var(--red)) 48%, transparent);
+  background: color-mix(in srgb, var(--accent, var(--red)) 8%, transparent);
+}
+
+.dio-command-history {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 5px;
+  max-height: 138px;
+  overflow: auto;
   padding: 7px 8px;
   border-top: 1px solid color-mix(in srgb, var(--fg) 7%, transparent);
 }
 
 .dio-command-history button {
-  min-width: 120px;
+  min-width: 0;
   padding: 6px;
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
   align-items: center;
-  justify-content: space-between;
   gap: 6px;
   font-size: 8px;
+  text-align: left;
+}
+
+.dio-command-history button > span:first-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dio-command-history time {
+  font: 7px/1.2 var(--mono, monospace);
+  opacity: .45;
 }
 
 .dio-command-history button.active {
@@ -42675,6 +42742,8 @@ details.uly-services-advanced .uly-advanced-section > p {
 
 .dio-command-output pre {
   margin: 0 8px 8px;
+  min-height: 96px;
+  scroll-behavior: smooth;
 }
 
 .dio-inline-error {

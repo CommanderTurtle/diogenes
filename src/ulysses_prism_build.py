@@ -139,6 +139,7 @@ def cmake_configure_argv(
         "-G",
         "Ninja",
         "-DGGML_CUDA=ON",
+        "-DGGML_CUDA_FA_ALL_QUANTS=ON",
         f"-DCMAKE_CUDA_COMPILER={compiler}",
         f"-DCMAKE_CUDA_ARCHITECTURES={provider.cuda_architecture}",
         "-DCMAKE_BUILD_TYPE=Release",

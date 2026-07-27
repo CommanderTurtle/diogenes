@@ -31,7 +31,7 @@ def test_candidate_compose_pins_image_and_mounts_active_data_path():
     )[0]
 
     assert "chromadb/chroma@sha256:" in chroma_service
-    assert "chromadb-data:/data" in chroma_service
+    assert "${APP_DATA_DIR:-./data}/chromadb:/data:z" in chroma_service
     assert "chromadb-data:/chroma/chroma" not in chroma_service
 
 

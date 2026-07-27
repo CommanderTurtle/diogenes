@@ -54,7 +54,7 @@ def test_explicit_background_choice_is_used_on_login() -> None:
     assert "obj.bgPattern = opts.bgPattern || 'none';" in theme
 
 
-def test_services_window_preserves_agent_and_mcp_boundaries() -> None:
+def test_services_window_has_four_bounded_host_management_views() -> None:
     services = _read("static/js/ulyssesServices.js")
     index = _read("static/index.html")
     app = _read("static/app.js")
@@ -64,54 +64,35 @@ def test_services_window_preserves_agent_and_mcp_boundaries() -> None:
     assert "ulyssesServicesModule.init(API_BASE);" in app
     assert "'/services': () =>" in app
 
-    assert "Diogenes agent" in services
-    assert "Hermes agent" in services
-    assert "Settings → Integrations" in services
-    assert "never copies or merges" in services
-    assert "/api/odysseus/topology" in services
-    assert "/api/odysseus/chroma/persistence" in services
-    assert "/api/odysseus/hermes/adoption" in services
-    assert "/api/odysseus/hermes/stack" in services
-    assert "/api/odysseus/readiness" in services
-    assert "Diogenes never relocates Hermes into its own virtual environment" in services
-    assert "authenticated management view shows each configured command" in services
-    assert (
-        "Ɗiogenēs observes the committed MCP, plugin, hook, workflow, and skill policy"
-        in services
-    )
+    for tab in ("docker", "interactive", "dependencies", "sandwich"):
+        assert f'data-tab="{tab}"' in services
+    assert "/api/odysseus/docker/projects" in services
+    assert "/api/odysseus/runtimes" in services
+    assert "/api/odysseus/sandwich" in services
+    assert 'id="tool-hermes-workspace-link"' in index
+    assert 'id="tool-n8n-link"' in index
+    assert 'id="tool-skills-auditor-btn"' in index
+    assert "/api/odysseus/skills/audit" in services
 
 
 def test_services_window_uses_planned_confirmed_runtime_jobs() -> None:
     services = _read("static/js/ulyssesServices.js")
 
-    assert "Persistence safeguards" in services
-    assert "Apply unavailable" not in services
-    assert "Adopt native Hermes in place" in services
-    assert "Create plan" in services
-    assert "Confirm lifecycle plan" in services
-    assert "/api/odysseus/hermes/jobs/plan" in services
+    assert "/api/odysseus/runtimes/jobs/plan" in services
+    assert "/api/odysseus/docker/jobs/plan" in services
+    assert "/api/odysseus/docker/resources/jobs/plan" in services
+    assert "/api/odysseus/sandwich/jobs/plan" in services
     assert "/api/odysseus/hermes/stack/jobs/plan" in services
-    assert "Apply orchestration" in services
-    assert "Confirm Hermes orchestration" in services
     assert "/api/odysseus/jobs/${encodeURIComponent(job.id)}/execute" in services
     assert "/api/odysseus/jobs/${encodeURIComponent(jobId)}/log" in services
-    assert "The operator controls the maintenance-window stop" in services
-    assert "Python and GPU runtime" in services
+    assert "confirmation_token: planned.confirmation_token" in services
     assert "method: 'POST'" in services
     assert "method: 'PUT'" in services
     assert "expected_sha256" in services
-    assert "SAVE ${runtimeId} CONFIG" in services
-    assert "!document.revealed && (document.secret_keys || []).length" in services
-    assert "Validate & save" in services
-    assert "dependencies_unavailable" in services
-    assert "active_dependents" in services
-    assert "item.action_details" in services
-    assert "aria-disabled=\"true\"" in services
-    assert "runtimeStateFacets" in services
-    assert "Update is gated." in services
-    assert "Native model runtimes" in services
-    assert "Copy WSL/CUDA launch" in services
-    assert "data-copy-cuda-launch" in services
+    assert "SAVE ${owner} CONFIG" in services
+    assert "STOP DIOGENES SESSIONS" in services
+    assert "Clear completed" in services
+    assert "Jump to latest" in services
     assert "method: 'DELETE'" not in services
     assert "arbitrary shell command" not in services
 
@@ -120,11 +101,13 @@ def test_services_exposes_project_files_zed_and_managed_active_sessions() -> Non
     services = _read("static/js/ulyssesServices.js")
     running = _read("static/js/cookbookRunning.js")
 
-    assert "Open in Zed" in services
-    assert "Create start/config" in services
-    assert "data-runtime-document-select" in services
-    assert "data-runtime-editor" in services
-    assert "Validate & save" in services
+    assert 'data-tab="interactive"' in services
+    assert "data-stop-interactive" in services
+    assert "data-expand-owner" in services
+    assert "data-document-picker" in services
+    assert "data-save-document" in services
+    assert "data-load-log" in services
+    assert "Zed" in services
     assert "/api/odysseus/runtimes" in running
     assert "Managed services" in running
     assert "data-managed-service-log" in running
@@ -153,11 +136,14 @@ def test_cookbook_extras_include_native_sandwich_installation() -> None:
 def test_services_exposes_native_sandwich_lifecycle() -> None:
     services = _read("static/js/ulyssesServices.js")
 
-    assert "renderSandwichControl" in services
+    assert "renderSandwich" in services
     assert "/api/odysseus/sandwich" in services
     assert "/api/odysseus/sandwich/jobs/plan" in services
-    assert "Plan Sandwich action" in services
-    assert "It never installs a system Node runtime." in services
+    assert 'data-sandwich-action="hermes-update"' in services
+    assert 'data-sandwich-action="system-update"' in services
+    assert 'data-sandwich-action="audit"' in services
+    assert 'data-sandwich-action="self-update"' in services
+    assert "Bun compatibility and host maintenance." in services
 
 
 def test_native_engine_source_failures_are_specific() -> None:
