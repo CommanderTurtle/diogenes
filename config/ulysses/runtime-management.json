@@ -267,20 +267,33 @@
       "config_files": [
         {"path": "start.sh", "format": "shell"},
         {"path": "run.sh", "format": "shell"},
+        {"path": "stop.sh", "format": "shell"},
         {"path": "update.sh", "format": "shell"}
       ],
       "bootstrap_files": [
         {
           "path": ".env",
           "mode": "0600",
-          "content": "# Hermes Workspace local-only defaults\nHOST=127.0.0.1\nPORT=3003\nHERMES_API_URL=http://127.0.0.1:8642\nHERMES_DASHBOARD_URL=http://127.0.0.1:9119\nCOOKIE_SECURE=0\nVITE_HERMESWORLD_ENABLED=0\nVITE_PLAYGROUND_WS_URL=\nVITE_PLAYGROUND_STATS_URL=\n"
+          "content": "# Hermes Workspace trusted WSL/LAN defaults\nHOST=0.0.0.0\nPORT=3003\nNODE_ENV=production\nHERMES_HOME=${HOME}/.hermes\nHERMES_API_URL=http://127.0.0.1:8642\nHERMES_DASHBOARD_URL=http://127.0.0.1:9119\nHERMES_WORKSPACE_AUTO_START_AGENT=false\nHERMES_ALLOW_INSECURE_REMOTE=1\nCOOKIE_SECURE=0\nTRUST_PROXY=0\nVITE_HERMESWORLD_ENABLED=0\nVITE_PLAYGROUND_WS_URL=\nVITE_PLAYGROUND_STATS_URL=\nNEXT_PUBLIC_PING_URL=\nHERMES_SWARM_MEMORY_ROOT=${HOME}/Hermes/hermes-workspace\nHERMES_SWARM_DEFAULT_MODEL=compute1/Agents-A1-GPTQ-INT4-Sym\nVITE_HERMES_SWARM_DEFAULT_MODEL=compute1/Agents-A1-GPTQ-INT4-Sym\nHERMES_SWARM_BIFROST_BASE_URL=http://127.0.0.1:7999/v1\nHERMES_SWARM_BIFROST_MODEL=nvidia/minimaxai/minimax-m3\nHERMES_SWARM_BIFROST_VIRTUAL_KEY=\n"
+        },
+        {
+          "path": "start.sh",
+          "mode": "0755",
+          "content": "#!/usr/bin/env bash\nset -Eeuo pipefail\nROOT=\"$(cd -- \"$(dirname -- \"${BASH_SOURCE[0]}\")\" && pwd -P)\"\ncd \"$ROOT\"\nif [[ -f .env ]]; then\n  set -a\n  source .env\n  set +a\nfi\nexport BUN_INSTALL=\"${BUN_INSTALL:-$HOME/.bun}\"\nexport PATH=\"$HOME/.local/bin:$BUN_INSTALL/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\"\nexport HERMES_HOME=\"${HERMES_HOME:-$HOME/.hermes}\"\nexport HOST=\"${HOST:-0.0.0.0}\"\nexport PORT=\"${PORT:-3003}\"\nexport HERMES_API_URL=\"${HERMES_API_URL:-http://127.0.0.1:8642}\"\nexport HERMES_DASHBOARD_URL=\"${HERMES_DASHBOARD_URL:-http://127.0.0.1:9119}\"\nworkspace_pid=\"\"\ndashboard_pid=\"\"\ndashboard_owned=false\ncleanup() {\n  trap - EXIT INT TERM HUP\n  if [[ -n \"$workspace_pid\" ]] && kill -0 \"$workspace_pid\" 2>/dev/null; then kill \"$workspace_pid\" 2>/dev/null || true; wait \"$workspace_pid\" 2>/dev/null || true; fi\n  if [[ \"$dashboard_owned\" == true ]] && [[ -n \"$dashboard_pid\" ]] && kill -0 \"$dashboard_pid\" 2>/dev/null; then kill \"$dashboard_pid\" 2>/dev/null || true; wait \"$dashboard_pid\" 2>/dev/null || true; fi\n}\ntrap cleanup EXIT INT TERM HUP\nif ! curl -fsS --max-time 2 \"$HERMES_API_URL/health\" >/dev/null 2>&1; then\n  printf 'Hermes gateway is unavailable at %s; refusing to create a duplicate gateway.\\n' \"$HERMES_API_URL\" >&2\n  exit 1\nfi\nif ! curl -fsS --max-time 2 \"$HERMES_DASHBOARD_URL/api/status\" >/dev/null 2>&1; then\n  hermes dashboard --host 127.0.0.1 --port 9119 --no-open &\n  dashboard_pid=$!\n  dashboard_owned=true\n  for _ in {1..60}; do\n    if curl -fsS --max-time 2 \"$HERMES_DASHBOARD_URL/api/status\" >/dev/null 2>&1; then break; fi\n    if ! kill -0 \"$dashboard_pid\" 2>/dev/null; then printf 'Hermes dashboard exited before becoming ready.\\n' >&2; exit 1; fi\n    sleep 1\n  done\nfi\nif ! curl -fsS --max-time 2 \"$HERMES_DASHBOARD_URL/api/status\" >/dev/null 2>&1; then printf 'Hermes dashboard did not become ready.\\n' >&2; exit 1; fi\nif [[ ! -f dist/server/server.js ]]; then bun run build; fi\nprintf 'Starting Hermes Workspace at http://%s:%s\\n' \"$HOST\" \"$PORT\"\nbun server-entry.js &\nworkspace_pid=$!\nwait \"$workspace_pid\"\n"
         },
         {
           "path": "run.sh",
           "mode": "0755",
-          "content": "#!/usr/bin/env bash\nset -Eeuo pipefail\nROOT=\"$(cd -- \"$(dirname -- \"${BASH_SOURCE[0]}\")\" && pwd -P)\"\ncd \"$ROOT\"\nif [[ -f .env ]]; then\n  set -a\n  source .env\n  set +a\nfi\nHERMES_HOME=\"${HERMES_HOME:-$HOME/.hermes}\"\nif [[ -z ${HERMES_API_TOKEN:-} && -r \"$HERMES_HOME/.env\" ]]; then\n  HERMES_API_TOKEN=\"$(sed -n 's/^API_SERVER_KEY=//p' \"$HERMES_HOME/.env\" | tail -n 1)\"\n  HERMES_API_TOKEN=\"${HERMES_API_TOKEN%\\\"}\"\n  HERMES_API_TOKEN=\"${HERMES_API_TOKEN#\\\"}\"\n  export HERMES_API_TOKEN\nfi\nexec bun server-entry.js\n"
+          "content": "#!/usr/bin/env bash\nset -Eeuo pipefail\nROOT=\"$(cd -- \"$(dirname -- \"${BASH_SOURCE[0]}\")\" && pwd -P)\"\nexec \"$ROOT/start.sh\"\n"
+        },
+        {
+          "path": "stop.sh",
+          "mode": "0755",
+          "content": "#!/usr/bin/env bash\nset -Eeuo pipefail\nSESSION=\"${HERMES_WORKSPACE_TMUX:-diogenes-hermes-workspace}\"\nif tmux has-session -t \"=$SESSION\" 2>/dev/null; then tmux kill-session -t \"=$SESSION\"; printf 'Hermes Workspace stopped (%s).\\n' \"$SESSION\"; else printf 'Hermes Workspace is not running (%s).\\n' \"$SESSION\"; fi\n"
         }
       ],
+      "launch": ["bash", "start.sh"],
+      "tmux_session": "diogenes-hermes-workspace",
       "git_update": true,
       "source_url": "https://github.com/outsourc-e/hermes-workspace.git",
       "source_branch": "main",
@@ -290,7 +303,7 @@
         "label": "Open Hermes Workspace",
         "url": "http://127.0.0.1:3003"
       },
-      "ports": []
+      "ports": [3003]
     },
     {
       "id": "librarian.mcp",

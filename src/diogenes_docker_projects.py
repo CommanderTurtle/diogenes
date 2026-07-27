@@ -48,6 +48,7 @@ from typing import Any, Iterable
 from core.atomic_io import atomic_write_text
 from src.constants import DATA_DIR
 from src.ulysses_jobs import RuntimeJobError, RuntimeJobStore, native_host_environment
+from src.ulysses_runtime_management import load_runtime_management
 
 
 SCHEMA = "diogenes.docker.v2"
@@ -197,6 +198,16 @@ def _discover_project_paths() -> list[tuple[Path, Path]]:
     """Arcane-style bounded discovery with child-project descent stopping."""
 
     projects: dict[str, tuple[Path, Path]] = {}
+    # A repository registered as a non-Docker runtime may still ship an
+    # optional Compose file upstream. Do not duplicate that exact project root
+    # in the Docker inventory; its declared Diogenes lifecycle remains the
+    # source of truth. Descending continues so real nested Compose projects
+    # remain discoverable.
+    non_docker_roots = {
+        os.path.normcase(str(item["root"].resolve()))
+        for item in load_runtime_management()
+        if item.get("category") != "docker"
+    }
     for root in _configured_roots():
         if not root.is_dir() or root.is_symlink():
             continue
@@ -213,7 +224,7 @@ def _discover_project_paths() -> list[tuple[Path, Path]]:
             except OSError:
                 continue
             compose = _detect_compose(resolved)
-            if compose is not None:
+            if compose is not None and identity not in non_docker_roots:
                 projects[os.path.normcase(str(compose))] = (resolved, compose)
                 # Arcane treats a child directory containing Compose as one
                 # project. The configured root remains exempt so a Diogenes

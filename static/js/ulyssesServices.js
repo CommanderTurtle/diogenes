@@ -10,7 +10,12 @@ const SKILLS_MODAL_ID = 'diogenes-skills-auditor-modal';
 const SERVICE_ICON = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="6" rx="2"/><rect x="3" y="14" width="18" height="6" rx="2"/><path d="M7 7h.01M7 17h.01M11 7h7M11 17h7"/></svg>';
 const SKILLS_ICON = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h16v16H4z"/><path d="M8 9h8M8 13h5"/><path d="m15 16 1.5 1.5L20 14"/></svg>';
 const TERMINAL = new Set(['succeeded', 'failed', 'cancelled']);
-const INTERACTIVE_IDS = new Set(['camofox.browser', 'bifrost.gateway', 'signal.cli']);
+const INTERACTIVE_IDS = new Set([
+  'camofox.browser',
+  'bifrost.gateway',
+  'signal.cli',
+  'hermes.workspace',
+]);
 const DEPENDENCY_ACTIONS = [
   ['install', 'Install'],
   ['update', 'Update'],
@@ -503,7 +508,7 @@ function renderInteractive() {
   const managedCount = runtimes.filter((value) => value.tmux?.managed).length;
   return `
     <div class="dio-section-heading">
-      <div><h3>Interactive processes</h3><p>Camofox, Bifrost, and signal-cli run in owned tmux sessions.</p></div>
+      <div><h3>Interactive processes</h3><p>Camofox, Bifrost, signal-cli, and Hermes Workspace run in owned tmux sessions.</p></div>
       <button type="button" data-stop-interactive ${managedCount ? '' : 'disabled'}>
         Stop all${managedCount ? ` (${managedCount})` : ''}
       </button>
