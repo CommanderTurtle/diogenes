@@ -77,8 +77,8 @@
       "default_profile": "rtx5090-faithful-conservative",
       "profiles": {
         "rtx5090-high-ram": {
-          "label": "RTX 5090 · 56 GB spillover",
-          "description": "Explicit 56 GB host-cache comparison for the grouped-int4 checkpoint. Use it only when WSL can really lend that memory without sustained swap pressure. CUDA dense/attention stays resident, pipe2 and W4A16 accelerate the resident/prefill paths, exact routing stays on, and the 17 GB expert tier leaves the documented 2 GB CUDA reserve.",
+          "label": "RTX 5090 · 56 GB host-RAM A/B",
+          "description": "Optional 56 GB system-RAM cache comparison for the grouped-int4 checkpoint; this is not VRAM. Use it only when WSL can lend that ordinary host memory without sustained swap pressure. CUDA dense/attention stays resident, pipe2 and W4A16 accelerate the resident/prefill paths, exact routing stays on, and the 17 GB expert tier leaves the documented 2 GB CUDA reserve.",
           "ram": "56",
           "auto_tier": true,
           "ctx": "32768",

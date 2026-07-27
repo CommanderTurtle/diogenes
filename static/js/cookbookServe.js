@@ -1822,7 +1822,7 @@ function _rerenderCachedModels() {
         const _profileCtx = String(_colibriProfile.ctx ?? '4096');
         const _profilePolicy = String(_colibriProfile.policy || 'balanced');
         const _ramHelp = _colibriIsGlm
-          ? 'Host RAM budget for resident experts. The RTX 5090 high-RAM profile uses 56 GB on a 64 GB host.'
+          ? 'Ordinary system-RAM budget for resident experts; this is never VRAM. The selected faithful profile uses 48 GB. The optional 56 GB host-RAM A/B profile is only for runs where WSL can lend that memory without sustained swap pressure.'
           : 'Host RAM budget for resident experts. Set 0 to let the Hy3 auto-tier planner use current free memory.';
         panelHtml += `<div class="hwfit-serve-row hwfit-serve-row-core hwfit-backend-colibri_glm hwfit-backend-colibri_hy3">`;
         panelHtml += `<label>${_l('RAM GB',_ramHelp)}<input type="text" class="hwfit-sf" data-field="colibri_ram" value="${esc(sv('colibri_ram', _profileRam))}" /></label>`;
