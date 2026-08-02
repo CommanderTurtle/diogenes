@@ -11,7 +11,7 @@ from src.ulysses_jobs import RuntimeJobError, RuntimeJobStore
 
 
 class SandwichControl:
-    ACTIONS = {"system-update", "audit", "self-update"}
+    ACTIONS = {"hermes-update", "system-update", "audit", "self-update"}
 
     def __init__(self, root: Path | None = None) -> None:
         from src.constants import DATA_DIR
@@ -127,6 +127,22 @@ class SandwichControl:
             ]
             summary = "Update detected Bun projects without pulling Git"
             phrase = "UPDATE JAVASCRIPT SYSTEM"
+        elif action == "hermes-update":
+            steps = [
+                {
+                    "label": "Update pristine Hermes through Sandwich",
+                    "argv": [
+                        str(executable),
+                        "hermes",
+                        "update",
+                        "--backup",
+                        "--yes",
+                    ],
+                    "timeout": 7200,
+                }
+            ]
+            summary = "Back up and update official Hermes through Bun"
+            phrase = "UPDATE HERMES WITH SANDWICH"
         else:
             source = self._diogenes_source()
             steps = [

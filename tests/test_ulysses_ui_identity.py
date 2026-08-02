@@ -143,7 +143,9 @@ def test_services_exposes_native_sandwich_lifecycle() -> None:
     assert 'data-sandwich-action="system-update"' in services
     assert 'data-sandwich-action="audit"' in services
     assert 'data-sandwich-action="self-update"' in services
-    assert "Bun compatibility and host maintenance." in services
+    assert "Bun compatibility for native project commands." in services
+    assert "sandwich hermes update" in services
+    assert "data-hermes-update" not in services
 
 
 def test_native_engine_source_failures_are_specific() -> None:

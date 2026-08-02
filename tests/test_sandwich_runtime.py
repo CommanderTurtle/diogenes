@@ -37,7 +37,7 @@ def _write_component(root: Path, *, version: str = "0.3.0") -> Path:
         executable.write_text("#!/bin/sh\n", encoding="utf-8")
         executable.chmod(0o755)
         entrypoints[command] = f"bin/{command}"
-    maintenance = root / "scripts" / "apply-hermes-maintenance.sh"
+    maintenance = root / "scripts" / "update-hermes.sh"
     maintenance.write_text("#!/bin/sh\n", encoding="utf-8")
     maintenance.chmod(0o755)
     (root / "manifest.json").write_text(
@@ -55,16 +55,19 @@ def _write_component(root: Path, *, version: str = "0.3.0") -> Path:
                     },
                     "hermes_check": {
                         "argv": [
-                            "scripts/apply-hermes-maintenance.sh",
+                            "scripts/update-hermes.sh",
                             "--check",
                         ],
                         "mutating": False,
                         "human_confirmation": False,
                     },
-                    "hermes_apply": {
+                    "hermes_update": {
                         "argv": [
-                            "scripts/apply-hermes-maintenance.sh",
-                            "--apply",
+                            "bin/sandwich",
+                            "hermes",
+                            "update",
+                            "--backup",
+                            "--yes",
                         ],
                         "mutating": True,
                         "human_confirmation": True,
@@ -93,7 +96,7 @@ def test_standalone_manifest_is_valid_and_mutations_are_human_gated(tmp_path):
 
     assert manifest.version == "0.3.0"
     assert manifest.operations["hermes_check"].mutating is False
-    assert manifest.operations["hermes_apply"].maintenance_window is True
+    assert manifest.operations["hermes_update"].maintenance_window is True
     assert all(
         not operation.mutating or operation.human_confirmation
         for operation in manifest.operations.values()
@@ -130,7 +133,7 @@ def test_operation_specs_resolve_only_standalone_executables(tmp_path):
         / "Hermes"
         / "sandwich"
         / "scripts"
-        / "apply-hermes-maintenance.sh"
+        / "update-hermes.sh"
     ).resolve()
     assert executable.is_relative_to(layout.component_root)
     assert spec.argv[1:] == ("--check",)

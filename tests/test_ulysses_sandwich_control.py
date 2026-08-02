@@ -31,3 +31,30 @@ def test_audit_plan_targets_configured_microservices_root(
         "src.diogenes_javascript_maintenance",
         "audit",
     ]
+
+
+def test_hermes_update_is_one_sandwich_command(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    services = tmp_path / "services"
+    monkeypatch.setenv("ULYSSES_MICROSERVICES_ROOT", str(services))
+    executable = services / "sandwich" / "bin" / "sandwich"
+    executable.parent.mkdir(parents=True)
+    executable.write_text("", encoding="utf-8")
+    control = SandwichControl(tmp_path / "state")
+
+    plan, _token = control.create_plan(
+        {"ready": True, "installed_version": "0.5.0"},
+        action="hermes-update",
+    )
+
+    assert plan["confirmation_phrase"] == "UPDATE HERMES WITH SANDWICH"
+    assert len(plan["steps"]) == 1
+    assert plan["steps"][0]["argv"] == [
+        str(executable),
+        "hermes",
+        "update",
+        "--backup",
+        "--yes",
+    ]

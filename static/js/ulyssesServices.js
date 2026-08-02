@@ -625,14 +625,15 @@ function renderSandwich() {
     <details class="dio-dependency-files">
       <summary>Native commands</summary>
       <div class="dio-dependency-copy">
-        <p><code>hermes update</code>Canonical Hermes update; Sandwich preserves its Bun integration internally.</p>
+        <p><code>sandwich hermes update</code>Back up and update official Hermes through external Bun command shims. Hermes source stays pristine.</p>
+        <p><code>sandwich hermes check</code>Verify the official checkout has no local source changes.</p>
         <p><code>sandwich doctor</code>Verify Bun and every Node-compatible command shim.</p>
         <p><code>sandwich audit</code>Report foreign JavaScript runtimes without changing them.</p>
       </div>
     </details>
     <div class="dio-maintenance-grid">
-      <button type="button" data-hermes-update>
-        <strong>Hermes update</strong><span>Run the canonical Hermes update with Sandwich preflight and backup.</span>
+      <button type="button" data-sandwich-action="hermes-update">
+        <strong>Hermes update</strong><span>Back up and update pristine Hermes through Sandwich.</span>
       </button>
       <button type="button" data-sandwich-action="system-update">
         <strong>System update</strong><span>Audit and update detected Bun projects; pull no Git repositories.</span>
@@ -1012,14 +1013,6 @@ function handleServicesClick(event) {
   }
   const containerLog = event.target.closest('[data-docker-container-log]');
   if (containerLog) return loadDockerContainerLog(containerLog.dataset.dockerContainerLog);
-  const hermesUpdate = event.target.closest('[data-hermes-update]');
-  if (hermesUpdate) {
-    return executePlan(
-      '/api/odysseus/hermes/jobs/plan',
-      { action: 'update' },
-      { danger: true },
-    );
-  }
   const sandwichAction = event.target.closest('[data-sandwich-action]');
   if (sandwichAction) return planSandwichAction(sandwichAction.dataset.sandwichAction);
   const expandOwner = event.target.closest('[data-expand-owner]');

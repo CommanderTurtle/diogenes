@@ -107,6 +107,31 @@ def test_unadopted_hermes_cannot_create_a_lifecycle_plan(tmp_path: Path) -> None
         control.create_lifecycle_plan(_report(tmp_path), action="restart")
 
 
+def test_unadopted_update_routes_only_to_sandwich(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    sandwich_root = tmp_path / "sandwich"
+    executable = sandwich_root / "bin" / "sandwich"
+    executable.parent.mkdir(parents=True)
+    executable.touch()
+    monkeypatch.setenv("ULYSSES_SANDWICH_ROOT", str(sandwich_root))
+
+    plan, _token = HermesControl(tmp_path / "control").create_lifecycle_plan(
+        _report(tmp_path),
+        action="update",
+    )
+
+    assert len(plan["steps"]) == 1
+    assert plan["steps"][0]["argv"] == [
+        str(executable),
+        "hermes",
+        "update",
+        "--backup",
+        "--yes",
+    ]
+
+
 def _adopt(control: HermesControl, report: dict) -> None:
     control.apply_adoption(
         report,

@@ -200,41 +200,31 @@ class HermesControl:
                 *common_health,
             ]
         if action == "update":
-            sandwich_root = (
-                Path(
+            configured = os.environ.get("ULYSSES_SANDWICH_ROOT", "").strip()
+            if configured:
+                sandwich_root = Path(configured).expanduser().resolve()
+            else:
+                services_root = Path(
                     os.environ.get("ULYSSES_MICROSERVICES_ROOT")
                     or Path.home() / "Hermes"
-                )
-                / "sandwich"
-            ).resolve()
-            preflight = sandwich_root / "scripts" / "apply-hermes-maintenance.sh"
-            refresh = sandwich_root / "scripts" / "refresh-hermes-artifacts.sh"
-            if not preflight.is_file():
-                raise RuntimeJobError("Sandwich Hermes preflight is unavailable")
-            steps = [
+                ).expanduser()
+                sandwich_root = (services_root / "sandwich").resolve()
+            sandwich = sandwich_root / "bin" / "sandwich"
+            if not sandwich.is_file():
+                raise RuntimeJobError("Sandwich Hermes updater is unavailable")
+            return [
                 {
-                    "label": "Run Sandwich Hermes preflight",
-                    "argv": [str(preflight), "--check", "--allow-active"],
-                    "timeout": 120,
-                },
-                {
-                    "label": "Back up and update Hermes",
-                    "argv": [executable, "update", "--backup", "--yes"],
-                    "cwd": identity["source_root"],
-                    "timeout": 1800,
+                    "label": "Update pristine Hermes through Sandwich",
+                    "argv": [
+                        str(sandwich),
+                        "hermes",
+                        "update",
+                        "--backup",
+                        "--yes",
+                    ],
+                    "timeout": 7200,
                 },
             ]
-            if refresh.is_file():
-                steps.append(
-                    {
-                        "label": "Refresh commit-pinned Sandwich artifacts",
-                        "argv": [str(refresh)],
-                        "environment": {"HERMES_UPSTREAM_REF": "origin/main"},
-                        "timeout": 120,
-                        "allow_failure": True,
-                    }
-                )
-            return [*steps, *common_health]
         raise RuntimeJobError(f"unsupported Hermes lifecycle action: {action}")
 
     def create_lifecycle_plan(
@@ -245,7 +235,7 @@ class HermesControl:
     ) -> tuple[dict[str, Any], str]:
         if action not in ALLOWED_ACTIONS:
             raise RuntimeJobError("unsupported Hermes lifecycle action")
-        if not self.adoption_status(report)["current"]:
+        if action != "update" and not self.adoption_status(report)["current"]:
             raise RuntimeJobError("Hermes must be adopted before lifecycle control")
         label = action.capitalize()
         return self.jobs.create_plan(
