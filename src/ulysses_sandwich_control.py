@@ -4,15 +4,14 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-import shutil
 import sys
 from typing import Any
 
-from src.ulysses_jobs import RuntimeJobError, RuntimeJobStore, native_host_environment
+from src.ulysses_jobs import RuntimeJobError, RuntimeJobStore
 
 
 class SandwichControl:
-    ACTIONS = {"hermes-update", "system-update", "audit", "self-update"}
+    ACTIONS = {"system-update", "audit", "self-update"}
 
     def __init__(self, root: Path | None = None) -> None:
         from src.constants import DATA_DIR
@@ -47,14 +46,6 @@ class SandwichControl:
         if not path.is_absolute():
             raise RuntimeJobError("ULYSSES_SANDWICH_ROOT must be absolute")
         return path.resolve()
-
-    @staticmethod
-    def _binary(name: str, fallback: Path) -> str:
-        found = shutil.which(name, path=native_host_environment()["PATH"])
-        path = Path(found) if found else fallback
-        if not path.is_file():
-            raise RuntimeJobError(f"{name} is not installed on the host PATH")
-        return str(path.absolute())
 
     @staticmethod
     def _diogenes_source() -> Path:
@@ -136,46 +127,6 @@ class SandwichControl:
             ]
             summary = "Update detected Bun projects without pulling Git"
             phrase = "UPDATE JAVASCRIPT SYSTEM"
-        elif action == "hermes-update":
-            hermes = self._binary(
-                "hermes",
-                Path.home() / ".local" / "bin" / "hermes",
-            )
-            reconcile = sandwich / "scripts" / "reconcile-hermes-runtime.sh"
-            if not reconcile.is_file():
-                raise RuntimeJobError(
-                    f"Sandwich Hermes helper is missing: {reconcile}"
-                )
-            steps = [
-                {
-                    "label": "Update Hermes canonically",
-                    "argv": [hermes, "update", "--no-backup", "--yes"],
-                    "cwd": str(Path.home() / ".hermes" / "hermes-agent"),
-                    "timeout": 3600,
-                },
-                {
-                    "label": "Reconcile frozen Hermes Bun workspaces",
-                    "argv": [str(reconcile)],
-                    "timeout": 1800,
-                },
-                {
-                    "label": "Restart Hermes gateway",
-                    "argv": [hermes, "gateway", "restart"],
-                    "timeout": 300,
-                },
-                {
-                    "label": "Check Hermes gateway",
-                    "argv": [hermes, "gateway", "status"],
-                    "timeout": 120,
-                },
-                {
-                    "label": "Run Hermes deep health check",
-                    "argv": [hermes, "status", "--deep"],
-                    "timeout": 300,
-                },
-            ]
-            summary = "Update, reconcile, and restart Hermes"
-            phrase = "UPDATE HERMES"
         else:
             source = self._diogenes_source()
             steps = [

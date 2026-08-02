@@ -618,13 +618,21 @@ function renderSandwich() {
   const root = sandwichReport?.source_root || sandwichReport?.expected_root || '';
   return `
     <div class="dio-section-heading">
-      <div><h3>Sandwich</h3><p>Bun compatibility and host maintenance.</p></div>
+      <div><h3>Sandwich</h3><p>Bun compatibility for native project commands.</p></div>
       ${statusBadge(ready ? 'ready' : 'not installed')}
     </div>
     ${root ? `<code class="dio-root-line">${esc(root)}</code>` : ''}
+    <details class="dio-dependency-files">
+      <summary>Native commands</summary>
+      <div class="dio-dependency-copy">
+        <p><code>hermes update</code>Canonical Hermes update; Sandwich preserves its Bun integration internally.</p>
+        <p><code>sandwich doctor</code>Verify Bun and every Node-compatible command shim.</p>
+        <p><code>sandwich audit</code>Report foreign JavaScript runtimes without changing them.</p>
+      </div>
+    </details>
     <div class="dio-maintenance-grid">
-      <button type="button" data-sandwich-action="hermes-update">
-        <strong>Hermes update</strong><span>Back up, update, reconcile, restart, and health-check Hermes.</span>
+      <button type="button" data-hermes-update>
+        <strong>Hermes update</strong><span>Run the canonical Hermes update with Sandwich preflight and backup.</span>
       </button>
       <button type="button" data-sandwich-action="system-update">
         <strong>System update</strong><span>Audit and update detected Bun projects; pull no Git repositories.</span>
@@ -1004,6 +1012,14 @@ function handleServicesClick(event) {
   }
   const containerLog = event.target.closest('[data-docker-container-log]');
   if (containerLog) return loadDockerContainerLog(containerLog.dataset.dockerContainerLog);
+  const hermesUpdate = event.target.closest('[data-hermes-update]');
+  if (hermesUpdate) {
+    return executePlan(
+      '/api/odysseus/hermes/jobs/plan',
+      { action: 'update' },
+      { danger: true },
+    );
+  }
   const sandwichAction = event.target.closest('[data-sandwich-action]');
   if (sandwichAction) return planSandwichAction(sandwichAction.dataset.sandwichAction);
   const expandOwner = event.target.closest('[data-expand-owner]');
