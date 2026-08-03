@@ -42,7 +42,7 @@ class TTSService:
         self.cache_dir = Path(cache_dir)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self._kokoro = None  # lazy-init
-        
+
         try:
             self.max_cache_bytes = int(os.getenv("ODYSSEUS_TTS_CACHE_MAX_BYTES", 500 * 1024 * 1024))
         except ValueError:
