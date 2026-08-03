@@ -93,7 +93,7 @@ searchable without bloating the always-active Hermes skill set.
 
 The in-house [Librarian MCP](https://github.com/CommanderTurtle/librarian) can delegate a focused lookup to a second model
 process, search disk-backed context, and return the relevant material to the
-calling model. [Retrieval](https://github.com/CommanderTurtle/retrieval), [Codebase Memory MCP](https://github.com/DeusData/codebase-memory-mcp), [Context Mode MCP](https://github.com/CommanderTurtle/context-mode), and the
+calling model. [Retrieval](https://github.com/CommanderTurtle/retrieval), [Codebase Memory MCP](https://github.com/DeusData/codebase-memory-mcp), [Context Mode's native Hermes integration](https://github.com/mksglu/context-mode/pull/1010), and the
 context-saving integrations are wired alongside [Hermes Workspace](https://github.com/outsourc-e/hermes-workspace) orchestration,
 allowing agents to work from task sheets and pursue defined background goals
 **without merging** the Odysseus and Hermes agents or their MCP registries.

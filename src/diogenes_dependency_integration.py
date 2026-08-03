@@ -115,9 +115,9 @@ def _git_revision(root: Path) -> str:
 SOURCE_ARTIFACTS: dict[str, tuple[str, ...]] = {
     "context.mode.mcp": (
         "server.bundle.mjs",
-        ".hermes-plugin/README.md",
-        ".hermes-plugin/__init__.py",
-        ".hermes-plugin/plugin.yaml",
+        "cli.bundle.mjs",
+        "__init__.py",
+        "plugin.yaml",
         "skills/context-mode/SKILL.md",
         "skills/ctx-doctor/SKILL.md",
         "skills/ctx-index/SKILL.md",
@@ -390,7 +390,7 @@ def _ensure_mcp(profile: str, name: str, expected: dict[str, Any]) -> None:
     _hermes(profile, "mcp", "test", name, timeout=240)
 
 
-def _mcp_contract(name: str) -> dict[str, Any]:
+def _mcp_contract(name: str, profile: str = "default") -> dict[str, Any]:
     services = _services_root()
     bun = Path.home() / ".bun" / "bin" / "bun"
     if not bun.is_file():
@@ -399,6 +399,10 @@ def _mcp_contract(name: str) -> dict[str, Any]:
         "context-mode": {
             "command": str(bun),
             "args": [str(services / "context-mode" / "server.bundle.mjs")],
+            "env": {
+                "CONTEXT_MODE_PLATFORM": "hermes",
+                "HERMES_HOME": str(_profile_home(profile)),
+            },
             "enabled": True,
         },
         "camofox-mcp": {
@@ -561,9 +565,8 @@ def _mcp_current(profile: str, name: str, expected: dict[str, Any]) -> bool:
 
 
 def _ensure_shared_mcp(name: str) -> None:
-    expected = _mcp_contract(name)
     for profile in _shared_profiles():
-        _ensure_mcp(profile, name, expected)
+        _ensure_mcp(profile, name, _mcp_contract(name, profile))
 
 
 def _links_for_integration(integration: str) -> list[dict[str, Any]]:
@@ -625,10 +628,13 @@ def _ensure_skill_links(integration: str) -> None:
 
 
 def _context_plugin_current() -> bool:
-    source_root = _services_root() / "context-mode" / ".hermes-plugin"
+    source_root = _services_root() / "context-mode"
     for profile in _shared_profiles():
-        target_root = _profile_home(profile) / "plugins" / "hermes-context-mode"
-        for filename in ("README.md", "__init__.py", "plugin.yaml"):
+        enabled = _read_config_value(profile, "plugins.enabled")
+        if not isinstance(enabled, list) or "context-mode" not in enabled:
+            return False
+        target_root = _profile_home(profile) / "plugins" / "context-mode"
+        for filename in ("__init__.py", "plugin.yaml"):
             try:
                 if (target_root / filename).read_bytes() != (
                     source_root / filename
@@ -639,12 +645,52 @@ def _context_plugin_current() -> bool:
     return True
 
 
+def _context_cli_current() -> bool:
+    source = (_services_root() / "context-mode" / "cli.bundle.mjs").resolve()
+    target = Path.home() / ".local" / "bin" / "context-mode"
+    try:
+        return bool(
+            source.is_file()
+            and os.access(source, os.X_OK)
+            and target.is_symlink()
+            and target.resolve(strict=True) == source
+        )
+    except OSError:
+        return False
+
+
+def _ensure_context_cli() -> None:
+    source = (_services_root() / "context-mode" / "cli.bundle.mjs").resolve()
+    if not source.is_file():
+        raise IntegrationError(f"context-mode CLI bundle is missing: {source}")
+    source.chmod(source.stat().st_mode | 0o100)
+    target = Path.home() / ".local" / "bin" / "context-mode"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if target.is_symlink():
+        if target.resolve(strict=False) == source:
+            return
+        raise IntegrationError(
+            f"context-mode CLI link belongs to another source: {target}"
+        )
+    if target.exists():
+        raise IntegrationError(
+            f"context-mode CLI target exists and is not integration-owned: {target}"
+        )
+    target.symlink_to(source)
+    print(f"Context Mode CLI: linked {target} -> {source}.")
+
+
 def _ensure_context_plugin_files() -> None:
-    source_root = _services_root() / "context-mode" / ".hermes-plugin"
+    source_root = _services_root() / "context-mode"
     for profile in _shared_profiles():
-        target_root = _profile_home(profile) / "plugins" / "hermes-context-mode"
+        legacy_root = _profile_home(profile) / "plugins" / "hermes-context-mode"
+        if legacy_root.is_dir():
+            _hermes(profile, "plugins", "disable", "hermes-context-mode")
+            _hermes(profile, "plugins", "remove", "hermes-context-mode")
+            print(f"Hermes {profile} retired context-mode plugin: removed.")
+        target_root = _profile_home(profile) / "plugins" / "context-mode"
         target_root.mkdir(parents=True, exist_ok=True)
-        for filename in ("README.md", "__init__.py", "plugin.yaml"):
+        for filename in ("__init__.py", "plugin.yaml"):
             source = source_root / filename
             if not source.is_file():
                 raise IntegrationError(f"context-mode plugin file is missing: {source}")
@@ -879,6 +925,7 @@ def _integrate_retrieval() -> None:
 
 
 def _integrate_context_mode() -> None:
+    _ensure_context_cli()
     _ensure_shared_mcp("context-mode")
     _ensure_context_plugin_files()
     for profile in _shared_profiles():
@@ -886,7 +933,7 @@ def _integrate_context_mode() -> None:
             profile,
             "plugins",
             "enable",
-            "hermes-context-mode",
+            "context-mode",
             "--allow-tool-override",
         )
     _ensure_skill_links("context-mode")
@@ -1203,9 +1250,8 @@ def _contract_current(
             "retrieval": "retrieval",
             "codebase-memory": "codebase-memory-mcp",
         }[integration]
-        expected = _mcp_contract(mcp_name)
         if not all(
-            _mcp_current(profile, mcp_name, expected)
+            _mcp_current(profile, mcp_name, _mcp_contract(mcp_name, profile))
             for profile in _shared_profiles()
         ):
             return False
@@ -1213,7 +1259,9 @@ def _contract_current(
             integration
         ):
             return False
-        if integration == "context-mode" and not _context_plugin_current():
+        if integration == "context-mode" and not (
+            _context_cli_current() and _context_plugin_current()
+        ):
             return False
         if integration == "retrieval" and not _retrieval_watcher_current():
             return False

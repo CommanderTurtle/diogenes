@@ -16,8 +16,10 @@
     {
       "id": "context-mode",
       "directory": "context-mode",
-      "source": "https://github.com/CommanderTurtle/context-mode.git",
-      "role": "Hermes context protection plugin and MCP"
+      "source": "https://github.com/ildunari/context-mode.git",
+      "branch": "feat/hermes-native-support",
+      "upstream_pr": "https://github.com/mksglu/context-mode/pull/1010",
+      "role": "Native Hermes context protection plugin and MCP"
     },
     {
       "id": "camofox-mcp",
@@ -53,13 +55,13 @@
     ]
   },
   "required_plugins": [
-    "hermes-context-mode"
+    "context-mode"
   ],
   "plugin_files": [
     {
-      "id": "hermes-context-mode",
-      "source": "context-mode/.hermes-plugin",
-      "files": ["README.md", "__init__.py", "plugin.yaml"]
+      "id": "context-mode",
+      "source": "context-mode",
+      "files": ["__init__.py", "plugin.yaml"]
     }
   ],
   "skill_links": [
