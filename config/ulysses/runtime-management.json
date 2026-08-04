@@ -471,6 +471,47 @@
       "ports": []
     },
     {
+      "id": "persephone.control",
+      "label": "Persephone",
+      "category": "javascript",
+      "resource_kind": "repository",
+      "dependency_section": "Agent runtimes",
+      "recommended": true,
+      "capability_group": "agent-control",
+      "role": "Durable local OMP gateway, scheduler, Signal router, and RPC supervisor",
+      "integration": "persephone",
+      "root": "${ULYSSES_MICROSERVICES_ROOT}/persephone",
+      "package_json": "package.json",
+      "env_files": [],
+      "config_files": [
+        {"path": "persephone.config.example.json", "format": "json"},
+        {"path": ".env.example", "format": "text"}
+      ],
+      "git_update": true,
+      "source_url": "https://github.com/CommanderTurtle/persephone.git",
+      "source_branch": "main",
+      "bun_install_mode": "frozen",
+      "setup": {
+        "kind": "shell_script",
+        "value": "scripts/install.sh"
+      },
+      "setup_on_update": false,
+      "setup_during_install": false,
+      "readiness_checks": [
+        {
+          "label": "OMP command",
+          "command": "omp",
+          "executable": true
+        },
+        {
+          "label": "Persephone CLI",
+          "path": "${ULYSSES_MICROSERVICES_ROOT}/persephone/src/cli.ts"
+        }
+      ],
+      "optional": true,
+      "ports": [4737]
+    },
+    {
       "id": "signal.cli",
       "label": "signal-cli",
       "category": "native",

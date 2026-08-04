@@ -113,6 +113,14 @@ def _git_revision(root: Path) -> str:
 
 
 SOURCE_ARTIFACTS: dict[str, tuple[str, ...]] = {
+    "persephone.control": (
+        "package.json",
+        "src/cli.ts",
+        "src/daemon.ts",
+        "src/integrate.ts",
+        "src/rpc.ts",
+        "src/signal.ts",
+    ),
     "context.mode.mcp": (
         "server.bundle.mjs",
         "cli.bundle.mjs",
@@ -1289,6 +1297,19 @@ def _contract_current(
             _skill_links_current("interface-skills")
             and _skill_policy_current()
         )
+    if integration == "persephone":
+        root = _services_root() / "persephone"
+        bun = _binary("bun", Path.home() / ".bun" / "bin" / "bun")
+        result = subprocess.run(
+            [bun, "src/cli.ts", "doctor", "--integration-only"],
+            cwd=root,
+            env=_host_environment({"OTEL_SDK_DISABLED": "true"}),
+            capture_output=True,
+            text=True,
+            timeout=120,
+            check=False,
+        )
+        return result.returncode == 0
     # Retrieval-index contracts are represented by the exact source
     # fingerprint written only after a successful targeted sync.
     return integration == "retrieval-index"
@@ -1348,6 +1369,18 @@ def integrate(runtime_id: str) -> bool:
             "cybersecurity.skills": "cybersecurity-skills",
         }.get(runtime_id)
         _retrieval_command("sync", *([source] if source else []))
+    elif integration == "persephone":
+        bun = _binary("bun", Path.home() / ".bun" / "bin" / "bun")
+        _run(
+            [bun, "install", "--frozen-lockfile"],
+            cwd=item["root"],
+            environment=_host_environment({"OTEL_SDK_DISABLED": "true"}),
+        )
+        _run(
+            [bun, "src/cli.ts", "init"],
+            cwd=item["root"],
+            environment=_host_environment({"OTEL_SDK_DISABLED": "true"}),
+        )
     elif integration == "firecrawl-cli":
         _ensure_shell_environment()
         _integrate_firecrawl()
@@ -1377,10 +1410,12 @@ def integrate(runtime_id: str) -> bool:
                 "integration": integration,
             },
         )
-    print(
-        f"{item['label']}: integration applied. "
-        "Continue configuring or restart Hermes when ready."
+    next_step = (
+        "Configure ~/.config/persephone, then install or start its user service."
+        if integration == "persephone"
+        else "Continue configuring or restart Hermes when ready."
     )
+    print(f"{item['label']}: integration applied. {next_step}")
     return True
 
 
@@ -1400,6 +1435,7 @@ def integrate_all() -> None:
         "humanizer.skills",
         "cybersecurity.skills",
         "interface.skills",
+        "persephone.control",
     )
     installed = {item["id"]: item for item in load_runtime_management()}
     for runtime_id in ordered:
