@@ -69,11 +69,18 @@ _GIT_REMOTE_CACHE: dict[tuple[str, str, str, str], tuple[float, dict[str, Any]]]
 _GIT_REMOTE_CACHE_LOCK = threading.Lock()
 
 
-def _run(argv: list[str], *, cwd: Path | None = None, timeout: int = 20) -> subprocess.CompletedProcess[str]:
+def _run(
+    argv: list[str],
+    *,
+    cwd: Path | None = None,
+    timeout: int = 20,
+    env: dict[str, str] | None = None,
+) -> subprocess.CompletedProcess[str]:
     try:
         return subprocess.run(
             argv,
             cwd=cwd,
+            env=env,
             capture_output=True,
             text=True,
             timeout=timeout,
@@ -720,6 +727,11 @@ def _git_remote_status(
         if cached and now - cached[0] < GIT_CHECK_TTL_SECONDS:
             return {**result, **cached[1]}
 
+    probe_environment = {
+        **os.environ,
+        "GIT_TERMINAL_PROMPT": "0",
+        "GCM_INTERACTIVE": "Never",
+    }
     remote = _run(
         [
             "git",
@@ -729,6 +741,7 @@ def _git_remote_status(
             f"refs/heads/{source_branch}",
         ],
         timeout=8,
+        env=probe_environment,
     )
     fields = remote.stdout.strip().split()
     if remote.returncode or len(fields) < 2 or not re.fullmatch(r"[0-9a-fA-F]{40,64}", fields[0]):
@@ -767,6 +780,7 @@ def _git_remote_status(
                     source_branch,
                 ],
                 timeout=120,
+                env=probe_environment,
             )
             if fetched.returncode:
                 observed = {
