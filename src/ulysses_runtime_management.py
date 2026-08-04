@@ -220,7 +220,13 @@ def load_runtime_management(
         if category not in {"docker", "javascript", "native"}:
             raise RuntimeJobError("invalid runtime management category")
         resource_kind = str(raw.get("resource_kind") or "service")
-        if resource_kind not in {"service", "mcp", "repository", "skill_library"}:
+        if resource_kind not in {
+            "service",
+            "mcp",
+            "repository",
+            "skill_library",
+            "runtime",
+        }:
             raise RuntimeJobError("invalid runtime management resource kind")
         for boolean_field in (
             "optional",
@@ -377,7 +383,13 @@ def load_runtime_management(
                     "args": tuple(setup_args),
                 }
             elif setup_kind == "bun_global":
-                if category != "javascript" or setup_value != ".":
+                package_spec = re.fullmatch(
+                    r"(?:@[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*|[A-Za-z0-9][A-Za-z0-9._-]*)(?:@[A-Za-z0-9][A-Za-z0-9._+-]*)?",
+                    setup_value,
+                )
+                if category != "javascript" or not (
+                    setup_value == "." or package_spec
+                ):
                     raise RuntimeJobError(
                         f"{runtime_id} Bun global setup is invalid"
                     )
@@ -1249,6 +1261,7 @@ def _update_state(item: dict[str, Any], git: dict[str, Any]) -> str:
         return str(git.get("update_status") or "unknown")
     if (
         item.get("package_spec")
+        or item.get("setup")
         or item.get("update_module")
         or item["category"] == "docker"
     ):
@@ -1313,7 +1326,7 @@ def collect_managed_runtimes() -> dict[str, Any]:
                 else "running"
             )
         elif (
-            resource_kind in {"mcp", "repository", "skill_library"}
+            resource_kind in {"mcp", "repository", "skill_library", "runtime"}
             and runtime_ready
         ):
             status = "installed"
@@ -1354,6 +1367,7 @@ def collect_managed_runtimes() -> dict[str, Any]:
             item.get("git_update")
             or item.get("package_spec")
             or item.get("update_module")
+            or item.get("setup")
             or (
                 item["category"] == "docker"
                 and item.get("compose")
@@ -1361,9 +1375,14 @@ def collect_managed_runtimes() -> dict[str, Any]:
             )
         )
         actions = {
-            "open": source_exists and shutil.which("zed") is not None,
+            "open": (
+                resource_kind != "runtime"
+                and source_exists
+                and shutil.which("zed") is not None
+            ),
             "initialize": (
-                source_exists
+                resource_kind != "runtime"
+                and source_exists
                 and (bootstrap_missing or data_directories_missing)
             ),
             # Dependency commands remain callable. Their native checker owns
@@ -1414,13 +1433,21 @@ def collect_managed_runtimes() -> dict[str, Any]:
                     else "All declared project-local defaults already exist."
                 )
             if action == "install":
+                setup = item.get("setup")
+                global_setup = bool(
+                    isinstance(setup, dict) and setup.get("kind") == "bun_global"
+                )
                 repair_available = bool(
                     item["category"] == "native"
                     and item.get("update_module")
                     and source_exists
                     and not runtime_ready
                 )
-                if not _install_path_available(item["root"]) and not repair_available:
+                if (
+                    not _install_path_available(item["root"])
+                    and not repair_available
+                    and not global_setup
+                ):
                     return "The configured project path already exists."
                 if not install_contract:
                     return "No portable install contract is declared."
@@ -2039,13 +2066,21 @@ class ManagedRuntimeControl:
                 }
             ]
         if action == "install":
+            setup = item.get("setup")
+            global_setup = bool(
+                isinstance(setup, dict) and setup.get("kind") == "bun_global"
+            )
             repair_available = bool(
                 item["category"] == "native"
                 and item.get("update_module")
                 and root.is_dir()
                 and not observed.get("runtime_ready")
             )
-            if not _install_path_available(root) and not repair_available:
+            if (
+                not _install_path_available(root)
+                and not repair_available
+                and not global_setup
+            ):
                 raise RuntimeJobError("runtime source path already exists")
             if item.get("git_update"):
                 steps = [
@@ -2155,6 +2190,22 @@ class ManagedRuntimeControl:
                         "cwd": str(root),
                         "timeout": 900,
                     },
+                ]
+            if global_setup:
+                setup_step = self._setup_step(
+                    item,
+                    label="Install native Bun package for this user",
+                )
+                if not setup_step:
+                    raise RuntimeJobError("runtime setup contract is invalid")
+                return [
+                    {
+                        "label": "Ensure Bun user directory exists",
+                        "argv": ["mkdir", "-p", str(root)],
+                        "timeout": 30,
+                    },
+                    setup_step,
+                    *self._readiness_verification_steps(item),
                 ]
             if (
                 item["category"] == "docker"
@@ -2370,6 +2421,19 @@ class ManagedRuntimeControl:
                             "cwd": str(root),
                             "timeout": 900,
                         },
+                        *restart_steps,
+                    ]
+                setup = item.get("setup")
+                if isinstance(setup, dict) and setup.get("kind") == "bun_global":
+                    setup_step = self._setup_step(
+                        item,
+                        label="Update native Bun package for this user",
+                    )
+                    if not setup_step:
+                        raise RuntimeJobError("runtime setup contract is invalid")
+                    return [
+                        setup_step,
+                        *self._readiness_verification_steps(item),
                         *restart_steps,
                     ]
                 git = _git(root)

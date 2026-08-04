@@ -471,6 +471,32 @@
       "ports": []
     },
     {
+      "id": "omp.runtime",
+      "label": "oh-my-pi (OMP)",
+      "category": "javascript",
+      "resource_kind": "runtime",
+      "dependency_section": "Agent runtimes",
+      "recommended": true,
+      "capability_group": "agent-runtime",
+      "role": "Native Bun agent harness for interactive, ACP, RPC, and delegated work",
+      "root": "${HOME}/.bun",
+      "env_files": [],
+      "git_update": false,
+      "setup": {
+        "kind": "bun_global",
+        "value": "@oh-my-pi/pi-coding-agent"
+      },
+      "readiness_checks": [
+        {
+          "label": "OMP command",
+          "command": "omp",
+          "executable": true
+        }
+      ],
+      "optional": true,
+      "ports": []
+    },
+    {
       "id": "persephone.control",
       "label": "Persephone",
       "category": "javascript",

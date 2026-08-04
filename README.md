@@ -35,6 +35,9 @@ contracts intact while adding a native, admin-only workstation control plane:
   [CUDA 13 nightly lane](https://docs.vllm.ai/en/latest/getting_started/installation/gpu/#install-the-latest-code);
 - isolated high-throughput model downloads and confirmation-gated Git, build,
   configuration, lifecycle, and update jobs;
+- an optional, canonical [oh-my-pi](https://github.com/can1357/oh-my-pi) runtime
+  with [Persephone](https://github.com/CommanderTurtle/persephone) providing the
+  persistent local gateway, channels, schedules, and RPC supervision it omits;
 - optional Hermes [Librarian](https://github.com/CommanderTurtle/librarian)/[Retrieval](https://github.com/CommanderTurtle/retrieval) orchestration without merging the
   Odysseus and Hermes agents or their MCP registries.
 

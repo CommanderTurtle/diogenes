@@ -1229,7 +1229,7 @@ async function _fetchDependencies() {
       if (_hint) _pkgParams.set('model_hint', _hint);
     }
     const _viewingRemote = !!(_dsel && _dsel.value && _dsel.value !== 'local');
-    const [resp, colibriResp, prismResp, hermesResp, sandwichResp] = await Promise.all([
+    const [resp, colibriResp, prismResp, hermesResp, sandwichResp, runtimesResp] = await Promise.all([
       fetch('/api/cookbook/packages' + (_pkgParams.toString() ? '?' + _pkgParams.toString() : '')),
       _viewingRemote
         ? Promise.resolve(null)
@@ -1243,6 +1243,9 @@ async function _fetchDependencies() {
       _viewingRemote
         ? Promise.resolve(null)
         : fetch('/api/odysseus/sandwich', { credentials: 'same-origin' }).catch(() => null),
+      _viewingRemote
+        ? Promise.resolve(null)
+        : fetch('/api/odysseus/runtimes', { credentials: 'same-origin' }).catch(() => null),
     ]);
     const data = await resp.json();
     const _pythonMutation = data.python_mutation || { manager: 'upstream' };
@@ -1257,6 +1260,9 @@ async function _fetchDependencies() {
           expected_root: '<services root>/sandwich',
           repository: 'https://github.com/CommanderTurtle/sandwich',
         };
+    const _runtimesExtra = runtimesResp?.ok ? await runtimesResp.json() : null;
+    const _ompExtra = (_runtimesExtra?.runtimes || [])
+      .find(runtime => runtime.id === 'omp.runtime') || null;
     const pkgs = data.packages || [];
     if (!pkgs.length) { list.innerHTML = '<div class="hwfit-loading">No packages found</div>'; return; }
     const _winUnsupported = new Set(['vllm', 'rembg', 'gfpgan']);
@@ -1304,6 +1310,7 @@ async function _fetchDependencies() {
       colibri_hy3: '<svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 2h6v2h2v2h6v2h-5v2h5v2h-4v2h-3v2h-2v5h-2v-7H9v-2H2V8h7V6H6V4h2V2z"/></svg>',
       prism: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round" aria-hidden="true"><path d="M12 2 3 20h18L12 2Z"/><path d="M12 2v12M3 20l9-6 9 6"/></svg>',
       hermes: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 16c3-1 5-4 5-8"/><path d="M20 16c-3-1-5-4-5-8"/><path d="M9 8h6"/><path d="M7 20h10"/><path d="M12 4v16"/></svg>',
+      omp: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 18V6h5a4 4 0 0 1 0 8H5"/><path d="M15 18V9l2.5 5L20 9v9"/></svg>',
       sandwich: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linejoin="round" aria-hidden="true"><path d="M4 8l8-4 8 4-8 4-8-4z"/><path d="M4 12l8 4 8-4"/><path d="M4 16l8 4 8-4"/></svg>',
       krea_diffusers: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 19V5"/><path d="M4 12h4"/><path d="M12 5l-7 7 7 7"/><path d="M14 19l3-14 3 14"/><path d="M15.3 13h3.4"/></svg>',
       sam_mask: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7c3-3 13-3 16 0"/><path d="M4 17c3 3 13 3 16 0"/><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3"/></svg>',
@@ -1538,6 +1545,26 @@ async function _fetchDependencies() {
           + `</div>`
         );
       }
+      if (group === 'runtimes' && _ompExtra) {
+        const installed = !!_ompExtra.runtime_ready;
+        const action = installed ? 'update' : 'install';
+        const checks = (_ompExtra.readiness?.checks || [])
+          .map(check => `${check.label}: ${check.ready ? 'ready' : 'missing'}`)
+          .join(' · ');
+        const detail = `${_ompExtra.root || '~/.bun'}${checks ? ` · ${checks}` : ''}`;
+        rows.push(
+          `<div class="cookbook-dep-row" data-pkg-name="omp" data-dep-kind="native">`
+          + `<div class="cookbook-dep-info"><div class="memory-item-title">${_depGlyphHtml('omp')}oh-my-pi (OMP)</div>`
+          + `<div class="memory-item-meta" style="font-size:10px;opacity:.5;margin-top:2px;">Native Bun agent harness · separate from the Ɗiogenēs Python environment</div>`
+          + `<div class="memory-item-meta" style="font-size:10px;opacity:.65;margin-top:3px;">${esc(detail)}</div></div>`
+          + _extraAction('omp.runtime', action, installed ? 'Update' : 'Install', true, installed
+            ? 'Install the current OMP release through the canonical user-level Bun package lifecycle.'
+            : 'Install @oh-my-pi/pi-coding-agent globally for this user through Bun and verify the omp command.')
+          + `<span class="cookbook-dep-tag cookbook-dep-cat">Runtime</span>`
+          + `<span class="cookbook-dep-tag ${installed ? 'cookbook-dep-installed' : 'cookbook-dep-na'}">${installed ? 'Installed' : 'Missing'}</span>`
+          + `</div>`
+        );
+      }
       if (group === 'runtimes' && _hermesExtra) {
         const install = _hermesExtra.install || {};
         const preview = _hermesExtra.adoption_preview || {};
@@ -1745,14 +1772,17 @@ async function _fetchDependencies() {
         const action = button.dataset.nativeExtraAction || '';
         const isHermes = runtimeId === 'hermes.gateway';
         const isSandwich = runtimeId === 'sandwich.runtime';
+        const isManagedRuntime = runtimeId === 'omp.runtime';
         const isPrism = runtimeId === 'prism.llamacpp';
         const endpoint = isHermes
           ? '/api/odysseus/hermes/jobs/plan'
           : isSandwich
             ? '/api/odysseus/sandwich/jobs/plan'
-            : isPrism
-              ? '/api/odysseus/prism/jobs/plan'
-              : '/api/odysseus/colibri/jobs/plan';
+            : isManagedRuntime
+              ? '/api/odysseus/runtimes/jobs/plan'
+              : isPrism
+                ? '/api/odysseus/prism/jobs/plan'
+                : '/api/odysseus/colibri/jobs/plan';
         const body = isHermes || isSandwich
           ? { action }
           : { runtime_id: runtimeId, action };

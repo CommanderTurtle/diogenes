@@ -370,6 +370,7 @@ def _install(item: dict[str, Any]) -> None:
         and item["package_json"].is_file()
         or bool(item.get("update_module"))
         or bool(item.get("package_spec"))
+        or bool(item.get("setup"))
     )
     installed_contract = _runtime_artifacts_present(item) or bool(
         state.get("installed")
