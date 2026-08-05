@@ -11,7 +11,7 @@
       "id": "retrieval",
       "directory": "retrieval",
       "source": "https://github.com/CommanderTurtle/retrieval.git",
-      "role": "Durable chronological Hermes/context-mode archive, exact neighbor recall, and skill-file catalog"
+      "role": "Cold specialist skill discovery through a conservative taxonomy, IWE graph, Chroma ranking, and an ephemeral OMP scout"
     },
     {
       "id": "context-mode",
@@ -32,6 +32,18 @@
       "directory": "codebase-memory-mcp",
       "source": "https://github.com/DeusData/codebase-memory-mcp.git",
       "role": "Local structural code graph, MCP, and Hermes hook"
+    },
+    {
+      "id": "persephone",
+      "directory": "persephone",
+      "source": "https://github.com/CommanderTurtle/persephone.git",
+      "role": "Durable local OMP gateway, scheduler, channel router, and RPC supervisor"
+    },
+    {
+      "id": "leetcoder",
+      "directory": "leetcoder",
+      "source": "https://github.com/CommanderTurtle/leetcoder.git",
+      "role": "Hermes-to-OMP delegated worktree and session control MCP"
     }
   ],
   "profiles": [
@@ -44,7 +56,8 @@
       "codebase-memory-mcp",
       "retrieval",
       "context-mode",
-      "camofox-mcp"
+      "camofox-mcp",
+      "leetcoder"
     ],
     "librarian": [
       "librarian-okf",
@@ -152,6 +165,7 @@
     "hermes-api-backend",
     "hermes-mcp-integration",
     "humanizer",
+    "leetcoder",
     "make-interfaces-feel-better",
     "mcp-integration",
     "mcp-registration",

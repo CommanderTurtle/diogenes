@@ -26,10 +26,39 @@ def test_audit_plan_targets_configured_microservices_root(
 
     assert plan["confirmation_phrase"] == "AUDIT JAVASCRIPT SYSTEM"
     assert plan["steps"][0]["argv"] == [str(executable), "audit"]
-    assert plan["steps"][1]["argv"][1:] == [
+    assert plan["steps"][1]["argv"] == [
+        str(executable),
+        "checkExpr",
+        "--dryrun",
+    ]
+    assert plan["steps"][2]["argv"][1:] == [
         "-m",
         "src.diogenes_javascript_maintenance",
         "audit",
+    ]
+
+
+def test_system_update_repairs_expressions_before_project_updates(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    services = tmp_path / "services"
+    monkeypatch.setenv("ULYSSES_MICROSERVICES_ROOT", str(services))
+    executable = services / "sandwich" / "bin" / "sandwich"
+    executable.parent.mkdir(parents=True)
+    executable.write_text("", encoding="utf-8")
+    control = SandwichControl(tmp_path / "state")
+
+    plan, _token = control.create_plan(
+        {"ready": True},
+        action="system-update",
+    )
+
+    assert plan["steps"][1]["argv"] == [str(executable), "checkExpr"]
+    assert plan["steps"][2]["argv"][1:] == [
+        "-m",
+        "src.diogenes_javascript_maintenance",
+        "update",
     ]
 
 

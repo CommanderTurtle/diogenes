@@ -82,6 +82,11 @@ class SandwichControl:
                     "timeout": 900,
                 },
                 {
+                    "label": "Preview vulnerable Bun dependency expressions",
+                    "argv": [str(executable), "checkExpr", "--dryrun"],
+                    "timeout": 3600,
+                },
+                {
                     "label": "Audit installed JavaScript projects",
                     "argv": [
                         sys.executable,
@@ -107,6 +112,11 @@ class SandwichControl:
                     ],
                     "cwd": str(repository_root),
                     "timeout": 3600,
+                },
+                {
+                    "label": "Repair vulnerable Bun dependency expressions",
+                    "argv": [str(executable), "checkExpr"],
+                    "timeout": 7200,
                 },
                 {
                     "label": "Update installed JavaScript dependencies and changed builds",

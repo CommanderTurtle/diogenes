@@ -347,7 +347,7 @@
       "recommended": true,
       "hermes_component": "retrieval",
       "capability_group": "knowledge",
-      "role": "Ordered Hermes/context-mode session archive with a disposable Chroma locator and skill-file catalog",
+      "role": "Cold specialist skill catalog with conservative taxonomy, IWE graph navigation, Chroma ranking, and an ephemeral OMP scout",
       "integration": "retrieval",
       "root": "${ULYSSES_MICROSERVICES_ROOT}/retrieval",
       "depends_on": ["chroma.vector"],
@@ -536,6 +536,44 @@
       ],
       "optional": true,
       "ports": [4737]
+    },
+    {
+      "id": "leetcoder.mcp",
+      "label": "Leetcoder",
+      "category": "javascript",
+      "resource_kind": "mcp",
+      "dependency_section": "Agent runtimes",
+      "recommended": true,
+      "hermes_component": "leetcoder",
+      "capability_group": "agent-control",
+      "role": "Hermes-to-OMP delegation gateway with durable sessions, isolated worktrees, Advisor review, and Librarian handoff",
+      "integration": "leetcoder",
+      "root": "${ULYSSES_MICROSERVICES_ROOT}/leetcoder",
+      "package_json": "package.json",
+      "env_files": [".env"],
+      "config_files": [
+        {"path": "leetcoder.config.example.json", "format": "json"}
+      ],
+      "git_update": true,
+      "source_url": "https://github.com/CommanderTurtle/leetcoder.git",
+      "source_branch": "main",
+      "build_script": "build",
+      "bun_install_mode": "frozen",
+      "setup_on_update": false,
+      "setup_during_install": false,
+      "readiness_checks": [
+        {
+          "label": "Leetcoder CLI bundle",
+          "path": "${ULYSSES_MICROSERVICES_ROOT}/leetcoder/dist/cli.js"
+        },
+        {
+          "label": "Leetcoder MCP bundle",
+          "path": "${ULYSSES_MICROSERVICES_ROOT}/leetcoder/dist/mcp.js"
+        }
+      ],
+      "hermes_mcp": true,
+      "optional": true,
+      "ports": []
     },
     {
       "id": "signal.cli",

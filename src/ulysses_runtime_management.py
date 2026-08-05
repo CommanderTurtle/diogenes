@@ -1257,13 +1257,16 @@ def _install_path_available(root: Path) -> bool:
 
 
 def _integration_state(item: dict[str, Any], *, source_exists: bool) -> str:
-    if not item.get("hermes_mcp"):
+    if not item.get("integration"):
         return "not_applicable"
     if not source_exists:
         return "not_installed"
-    # Hermes owns its registry and profiles. Runtime management deliberately
-    # does not infer registration from a source directory or a process port.
-    return "registration_unknown"
+    # This is intentionally a persisted source-fingerprint observation. The
+    # explicit Integrate action owns deep Hermes/OMP/service verification; a UI
+    # refresh never launches an MCP or mutates an external configuration.
+    from src.diogenes_dependency_integration import observe_integration
+
+    return observe_integration(item)
 
 
 def _update_state(item: dict[str, Any], git: dict[str, Any]) -> str:

@@ -42559,6 +42559,31 @@ details.uly-services-advanced .uly-advanced-section > p {
   max-width: 480px;
 }
 
+.dio-dependency-guide {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: baseline;
+  gap: 9px;
+  margin-bottom: 9px;
+  padding: 7px 9px;
+  border: 1px solid color-mix(in srgb, var(--fg) 8%, transparent);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--bg) 97%, var(--fg) 3%);
+}
+
+.dio-dependency-guide strong {
+  font-size: 8px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.dio-dependency-guide span {
+  min-width: 0;
+  font-size: 8px;
+  line-height: 1.45;
+  opacity: .52;
+}
+
 .dio-dependency-groups > section {
   display: grid;
   gap: 6px;
@@ -42863,6 +42888,10 @@ details.uly-services-advanced .uly-advanced-section > p {
   .dio-skills-toolbar {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .dio-dependency-guide {
+    grid-template-columns: 1fr;
   }
 
   .dio-dependency-toolbar input,

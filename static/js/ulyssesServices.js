@@ -72,11 +72,11 @@ async function request(path, options = {}) {
 function statusBadge(status) {
   const value = String(status || 'unknown');
   const normalized = value.toLowerCase().replaceAll(' ', '_');
-  const tone = ['running', 'installed', 'ready', 'succeeded', 'active'].includes(normalized)
+  const tone = ['running', 'installed', 'ready', 'succeeded', 'active', 'current', 'reconciled'].includes(normalized)
     ? 'ok'
-    : ['failed', 'invalid', 'degraded', 'git_diverged'].includes(normalized)
+    : ['failed', 'invalid', 'degraded', 'git_diverged', 'git_blocked'].includes(normalized)
       ? 'bad'
-      : ['starting', 'partial', 'incomplete', 'git_update', 'integration_update'].includes(normalized)
+      : ['starting', 'partial', 'incomplete', 'git_update', 'git_dirty', 'local_commits', 'reconcile_needed', 'not_reconciled', 'reconcile_unknown', 'update_required'].includes(normalized)
         ? 'warn'
         : 'muted';
   return `<span class="uly-services-badge status-${tone}">${esc(value.replaceAll('_', ' '))}</span>`;
@@ -558,11 +558,35 @@ function dependencyStatus(runtime) {
     values.push(statusBadge('Git update'));
   } else if (runtime.git?.update_status === 'diverged') {
     values.push(statusBadge('Git diverged'));
+  } else if (runtime.git?.update_status === 'dirty') {
+    values.push(statusBadge('Git dirty'));
+  } else if (runtime.git?.update_status === 'ahead') {
+    values.push(statusBadge('Local commits'));
+  } else if (runtime.git?.update_status === 'blocked') {
+    values.push(statusBadge('Git blocked'));
   }
-  if (runtime.integration && runtime.integration_state === 'update_required') {
-    values.push(statusBadge('Integration update'));
+  if (runtime.integration) {
+    const labels = {
+      current: 'Reconciled',
+      update_required: 'Reconcile needed',
+      not_integrated: 'Not reconciled',
+      unknown: 'Reconcile unknown',
+    };
+    const label = labels[runtime.integration_state];
+    if (label) values.push(statusBadge(label));
   }
   return values.join('');
+}
+
+function dependencyActionButton(runtime, action, label) {
+  const detail = runtime.action_details?.[action] || {};
+  return `
+    <button
+      type="button"
+      data-runtime-action="${action}"
+      data-runtime="${esc(runtime.id)}"
+      title="${esc(detail.reason || '')}"
+    >${label}</button>`;
 }
 
 function renderDependencies() {
@@ -579,10 +603,18 @@ function renderDependencies() {
     if (!groups.has(section)) groups.set(section, []);
     groups.get(section).push(runtime);
   }
+  const attention = runtimes.filter((runtime) => (
+    ['available', 'diverged', 'dirty', 'ahead', 'blocked'].includes(runtime.git?.update_status)
+    || ['not_integrated', 'update_required'].includes(runtime.integration_state)
+  )).length;
   return `
+    <div class="dio-dependency-guide">
+      <strong>Independent, checked actions</strong>
+      <span>Install creates the runtime. Update refreshes packages and changed builds. Integrate reconciles Hermes or OMP. Git pull changes source only. No action silently chains a Git pull or Hermes restart.</span>
+    </div>
     <div class="dio-dependency-toolbar">
       <input type="search" data-dependency-search value="${esc(dependencyQuery)}" placeholder="Find a dependency…">
-      <span>${runtimes.length} shown</span>
+      <span>${runtimes.length} shown${attention ? ` · ${attention} need attention` : ''}</span>
     </div>
     <div class="dio-dependency-groups">
       ${[...groups.entries()].map(([section, values]) => `
@@ -593,15 +625,15 @@ function renderDependencies() {
                <div class="dio-dependency-copy">
                  <div>
                    <strong>${esc(runtime.label)}</strong>
-                   ${statusBadge(runtime.source_state === 'missing' ? 'not installed' : 'installed')}
+                   ${runtime.recommended ? statusBadge('recommended') : ''}
+                   ${statusBadge(runtime.source_state === 'missing' ? 'not installed' : runtime.source_state)}
                    ${dependencyStatus(runtime)}
                  </div>
                 <p>${esc(runtime.role || '')}</p>
                 <code>${esc(runtime.root)}${dependencyCommit(runtime) ? ` · ${esc(dependencyCommit(runtime))}` : ''}</code>
               </div>
               <div class="dio-dependency-actions">
-                ${DEPENDENCY_ACTIONS.map(([action, label]) => `
-                  <button type="button" data-runtime-action="${action}" data-runtime="${esc(runtime.id)}">${label}</button>`).join('')}
+                ${DEPENDENCY_ACTIONS.map(([action, label]) => dependencyActionButton(runtime, action, label)).join('')}
               </div>
               <details class="dio-dependency-files" ${expanded === `runtime:${runtime.id}` ? 'open' : ''}>
                 <summary data-expand-owner="runtime" data-owner="${esc(runtime.id)}">Configuration</summary>
@@ -629,6 +661,8 @@ function renderSandwich() {
         <p><code>sandwich hermes check</code>Verify the official checkout has no local source changes.</p>
         <p><code>sandwich doctor</code>Verify Bun and every Node-compatible command shim.</p>
         <p><code>sandwich audit</code>Report foreign JavaScript runtimes without changing them.</p>
+        <p><code>sandwich checkExpr --dryrun</code>Audit every Bun root and preview safe vulnerability overrides.</p>
+        <p><code>sandwich checkExpr</code>Apply those overrides, run normal <code>bun update</code>, and report manual builds or untrusted scripts.</p>
       </div>
     </details>
     <div class="dio-maintenance-grid">
@@ -636,10 +670,10 @@ function renderSandwich() {
         <strong>Hermes update</strong><span>Back up and update pristine Hermes through Sandwich.</span>
       </button>
       <button type="button" data-sandwich-action="system-update">
-        <strong>System update</strong><span>Audit and update detected Bun projects; pull no Git repositories.</span>
+        <strong>System update</strong><span>Repair vulnerable dependency expressions, update detected Bun projects, and pull no Git repositories.</span>
       </button>
       <button type="button" data-sandwich-action="audit">
-        <strong>Audit</strong><span>Inspect Bun compatibility and every detected JavaScript project.</span>
+        <strong>Audit</strong><span>Inspect Bun compatibility, dependency vulnerabilities, and every detected JavaScript project without writes.</span>
       </button>
       <button type="button" data-sandwich-action="self-update">
         <strong>Update Diogenes</strong><span>Fast-forward this checkout; preserve ignored runtime data and propose a restart.</span>

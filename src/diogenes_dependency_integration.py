@@ -15,6 +15,8 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
+import secrets
 import shlex
 import shutil
 import subprocess
@@ -22,6 +24,7 @@ import sys
 import tempfile
 from typing import Any
 
+from core.atomic_io import atomic_write_text
 from src.ulysses_jobs import native_host_environment
 from src.ulysses_runtime_management import load_runtime_management
 
@@ -153,10 +156,22 @@ SOURCE_ARTIFACTS: dict[str, tuple[str, ...]] = {
     ),
     "retrieval.mcp": (
         "sources.toml",
+        "sources.example.toml",
+        "taxonomy.toml",
+        "category-overrides.example.toml",
         ".env",
         "skills/retrieve-knowledge/SKILL.md",
         "install-hermes-skill.sh",
         "install-watcher.sh",
+    ),
+    "leetcoder.mcp": (
+        "package.json",
+        "bun.lock",
+        "dist/cli.js",
+        "dist/mcp.js",
+        "rules/advisor.md",
+        "skills/leetcoder/SKILL.md",
+        "scripts/setup.ts",
     ),
     "hermes.workspace": ("skills/workspace-dispatch/SKILL.md",),
 }
@@ -180,6 +195,101 @@ def _source_fingerprint(item: dict[str, Any]) -> str:
             )
         )
     return digest.hexdigest()
+
+
+def observe_integration(item: dict[str, Any]) -> str:
+    """Return a cheap, read-only integration state for Services.
+
+    Deep native contract checks remain part of the explicit Integrate action.
+    The Services refresh path only compares the last successfully reconciled
+    source fingerprint, so it never starts an MCP, invokes Hermes, or rewrites
+    configuration merely to paint a badge.
+    """
+
+    integration = str(item.get("integration") or "")
+    if not integration:
+        return "not_applicable"
+    root = item.get("root")
+    if not isinstance(root, Path) or not root.is_dir():
+        return "not_installed"
+    state = _read_state(str(item["id"]))
+    if not state.get("fingerprint"):
+        try:
+            return (
+                "current"
+                if _installed_contract_current(item, integration)
+                else "not_integrated"
+            )
+        except (IntegrationError, OSError, ValueError):
+            return "unknown"
+    if state.get("integration") != integration:
+        return "update_required"
+    try:
+        current = _source_fingerprint(item)
+    except (IntegrationError, OSError, subprocess.SubprocessError):
+        return "unknown"
+    return "current" if state.get("fingerprint") == current else "update_required"
+
+
+def _installed_contract_current(item: dict[str, Any], integration: str) -> bool:
+    """Recognize pre-Diogenes integrations without adopting or rewriting them."""
+
+    root: Path = item["root"]
+    if integration == "firecrawl-cli":
+        return _shell_environment_current()
+    if integration == "persephone":
+        command = Path.home() / ".local" / "bin" / "persephone"
+        try:
+            return bool(
+                command.is_symlink()
+                and command.resolve(strict=True) == (root / "src" / "cli.ts").resolve()
+                and (Path.home() / ".config" / "persephone" / "config.json").is_file()
+                and (
+                    Path.home()
+                    / ".config"
+                    / "systemd"
+                    / "user"
+                    / "persephone.service"
+                ).is_file()
+            )
+        except OSError:
+            return False
+    if integration == "leetcoder":
+        profile = Path.home() / ".omp" / "profiles" / "leetcoder" / "agent"
+        skill_source = root / "skills" / "leetcoder" / "SKILL.md"
+        skill_target = (
+            DEFAULT_HERMES_HOME
+            / "skills"
+            / "autonomous-ai-agents"
+            / "leetcoder"
+            / "SKILL.md"
+        )
+        try:
+            return bool(
+                (Path.home() / ".config" / "leetcoder" / "config.json").is_file()
+                and len(
+                    (
+                        Path.home() / ".config" / "leetcoder" / "token"
+                    ).read_text(encoding="utf-8").strip()
+                )
+                >= 32
+                and (profile / "config.yml").is_file()
+                and (profile / "mcp.json").is_file()
+                and (profile / "models.yml").is_file()
+                and (profile / "WATCHDOG.md").read_bytes()
+                == (root / "rules" / "advisor.md").read_bytes()
+                and skill_target.read_bytes() == skill_source.read_bytes()
+                and (
+                    Path.home()
+                    / ".config"
+                    / "systemd"
+                    / "user"
+                    / "leetcoder.service"
+                ).is_file()
+            )
+        except OSError:
+            return False
+    return False
 
 
 def _services_root() -> Path:
@@ -454,6 +564,18 @@ def _mcp_contract(name: str, profile: str = "default") -> dict[str, Any]:
                 "HTTPS_PROXY": "http://127.0.0.1:9",
                 "HTTP_PROXY": "http://127.0.0.1:9",
                 "ALL_PROXY": "http://127.0.0.1:9",
+            },
+            "enabled": True,
+        },
+        "leetcoder": {
+            "command": str(bun),
+            "args": [str(services / "leetcoder" / "dist" / "mcp.js")],
+            "env": {
+                "LEETCODER_API_URL": "http://127.0.0.1:4749",
+                "LEETCODER_TOKEN_FILE": str(
+                    Path.home() / ".config" / "leetcoder" / "token"
+                ),
+                "OTEL_SDK_DISABLED": "true",
             },
             "enabled": True,
         },
@@ -882,6 +1004,359 @@ def _ensure_shell_environment() -> None:
     print(f"Shell service environment: current at {bashrc}")
 
 
+def _write_managed_text(path: Path, content: str, *, mode: int = 0o600) -> bool:
+    current = None
+    try:
+        current = path.read_text(encoding="utf-8")
+    except OSError:
+        pass
+    if current == content:
+        os.chmod(path, mode)
+        return False
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    atomic_write_text(str(path), content)
+    os.chmod(path, mode)
+    return True
+
+
+def _omp_argv(profile: str, *arguments: str) -> list[str]:
+    omp = _binary("omp", Path.home() / ".bun" / "bin" / "omp")
+    return [
+        omp,
+        *(["--profile", profile] if profile != "default" else []),
+        *arguments,
+    ]
+
+
+def _omp_value(profile: str, key: str) -> Any:
+    argv = _omp_argv(profile, "config", "get", key)
+    result = subprocess.run(
+        argv,
+        env=_host_environment({"OTEL_SDK_DISABLED": "true"}),
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
+    )
+    if result.returncode:
+        return None
+    rendered = result.stdout.strip()
+    try:
+        return json.loads(rendered)
+    except json.JSONDecodeError:
+        return rendered
+
+
+def _set_omp_value(profile: str, key: str, rendered: str) -> None:
+    current = _omp_value(profile, key)
+    try:
+        expected = json.loads(rendered)
+    except json.JSONDecodeError:
+        expected = rendered
+    if current == expected:
+        print(f"OMP {profile} {key}: current. Nothing to do.")
+        return
+    _run(
+        _omp_argv(profile, "config", "set", key, rendered),
+        environment=_host_environment({"OTEL_SDK_DISABLED": "true"}),
+        timeout=180,
+    )
+    if _omp_value(profile, key) != expected:
+        raise IntegrationError(f"OMP did not retain {profile} {key}")
+
+
+RETRIEVAL_INTAKE_SOURCE = """[[sources]]
+name = "skill-intake"
+kind = "skills"
+path = "${RETRIEVAL_SKILL_INTAKE}"
+enabled = true
+state = "cold"
+"""
+
+
+def _ensure_retrieval_intake(root: Path) -> None:
+    intake = _services_root() / "skill-library"
+    intake.mkdir(parents=True, exist_ok=True, mode=0o700)
+    overrides = root / "category-overrides.toml"
+    if not overrides.is_file():
+        example = root / "category-overrides.example.toml"
+        if not example.is_file():
+            raise IntegrationError("Retrieval category override template is missing")
+        _write_managed_text(overrides, example.read_text(encoding="utf-8"))
+        print(f"Retrieval category overrides: created {overrides}")
+
+    sources = root / "sources.toml"
+    if not sources.is_file():
+        example = root / "sources.example.toml"
+        if not example.is_file():
+            raise IntegrationError("Retrieval source template is missing")
+        _write_managed_text(sources, example.read_text(encoding="utf-8"), mode=0o644)
+        print(f"Retrieval sources: created {sources}")
+        return
+
+    content = sources.read_text(encoding="utf-8")
+    blocks = list(
+        re.finditer(
+            r"(?ms)^\[\[sources\]\][^\n]*\n.*?(?=^\[\[sources\]\]|\Z)",
+            content,
+        )
+    )
+    target = next(
+        (
+            match
+            for match in blocks
+            if re.search(
+                r'(?m)^name\s*=\s*["\']skill-intake["\']\s*$',
+                match.group(0),
+            )
+        ),
+        None,
+    )
+    if target is None:
+        updated = content.rstrip() + "\n\n" + RETRIEVAL_INTAKE_SOURCE
+    else:
+        block = target.group(0)
+        required = (
+            'name = "skill-intake"',
+            'kind = "skills"',
+            'path = "${RETRIEVAL_SKILL_INTAKE}"',
+            "enabled = true",
+            'state = "cold"',
+        )
+        if all(value in block for value in required):
+            return
+        updated = content[: target.start()] + RETRIEVAL_INTAKE_SOURCE + content[target.end() :]
+    _write_managed_text(sources, updated, mode=0o644)
+    print("Retrieval sources: skill-intake contract synchronized.")
+
+
+def _retrieval_intake_current() -> bool:
+    root = _services_root() / "retrieval"
+    intake = _services_root() / "skill-library"
+    env = _dotenv(root / ".env")
+    try:
+        content = (root / "sources.toml").read_text(encoding="utf-8")
+    except OSError:
+        return False
+    required = (
+        'name = "skill-intake"',
+        'path = "${RETRIEVAL_SKILL_INTAKE}"',
+        'state = "cold"',
+    )
+    projection = str(
+        Path.home() / ".local" / "share" / "hermes-retrieval" / "projections" / "skills"
+    )
+    hermes_dirs = _config_value("default", "skills.external_dirs")
+    omp_dirs = _omp_value("default", "skills.customDirectories")
+    return bool(
+        intake.is_dir()
+        and (root / "taxonomy.toml").is_file()
+        and (root / "category-overrides.toml").is_file()
+        and env.get("RETRIEVAL_SKILL_INTAKE") == str(intake)
+        and all(value in content for value in required)
+        and isinstance(hermes_dirs, list)
+        and projection in hermes_dirs
+        and isinstance(omp_dirs, list)
+        and projection in omp_dirs
+    )
+
+
+LEETCODER_OMP_SETTINGS: tuple[tuple[str, str], ...] = (
+    ("advisor.enabled", "true"),
+    ("advisor.subagents", "false"),
+    ("advisor.syncBacklog", "1"),
+    ("memory.backend", "off"),
+    ("task.maxConcurrency", "1"),
+    ("task.maxRecursionDepth", "1"),
+    ("task.isolation.mode", "auto"),
+    ("task.batch", "true"),
+    ("exa.enabled", "false"),
+    ("exa.enableSearch", "false"),
+    ("exa.enableResearcher", "false"),
+    ("exa.enableWebsets", "false"),
+    ("startup.checkUpdate", "false"),
+    ("marketplace.autoUpdate", "off"),
+)
+
+
+def _prepare_leetcoder_profile(root: Path) -> None:
+    source = Path.home() / ".omp" / "agent"
+    target = Path.home() / ".omp" / "profiles" / "leetcoder" / "agent"
+    source_config = source / "config.yml"
+    source_mcp = source / "mcp.json"
+    source_models = source / "models.yml"
+    for path in (source_config, source_mcp, source_models):
+        if not path.is_file():
+            raise IntegrationError(f"OMP profile source is missing: {path}")
+    target.mkdir(parents=True, exist_ok=True, mode=0o700)
+    _write_managed_text(
+        target / "config.yml",
+        source_config.read_text(encoding="utf-8"),
+    )
+    for key, value in LEETCODER_OMP_SETTINGS:
+        _set_omp_value("leetcoder", key, value)
+
+    try:
+        mcp = json.loads(source_mcp.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise IntegrationError(f"OMP MCP config is invalid: {source_mcp}") from exc
+    if not isinstance(mcp, dict) or not isinstance(mcp.get("mcpServers"), dict):
+        raise IntegrationError(f"OMP MCP config is invalid: {source_mcp}")
+    if "librarian" not in mcp["mcpServers"]:
+        raise IntegrationError(
+            "OMP's default MCP configuration must contain Librarian before Leetcoder integration"
+        )
+    mcp["mcpServers"].pop("leetcoder", None)
+    _write_managed_text(
+        target / "mcp.json",
+        json.dumps(mcp, indent=2) + "\n",
+    )
+    _write_managed_text(
+        target / "models.yml",
+        source_models.read_text(encoding="utf-8"),
+    )
+    advisor = root / "rules" / "advisor.md"
+    if not advisor.is_file():
+        raise IntegrationError(f"Leetcoder Advisor rule is missing: {advisor}")
+    _write_managed_text(
+        target / "WATCHDOG.md",
+        advisor.read_text(encoding="utf-8"),
+    )
+
+
+def _integrate_leetcoder() -> None:
+    root = _services_root() / "leetcoder"
+    bun = _binary("bun", Path.home() / ".bun" / "bin" / "bun")
+    omp = _binary("omp", Path.home() / ".bun" / "bin" / "omp")
+    _binary("hermes", Path.home() / ".local" / "bin" / "hermes")
+    _binary("git", Path("/usr/bin/git"))
+    _run([bun, "install", "--frozen-lockfile"], cwd=root, timeout=1800)
+    _run([bun, "run", "build"], cwd=root, timeout=1800)
+
+    config_dir = Path.home() / ".config" / "leetcoder"
+    token_file = config_dir / "token"
+    config_file = config_dir / "config.json"
+    data_root = Path.home() / ".local" / "share" / "leetcoder"
+    config_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+    data_root.mkdir(parents=True, exist_ok=True, mode=0o700)
+    if not token_file.is_file():
+        _write_managed_text(token_file, secrets.token_hex(32) + "\n")
+    else:
+        os.chmod(token_file, 0o600)
+    if not config_file.is_file():
+        value = {
+            "version": 1,
+            "listen": {
+                "host": "127.0.0.1",
+                "port": 4749,
+                "tokenFile": str(token_file),
+            },
+            "omp": {
+                "command": omp,
+                "profile": "leetcoder",
+                "maxWorkers": 3,
+                "idleSeconds": 7200,
+                "thinking": "high",
+            },
+            "paths": {"dataRoot": str(data_root)},
+            "confirmation": {"ttlMinutes": 15},
+            "history": {"eventsPerSession": 5000},
+        }
+        _write_managed_text(config_file, json.dumps(value, indent=2) + "\n")
+    else:
+        os.chmod(config_file, 0o600)
+
+    _prepare_leetcoder_profile(root)
+    env = (
+        f"LEETCODER_CONFIG={config_file}\n"
+        "LEETCODER_API_URL=http://127.0.0.1:4749\n"
+        f"LEETCODER_TOKEN_FILE={token_file}\n"
+        f"OMP_COMMAND={omp}\n"
+        "OMP_PROFILE=leetcoder\n"
+        "OTEL_SDK_DISABLED=true\n"
+    )
+    _write_managed_text(root / ".env", env)
+
+    skill_source = root / "skills" / "leetcoder" / "SKILL.md"
+    skill_target = (
+        DEFAULT_HERMES_HOME
+        / "skills"
+        / "autonomous-ai-agents"
+        / "leetcoder"
+        / "SKILL.md"
+    )
+    if not skill_source.is_file():
+        raise IntegrationError(f"Leetcoder routing skill is missing: {skill_source}")
+    if skill_target.parent.is_symlink():
+        raise IntegrationError(f"Leetcoder skill target is not integration-owned: {skill_target.parent}")
+    _write_managed_text(
+        skill_target,
+        skill_source.read_text(encoding="utf-8"),
+        mode=0o644,
+    )
+
+    _run(
+        [bun, str(root / "dist" / "cli.js"), "service", "install"],
+        cwd=root,
+        environment=_host_environment({"OTEL_SDK_DISABLED": "true"}),
+        timeout=300,
+    )
+    _ensure_mcp("default", "leetcoder", _mcp_contract("leetcoder"))
+
+
+def _leetcoder_current() -> bool:
+    root = _services_root() / "leetcoder"
+    token = Path.home() / ".config" / "leetcoder" / "token"
+    config = Path.home() / ".config" / "leetcoder" / "config.json"
+    profile = Path.home() / ".omp" / "profiles" / "leetcoder" / "agent"
+    skill_source = root / "skills" / "leetcoder" / "SKILL.md"
+    skill_target = (
+        DEFAULT_HERMES_HOME
+        / "skills"
+        / "autonomous-ai-agents"
+        / "leetcoder"
+        / "SKILL.md"
+    )
+    try:
+        mcp = json.loads((profile / "mcp.json").read_text(encoding="utf-8"))
+        servers = mcp.get("mcpServers") if isinstance(mcp, dict) else None
+        skill_matches = skill_source.read_bytes() == skill_target.read_bytes()
+        token_ready = len(token.read_text(encoding="utf-8").strip()) >= 32
+    except (OSError, json.JSONDecodeError):
+        return False
+    if not (
+        config.is_file()
+        and token_ready
+        and isinstance(servers, dict)
+        and "librarian" in servers
+        and "leetcoder" not in servers
+        and skill_matches
+        and (profile / "models.yml").is_file()
+        and (profile / "WATCHDOG.md").is_file()
+        and _mcp_current("default", "leetcoder", _mcp_contract("leetcoder"))
+    ):
+        return False
+    for key, rendered in LEETCODER_OMP_SETTINGS:
+        try:
+            expected = json.loads(rendered)
+        except json.JSONDecodeError:
+            expected = rendered
+        if _omp_value("leetcoder", key) != expected:
+            return False
+    for action in ("is-enabled", "is-active"):
+        result = subprocess.run(
+            ["systemctl", "--user", action, "leetcoder.service"],
+            env=_host_environment(),
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=30,
+            check=False,
+        )
+        if result.returncode:
+            return False
+    return True
+
+
 def _retrieval_command(*arguments: str, timeout: int = 3600) -> None:
     executable = (
         _services_root()
@@ -920,6 +1395,8 @@ def _integrate_retrieval() -> None:
     env_path = root / ".env"
     if not env_path.is_file():
         _run([str(root / "setup.sh")], cwd=root, timeout=1800)
+    _ensure_retrieval_intake(root)
+    intake = _services_root() / "skill-library"
     _replace_env_values(
         env_path,
         {
@@ -931,8 +1408,15 @@ def _integrate_retrieval() -> None:
             "RETRIEVAL_WATCH_ENABLED": "true",
             "RETRIEVAL_WATCH_DEBOUNCE_MS": "1500",
             "RETRIEVAL_WATCH_POLL_SECONDS": "15",
+            "RETRIEVAL_SKILL_INTAKE": str(intake),
+            "RETRIEVAL_TAXONOMY_FILE": str(root / "taxonomy.toml"),
+            "RETRIEVAL_CATEGORY_OVERRIDES": str(
+                root / "category-overrides.toml"
+            ),
         },
     )
+    _retrieval_command("integrate")
+    _retrieval_command("sync", "skill-intake")
     _ensure_shared_mcp("retrieval")
     installer = root / "install-hermes-skill.sh"
     _run([str(installer)], cwd=root)
@@ -1280,7 +1764,9 @@ def _contract_current(
             _context_cli_current() and _context_plugin_current()
         ):
             return False
-        if integration == "retrieval" and not _retrieval_watcher_current():
+        if integration == "retrieval" and not (
+            _retrieval_watcher_current() and _retrieval_intake_current()
+        ):
             return False
         if integration == "codebase-memory" and not (
             _codebase_hook_current() and _codebase_skill_current()
@@ -1319,6 +1805,8 @@ def _contract_current(
             check=False,
         )
         return result.returncode == 0
+    if integration == "leetcoder":
+        return _leetcoder_current()
     # Retrieval-index contracts are represented by the exact source
     # fingerprint written only after a successful targeted sync.
     return integration == "retrieval-index"
@@ -1386,10 +1874,12 @@ def integrate(runtime_id: str) -> bool:
             environment=_host_environment({"OTEL_SDK_DISABLED": "true"}),
         )
         _run(
-            [bun, "src/cli.ts", "init"],
+            [bun, "src/cli.ts", "init", "--install-service"],
             cwd=item["root"],
             environment=_host_environment({"OTEL_SDK_DISABLED": "true"}),
         )
+    elif integration == "leetcoder":
+        _integrate_leetcoder()
     elif integration == "firecrawl-cli":
         _ensure_shell_environment()
         _integrate_firecrawl()
@@ -1420,7 +1910,7 @@ def integrate(runtime_id: str) -> bool:
             },
         )
     next_step = (
-        "Configure ~/.config/persephone, then install or start its user service."
+        "Review ~/.config/persephone, then start its installed user service when ready."
         if integration == "persephone"
         else "Continue configuring or restart Hermes when ready."
     )
@@ -1439,6 +1929,7 @@ def integrate_all() -> None:
         "codebase.memory.mcp",
         "librarian.mcp",
         "retrieval.mcp",
+        "leetcoder.mcp",
         "agent.skills",
         "hermes.workspace",
         "humanizer.skills",

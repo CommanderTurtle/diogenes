@@ -688,8 +688,9 @@ def test_git_remote_status_reports_ahead_and_behind_without_changing_refs(
         *,
         cwd: Path | None = None,
         timeout: int = 20,
+        env: dict[str, str] | None = None,
     ) -> subprocess.CompletedProcess[str]:
-        del cwd, timeout
+        del cwd, timeout, env
         calls.append(argv)
         if "ls-remote" in argv:
             return subprocess.CompletedProcess(
@@ -807,6 +808,34 @@ def test_repository_state_is_installed_not_stopped_and_explains_actions(
     assert "no persistent process" in runtime["action_details"]["start"]["reason"]
 
 
+def test_integration_state_uses_read_only_persisted_observation(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    import src.diogenes_dependency_integration as integrations
+
+    item = {
+        "id": "example.mcp",
+        "root": tmp_path,
+        "integration": "example",
+    }
+    monkeypatch.setattr(
+        integrations,
+        "observe_integration",
+        lambda observed: "current" if observed is item else "unknown",
+    )
+
+    assert manager._integration_state(item, source_exists=True) == "current"
+    assert manager._integration_state(item, source_exists=False) == "not_installed"
+    assert (
+        manager._integration_state(
+            {**item, "integration": None},
+            source_exists=True,
+        )
+        == "not_applicable"
+    )
+
+
 def test_native_git_update_never_installs_javascript_dependencies(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -888,6 +917,8 @@ def test_catalog_has_portable_librarian_retrieval_and_n8n_contracts(
     librarian = items["librarian.mcp"]
     retrieval = items["retrieval.mcp"]
     codebase = items["codebase.memory.mcp"]
+    persephone = items["persephone.control"]
+    leetcoder = items["leetcoder.mcp"]
     n8n = items["n8n.automation"]
 
     assert librarian["source_url"] == (
@@ -907,6 +938,14 @@ def test_catalog_has_portable_librarian_retrieval_and_n8n_contracts(
     assert librarian["readiness_checks"] == ()
     assert codebase["readiness_checks"][0]["path"] == (
         tmp_path / ".local" / "bin" / "codebase-memory-mcp"
+    ).resolve()
+    assert persephone["integration"] == "persephone"
+    assert leetcoder["source_url"] == (
+        "https://github.com/CommanderTurtle/leetcoder.git"
+    )
+    assert leetcoder["build_script"] == "build"
+    assert leetcoder["readiness_checks"][1]["path"] == (
+        tmp_path / "services" / "leetcoder" / "dist" / "mcp.js"
     ).resolve()
     assert n8n["root"] == (tmp_path / "services" / "n8n").resolve()
     assert n8n["optional"] is True
@@ -1103,6 +1142,7 @@ def test_missing_declared_artifact_reports_incomplete_and_keeps_repair(
     monkeypatch.setattr(manager, "load_runtime_management", lambda: (item,))
     monkeypatch.setattr(manager, "_port_open", lambda _port: False)
     monkeypatch.setattr(manager, "_tmux_alive", lambda _name: False)
+    monkeypatch.setattr(manager, "list_owned_sessions", lambda: ())
     monkeypatch.setattr(manager.shutil, "which", lambda _name, **_kwargs: None)
     monkeypatch.setattr(
         manager,
