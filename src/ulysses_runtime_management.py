@@ -421,6 +421,24 @@ def load_runtime_management(
                     "path": candidate,
                     "args": tuple(setup_args),
                 }
+            elif setup_kind == "cargo_path":
+                candidate = (root / setup_value).resolve()
+                if (
+                    category != "native"
+                    or not setup_value
+                    or any(character in setup_value for character in "\r\n\0")
+                    or candidate == root
+                    or not candidate.is_relative_to(root)
+                ):
+                    raise RuntimeJobError(
+                        f"{runtime_id} Cargo setup path is invalid"
+                    )
+                item["setup"] = {
+                    "kind": setup_kind,
+                    "value": setup_value,
+                    "path": candidate,
+                    "args": tuple(setup_args),
+                }
             else:
                 raise RuntimeJobError(f"{runtime_id} setup kind is invalid")
         raw_readiness_checks = raw.get("readiness_checks") or []
@@ -1560,7 +1578,7 @@ def collect_managed_runtimes() -> dict[str, Any]:
             "stop": "Stop the Diogenes-managed runtime.",
             "restart": "Restart the Diogenes-managed runtime.",
             "update": "Check and refresh only the installed runtime dependencies and changed builds.",
-            "integrate": "Diff and reconcile only the declared Hermes-facing integration.",
+            "integrate": "Diff and reconcile only the declared harness integration.",
             "sync": "Check and fast-forward only the clean declared Git checkout.",
         }
         action_details = {
@@ -1909,6 +1927,18 @@ class ManagedRuntimeControl:
                 [
                     "bash",
                     str(setup["path"]),
+                    *[str(value) for value in setup.get("args") or ()],
+                ]
+            )
+        elif setup.get("kind") == "cargo_path":
+            argv = _host_argv(
+                [
+                    "cargo",
+                    "install",
+                    "--path",
+                    str(setup["path"]),
+                    "--locked",
+                    "--force",
                     *[str(value) for value in setup.get("args") or ()],
                 ]
             )

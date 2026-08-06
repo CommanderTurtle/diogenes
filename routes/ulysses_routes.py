@@ -19,6 +19,7 @@ from src.diogenes_docker_projects import (
     save_docker_document,
 )
 from src.diogenes_skill_auditor import SkillAuditorControl, collect_skills
+from src.diogenes_user_scripts import UserScriptControl
 from src.sandwich_runtime import (
     collect_sandwich_status,
     observe_sandwich_installation,
@@ -110,6 +111,16 @@ class ManagedRuntimePlanRequest(BaseModel):
     action: str
 
 
+class UserScriptWriteRequest(BaseModel):
+    name: str
+    content: str
+    cwd: str = ""
+
+
+class UserScriptPlanRequest(BaseModel):
+    script_id: str
+
+
 class DockerProjectPlanRequest(BaseModel):
     project_id: str
     action: str
@@ -171,6 +182,7 @@ def setup_ulysses_routes(
     colibri_control_factory: Callable[[], ColibriControl] = ColibriControl,
     prism_control_factory: Callable[[], PrismControl] = PrismControl,
     runtime_control_factory: Callable[[], ManagedRuntimeControl] = ManagedRuntimeControl,
+    user_script_control_factory: Callable[[], UserScriptControl] = UserScriptControl,
     docker_control_factory: Callable[
         [], DockerProjectControl
     ] = DockerProjectControl,
@@ -259,6 +271,76 @@ def setup_ulysses_routes(
     async def get_managed_runtimes(request: Request) -> dict:
         require_admin(request)
         return await run_in_threadpool(managed_runtime_collector)
+
+    @router.get("/user-scripts")
+    async def get_user_scripts(request: Request) -> dict:
+        require_admin(request)
+        try:
+            return await run_in_threadpool(user_script_control_factory().collect)
+        except RuntimeJobError as exc:
+            raise _job_http_error(exc) from exc
+
+    @router.post("/user-scripts")
+    async def create_user_script(
+        request: Request,
+        body: UserScriptWriteRequest,
+    ) -> dict:
+        require_admin(request)
+        try:
+            value = await run_in_threadpool(
+                user_script_control_factory().create,
+                name=body.name,
+                content=body.content,
+                cwd=body.cwd,
+            )
+            return {"script": value}
+        except RuntimeJobError as exc:
+            raise _job_http_error(exc) from exc
+
+    @router.put("/user-scripts/{script_id}")
+    async def update_user_script(
+        request: Request,
+        script_id: str,
+        body: UserScriptWriteRequest,
+    ) -> dict:
+        require_admin(request)
+        try:
+            value = await run_in_threadpool(
+                user_script_control_factory().update,
+                script_id,
+                name=body.name,
+                content=body.content,
+                cwd=body.cwd,
+            )
+            return {"script": value}
+        except RuntimeJobError as exc:
+            raise _job_http_error(exc) from exc
+
+    @router.delete("/user-scripts/{script_id}")
+    async def delete_user_script(request: Request, script_id: str) -> dict:
+        require_admin(request)
+        try:
+            return await run_in_threadpool(
+                user_script_control_factory().delete,
+                script_id,
+            )
+        except RuntimeJobError as exc:
+            raise _job_http_error(exc) from exc
+
+    @router.post("/user-scripts/jobs/plan")
+    async def plan_user_script(
+        request: Request,
+        body: UserScriptPlanRequest,
+    ) -> dict:
+        require_admin(request)
+        try:
+            plan, token = await run_in_threadpool(
+                user_script_control_factory().create_plan,
+                script_id=body.script_id,
+            )
+            return {"job": plan, "confirmation_token": token}
+        except RuntimeJobError as exc:
+            raise _job_http_error(exc) from exc
 
     @router.get("/docker/projects")
     async def get_docker_projects(request: Request) -> dict:

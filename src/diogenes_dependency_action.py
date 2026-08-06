@@ -4,7 +4,7 @@ The four public actions deliberately do not imply one another:
 
 * install creates the declared checkout/runtime and performs its first build;
 * update refreshes installed runtime dependencies and rebuilds changed inputs;
-* integrate reconciles only the dependency's Hermes-facing contract;
+* integrate reconciles only the dependency's declared harness contract;
 * git-pull fast-forwards only the declared Git checkout.
 
 Every action is idempotent and remains callable.  Its native checker reports a
@@ -252,6 +252,16 @@ def _setup(item: dict[str, Any], *, label: str) -> None:
         ]
     elif kind == "shell_script":
         argv = ["bash", str(setup["path"]), *arguments]
+    elif kind == "cargo_path":
+        argv = [
+            _binary("cargo", Path("/usr/bin/cargo")),
+            "install",
+            "--path",
+            str(setup["path"]),
+            "--locked",
+            "--force",
+            *arguments,
+        ]
     else:
         raise DependencyActionError("dependency setup contract is invalid")
     print(label)
@@ -611,7 +621,7 @@ def _integrate(item: dict[str, Any]) -> None:
         print(f"{item['label']}: not installed. Nothing to integrate.")
         return
     if not item.get("integration"):
-        print(f"{item['label']}: no Hermes integration is required. Nothing to do.")
+        print(f"{item['label']}: no harness integration is required. Nothing to do.")
         return
     from src.diogenes_dependency_integration import integrate
 

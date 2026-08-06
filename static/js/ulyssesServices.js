@@ -32,6 +32,7 @@ let loading = false;
 let loadError = '';
 let dockerReport = null;
 let runtimeReport = null;
+let userScriptsReport = null;
 let sandwichReport = null;
 let jobs = [];
 let selectedJobId = '';
@@ -46,6 +47,8 @@ let selectedDocumentId = '';
 let runtimeLog = '';
 let dependencyQuery = '';
 let dockerSelection = {};
+let userScriptsOpen = false;
+let editingUserScriptId = '';
 const monitoring = new Set();
 
 let skillsLoading = false;
@@ -503,12 +506,69 @@ function runtimeActionButton(runtime, action, label) {
     >${label}</button>`;
 }
 
+function renderUserScriptEditor(script = null) {
+  const creating = !script;
+  const scriptCount = userScriptsReport?.scripts?.length || 0;
+  const name = script?.name || `User Script ${scriptCount + 1}`;
+  const cwd = script?.cwd || '';
+  const content = script?.content || '#!/usr/bin/env bash\nset -Eeuo pipefail\n\n';
+  return `
+    <div class="dio-user-script-editor" data-user-script-form data-script-id="${esc(script?.id || '')}">
+      <div class="dio-user-script-fields">
+        <label><span>Name</span><input type="text" maxlength="80" data-user-script-name value="${esc(name)}"></label>
+        <label><span>Working directory</span><input type="text" data-user-script-cwd value="${esc(cwd)}" placeholder="Blank uses your home directory"></label>
+      </div>
+      <label class="dio-user-script-source"><span>Script</span><textarea spellcheck="false" data-user-script-content>${esc(content)}</textarea></label>
+      <div class="dio-action-row">
+        <button type="button" data-user-script-save>${creating ? 'Create' : 'Save'}</button>
+        <button type="button" data-user-script-cancel>Cancel</button>
+      </div>
+    </div>`;
+}
+
+function renderUserScripts() {
+  const scripts = userScriptsReport?.scripts || [];
+  const editing = scripts.find((value) => value.id === editingUserScriptId);
+  return `
+    <section class="dio-user-scripts ${userScriptsOpen ? 'open' : ''}">
+      <button type="button" class="dio-user-scripts-summary" data-user-scripts-toggle aria-expanded="${userScriptsOpen}">
+        <span><b>User</b><small>Saved native commands</small></span>
+        <span>${scripts.length} ${scripts.length === 1 ? 'script' : 'scripts'} <i>›</i></span>
+      </button>
+      ${userScriptsOpen ? `
+        <div class="dio-user-scripts-body">
+          <div class="dio-user-scripts-guide">
+            <span>Runs use detached host jobs, never tmux or the Diogenes venv. Output appears in Command output below and remains clearable with the rest of the job history.</span>
+            <button type="button" data-user-script-new>Add script</button>
+          </div>
+          ${editingUserScriptId === 'new' ? renderUserScriptEditor() : ''}
+          ${editing ? renderUserScriptEditor(editing) : ''}
+          <div class="dio-card-list dio-user-script-list">
+            ${scripts.length ? scripts.map((script) => `
+              <article class="dio-service-card">
+                <header>
+                  <div><h3>${esc(script.name)}</h3><p>${esc(script.effective_cwd || '')}</p></div>
+                  ${statusBadge(script.status)}
+                </header>
+                <code>${esc(script.script_path || '')}</code>
+                <div class="dio-action-row">
+                  <button type="button" data-user-script-run="${esc(script.id)}" ${script.status === 'running' ? 'disabled' : ''}>Run</button>
+                  <button type="button" data-user-script-output="${esc(script.last_job_id || '')}" ${script.last_job_id ? '' : 'disabled'}>Output</button>
+                  <button type="button" data-user-script-edit="${esc(script.id)}" ${script.status === 'running' ? 'disabled' : ''}>Edit</button>
+                  <button type="button" data-user-script-delete="${esc(script.id)}" ${script.status === 'running' ? 'disabled' : ''}>Delete</button>
+                </div>
+              </article>`).join('') : panelMessage('No user scripts yet', 'Add a named command once, then rerun it without retyping it.')}
+          </div>
+        </div>` : ''}
+    </section>`;
+}
+
 function renderInteractive() {
   const runtimes = (runtimeReport?.runtimes || []).filter((value) => INTERACTIVE_IDS.has(value.id));
   const managedCount = runtimes.filter((value) => value.tmux?.managed).length;
   return `
     <div class="dio-section-heading">
-      <div><h3>Interactive processes</h3><p>Camofox, Bifrost, signal-cli, and Hermes Workspace run in owned tmux sessions.</p></div>
+      <div><h3>Interactive processes</h3><p>Long-lived services use owned tmux sessions. Reusable user commands use detached native jobs.</p></div>
       <button type="button" data-stop-interactive ${managedCount ? '' : 'disabled'}>
         Stop all${managedCount ? ` (${managedCount})` : ''}
       </button>
@@ -543,6 +603,7 @@ function renderInteractive() {
           ${expanded === `runtime-log:${runtime.id}` ? `<pre class="dio-runtime-log">${esc(runtimeLog || 'No captured output.')}</pre>` : ''}
         </article>`).join('')}
     </div>
+    ${renderUserScripts()}
     ${expanded === 'interactive-shutdown' ? `<pre class="dio-runtime-log">${esc(runtimeLog || 'No shutdown output.')}</pre>` : ''}
     ${renderJobOutput()}`;
 }
@@ -709,17 +770,19 @@ async function load() {
   loading = true;
   loadError = '';
   render();
-  const [docker, runtimes, sandwich, jobList] = await Promise.allSettled([
+  const [docker, runtimes, userScripts, sandwich, jobList] = await Promise.allSettled([
     request('/api/odysseus/docker/projects'),
     request('/api/odysseus/runtimes'),
+    request('/api/odysseus/user-scripts'),
     request('/api/odysseus/sandwich'),
     request('/api/odysseus/jobs?limit=25'),
   ]);
   dockerReport = docker.status === 'fulfilled' ? docker.value : null;
   runtimeReport = runtimes.status === 'fulfilled' ? runtimes.value : null;
+  userScriptsReport = userScripts.status === 'fulfilled' ? userScripts.value : null;
   sandwichReport = sandwich.status === 'fulfilled' ? sandwich.value : null;
   jobs = jobList.status === 'fulfilled' ? (jobList.value.jobs || []) : [];
-  loadError = [docker, runtimes, sandwich, jobList]
+  loadError = [docker, runtimes, userScripts, sandwich, jobList]
     .filter((value) => value.status === 'rejected')
     .map((value) => value.reason?.message || String(value.reason))
     .join(' · ');
@@ -843,6 +906,54 @@ function planRuntimeAction(runtimeId, action) {
       after: action === 'integrate' ? 'integration' : null,
     },
   );
+}
+
+function planUserScript(scriptId) {
+  executePlan(
+    '/api/odysseus/user-scripts/jobs/plan',
+    { script_id: scriptId },
+  );
+}
+
+async function saveUserScript(button) {
+  const form = button.closest('[data-user-script-form]');
+  if (!form) return;
+  const scriptId = form.dataset.scriptId || '';
+  const payload = {
+    name: form.querySelector('[data-user-script-name]')?.value || '',
+    cwd: form.querySelector('[data-user-script-cwd]')?.value || '',
+    content: form.querySelector('[data-user-script-content]')?.value || '',
+  };
+  try {
+    await request(
+      scriptId
+        ? `/api/odysseus/user-scripts/${encodeURIComponent(scriptId)}`
+        : '/api/odysseus/user-scripts',
+      { method: scriptId ? 'PUT' : 'POST', body: JSON.stringify(payload) },
+    );
+    editingUserScriptId = '';
+    uiModule.showToast(scriptId ? 'User script saved.' : 'User script created.', 4000);
+    await load();
+  } catch (error) {
+    uiModule.showToast(`User script was not saved: ${error?.message || error}`, 8000);
+  }
+}
+
+async function deleteUserScript(scriptId) {
+  const script = (userScriptsReport?.scripts || []).find((value) => value.id === scriptId);
+  const confirmed = await uiModule.styledConfirm(
+    `Delete ${script?.name || 'this user script'}? Its completed command output remains in the normal job history until cleared.`,
+    { title: 'Delete user script', confirmText: 'Delete', cancelText: 'Cancel', danger: true },
+  );
+  if (!confirmed) return;
+  try {
+    await request(`/api/odysseus/user-scripts/${encodeURIComponent(scriptId)}`, { method: 'DELETE' });
+    editingUserScriptId = '';
+    uiModule.showToast('User script deleted.', 4000);
+    await load();
+  } catch (error) {
+    uiModule.showToast(`User script was not deleted: ${error?.message || error}`, 8000);
+  }
 }
 
 function planDockerAction(projectId, action) {
@@ -1032,6 +1143,37 @@ function handleServicesClick(event) {
   }
   const port = event.target.closest('[data-open-port]');
   if (port) return openLocalPort(port.dataset.openPort);
+  if (event.target.closest('[data-user-scripts-toggle]')) {
+    userScriptsOpen = !userScriptsOpen;
+    render();
+    return;
+  }
+  if (event.target.closest('[data-user-script-new]')) {
+    editingUserScriptId = 'new';
+    userScriptsOpen = true;
+    render();
+    return;
+  }
+  const runUserScript = event.target.closest('[data-user-script-run]');
+  if (runUserScript) return planUserScript(runUserScript.dataset.userScriptRun);
+  const userScriptOutput = event.target.closest('[data-user-script-output]');
+  if (userScriptOutput?.dataset.userScriptOutput) return selectJob(userScriptOutput.dataset.userScriptOutput);
+  const editUserScript = event.target.closest('[data-user-script-edit]');
+  if (editUserScript) {
+    editingUserScriptId = editUserScript.dataset.userScriptEdit;
+    userScriptsOpen = true;
+    render();
+    return;
+  }
+  const deleteScript = event.target.closest('[data-user-script-delete]');
+  if (deleteScript) return deleteUserScript(deleteScript.dataset.userScriptDelete);
+  const saveScript = event.target.closest('[data-user-script-save]');
+  if (saveScript) return saveUserScript(saveScript);
+  if (event.target.closest('[data-user-script-cancel]')) {
+    editingUserScriptId = '';
+    render();
+    return;
+  }
   if (event.target.closest('[data-stop-interactive]')) return shutdownInteractive();
   const runtimeAction = event.target.closest('[data-runtime-action]');
   if (runtimeAction) return planRuntimeAction(runtimeAction.dataset.runtime, runtimeAction.dataset.runtimeAction);

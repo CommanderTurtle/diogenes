@@ -1,4 +1,4 @@
-"""Reproduce Diogenes' verified Hermes integrations through native commands.
+"""Reproduce Diogenes' verified harness integrations through native commands.
 
 Hermes owns its profiles, gateway, MCP registry, plugins, and skills. This
 module never serializes or writes ``config.yaml``. It observes configuration
@@ -545,6 +545,7 @@ def _mcp_contract(name: str, profile: str = "default") -> dict[str, Any]:
         "retrieval": {
             "command": str(services / "retrieval" / ".venv" / "bin" / "python"),
             "args": ["-m", "hermes_retrieval.server"],
+            "env": {"RETRIEVAL_HARNESS": "hermes"},
             "connect_timeout": 120.0,
             "enabled": True,
         },
@@ -1143,21 +1144,46 @@ def _retrieval_intake_current() -> bool:
         'path = "${RETRIEVAL_SKILL_INTAKE}"',
         'state = "cold"',
     )
-    projection = str(
-        Path.home() / ".local" / "share" / "hermes-retrieval" / "projections" / "skills"
-    )
+    data_root = Path.home() / ".local" / "share" / "retrieval"
+    projection_root = data_root / "projections"
+    hermes_projection = str(projection_root / "hermes" / "skills")
+    omp_projection = str(projection_root / "omp" / "skills")
+    iwe_source = _services_root() / "iwe"
+    iwe_command = Path.home() / ".cargo" / "bin" / "iwe"
     hermes_dirs = _config_value("default", "skills.external_dirs")
     omp_dirs = _omp_value("default", "skills.customDirectories")
+    omp_mcp_path = Path(
+        env.get("RETRIEVAL_OMP_MCP_CONFIG")
+        or Path.home() / ".omp" / "agent" / "mcp.json"
+    ).expanduser()
+    try:
+        omp_mcp = json.loads(omp_mcp_path.read_text(encoding="utf-8"))
+        omp_server = omp_mcp["mcpServers"]["retrieval"]
+    except (OSError, KeyError, TypeError, json.JSONDecodeError):
+        omp_server = {}
     return bool(
         intake.is_dir()
         and (root / "taxonomy.toml").is_file()
         and (root / "category-overrides.toml").is_file()
         and env.get("RETRIEVAL_SKILL_INTAKE") == str(intake)
+        and env.get("RETRIEVAL_CATALOG_ROOT") == str(data_root / "catalog")
+        and env.get("RETRIEVAL_PROJECTION_ROOT") == str(projection_root)
+        and env.get("RETRIEVAL_IWE_SOURCE") == str(iwe_source)
+        and env.get("RETRIEVAL_IWE_COMMAND") == str(iwe_command)
+        and iwe_source.is_dir()
+        and iwe_command.is_file()
         and all(value in content for value in required)
         and isinstance(hermes_dirs, list)
-        and projection in hermes_dirs
+        and hermes_projection in hermes_dirs
+        and omp_projection not in hermes_dirs
         and isinstance(omp_dirs, list)
-        and projection in omp_dirs
+        and omp_projection in omp_dirs
+        and hermes_projection not in omp_dirs
+        and isinstance(omp_server, dict)
+        and omp_server.get("command") == str(root / "start.sh")
+        and omp_server.get("cwd") == str(root)
+        and isinstance(omp_server.get("env"), dict)
+        and omp_server["env"].get("RETRIEVAL_HARNESS") == "omp"
     )
 
 
@@ -1358,15 +1384,12 @@ def _leetcoder_current() -> bool:
 
 
 def _retrieval_command(*arguments: str, timeout: int = 3600) -> None:
-    executable = (
-        _services_root()
-        / "retrieval"
-        / ".venv"
-        / "bin"
-        / "hermes-retrieval"
-    )
+    root = _services_root() / "retrieval"
+    executable = root / ".venv" / "bin" / "retrieval"
     if not executable.is_file():
-        raise IntegrationError("Hermes Retrieval is not set up")
+        executable = root / ".venv" / "bin" / "hermes-retrieval"
+    if not executable.is_file():
+        raise IntegrationError("Retrieval is not set up")
     _run([str(executable), *arguments], timeout=timeout)
 
 
@@ -1397,6 +1420,7 @@ def _integrate_retrieval() -> None:
         _run([str(root / "setup.sh")], cwd=root, timeout=1800)
     _ensure_retrieval_intake(root)
     intake = _services_root() / "skill-library"
+    data_root = Path.home() / ".local" / "share" / "retrieval"
     _replace_env_values(
         env_path,
         {
@@ -1409,6 +1433,18 @@ def _integrate_retrieval() -> None:
             "RETRIEVAL_WATCH_DEBOUNCE_MS": "1500",
             "RETRIEVAL_WATCH_POLL_SECONDS": "15",
             "RETRIEVAL_SKILL_INTAKE": str(intake),
+            "RETRIEVAL_CATALOG_ROOT": str(data_root / "catalog"),
+            "RETRIEVAL_PROJECTION_ROOT": str(data_root / "projections"),
+            "RETRIEVAL_IWE_COMMAND": str(
+                Path.home() / ".cargo" / "bin" / "iwe"
+            ),
+            "RETRIEVAL_IWE_SOURCE": str(_services_root() / "iwe"),
+            "RETRIEVAL_OMP_CONFIG": str(
+                Path.home() / ".omp" / "agent" / "config.yml"
+            ),
+            "RETRIEVAL_OMP_MCP_CONFIG": str(
+                Path.home() / ".omp" / "agent" / "mcp.json"
+            ),
             "RETRIEVAL_TAXONOMY_FILE": str(root / "taxonomy.toml"),
             "RETRIEVAL_CATEGORY_OVERRIDES": str(
                 root / "category-overrides.toml"
@@ -1827,7 +1863,7 @@ def integrate(runtime_id: str) -> bool:
         raise IntegrationError("install the dependency source first")
     integration = str(item.get("integration") or "")
     if not integration:
-        print(f"{item['label']}: no Hermes integration is required. Nothing to do.")
+        print(f"{item['label']}: no harness integration is required. Nothing to do.")
         return False
     fingerprint = _source_fingerprint(item)
     if _contract_current(item, integration, fingerprint):

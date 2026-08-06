@@ -339,18 +339,47 @@
       "ports": []
     },
     {
+      "id": "iwe.graph",
+      "label": "IWE",
+      "category": "native",
+      "resource_kind": "repository",
+      "dependency_section": "Knowledge",
+      "recommended": true,
+      "capability_group": "knowledge",
+      "role": "Maintainable local Markdown graph CLI used by Retrieval for read-only structural navigation",
+      "root": "${ULYSSES_MICROSERVICES_ROOT}/iwe",
+      "env_files": [],
+      "config_files": [],
+      "git_update": true,
+      "source_url": "https://github.com/iwe-org/iwe.git",
+      "source_branch": "master",
+      "setup": {
+        "kind": "cargo_path",
+        "value": "crates/iwe"
+      },
+      "readiness_checks": [
+        {
+          "label": "IWE CLI",
+          "path": "${HOME}/.cargo/bin/iwe",
+          "executable": true
+        }
+      ],
+      "optional": true,
+      "ports": []
+    },
+    {
       "id": "retrieval.mcp",
-      "label": "Hermes Retrieval",
+      "label": "Retrieval",
       "category": "native",
       "resource_kind": "mcp",
-      "dependency_section": "Hermes MCPs",
+      "dependency_section": "Knowledge",
       "recommended": true,
       "hermes_component": "retrieval",
       "capability_group": "knowledge",
-      "role": "Cold specialist skill catalog with conservative taxonomy, IWE graph navigation, Chroma ranking, and an ephemeral OMP scout",
+      "role": "Dual Hermes and OMP cold-skill catalog with isolated projection lanes, IWE navigation, Chroma ranking, and an ephemeral OMP scout",
       "integration": "retrieval",
       "root": "${ULYSSES_MICROSERVICES_ROOT}/retrieval",
-      "depends_on": ["chroma.vector"],
+      "depends_on": ["chroma.vector", "iwe.graph"],
       "maintenance_requires_dependencies": true,
       "env_files": [".env"],
       "config_files": [

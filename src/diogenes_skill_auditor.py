@@ -1,4 +1,4 @@
-"""Date-sorted skill administration backed by Hermes Retrieval."""
+"""Date-sorted skill administration backed by the Retrieval catalog."""
 
 from __future__ import annotations
 
@@ -27,9 +27,12 @@ def _services_root() -> Path:
 
 
 def _cli() -> Path:
-    path = _services_root() / "retrieval" / ".venv" / "bin" / "hermes-retrieval"
+    root = _services_root() / "retrieval" / ".venv" / "bin"
+    path = root / "retrieval"
     if not path.is_file():
-        raise RuntimeJobError("Install Hermes Retrieval before opening Skills auditor")
+        path = root / "hermes-retrieval"
+    if not path.is_file():
+        raise RuntimeJobError("Install Retrieval before opening Skills auditor")
     return path
 
 

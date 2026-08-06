@@ -11,7 +11,7 @@
       "id": "retrieval",
       "directory": "retrieval",
       "source": "https://github.com/CommanderTurtle/retrieval.git",
-      "role": "Cold specialist skill discovery through a conservative taxonomy, IWE graph, Chroma ranking, and an ephemeral OMP scout"
+      "role": "Dual Hermes and OMP cold-skill discovery through isolated projections, an IWE graph, Chroma ranking, and an ephemeral OMP scout"
     },
     {
       "id": "context-mode",

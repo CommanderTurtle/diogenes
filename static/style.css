@@ -42252,6 +42252,158 @@ details.uly-services-advanced .uly-advanced-section > p {
   padding: 11px;
 }
 
+.dio-user-scripts {
+  margin-top: 10px;
+  border: 1px solid color-mix(in srgb, var(--fg) 11%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--bg) 96%, var(--fg) 4%);
+  overflow: hidden;
+}
+
+.dio-user-scripts-summary {
+  width: 100%;
+  min-height: 42px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 11px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.dio-user-scripts-summary > span {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  min-width: 0;
+  font-size: 8px;
+  opacity: .58;
+}
+
+.dio-user-scripts-summary b {
+  font-size: 11px;
+  font-weight: 600;
+  opacity: 1;
+}
+
+.dio-user-scripts-summary small {
+  font-size: 8px;
+  font-weight: 400;
+}
+
+.dio-user-scripts-summary i {
+  display: inline-block;
+  font-style: normal;
+  font-size: 13px;
+  transition: transform .14s ease;
+}
+
+.dio-user-scripts.open .dio-user-scripts-summary i {
+  transform: rotate(90deg);
+}
+
+.dio-user-scripts-body {
+  display: grid;
+  gap: 8px;
+  padding: 9px;
+  border-top: 1px solid color-mix(in srgb, var(--fg) 8%, transparent);
+}
+
+.dio-user-scripts-guide {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 6px 7px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--bg) 97%, var(--fg) 3%);
+}
+
+.dio-user-scripts-guide span {
+  font-size: 8px;
+  line-height: 1.45;
+  opacity: .56;
+}
+
+.dio-user-scripts-guide button,
+.dio-user-script-editor button {
+  flex: 0 0 auto;
+  min-height: 27px;
+  padding: 4px 8px;
+  border: 1px solid color-mix(in srgb, var(--fg) 14%, transparent);
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font: 9px/1 var(--mono, monospace);
+}
+
+.dio-user-scripts-guide button:hover,
+.dio-user-script-editor button:hover {
+  border-color: color-mix(in srgb, var(--accent, var(--red)) 48%, transparent);
+  background: color-mix(in srgb, var(--accent, var(--red)) 8%, transparent);
+}
+
+.dio-user-script-list {
+  margin: 0;
+}
+
+.dio-user-script-editor {
+  display: grid;
+  gap: 8px;
+  padding: 9px;
+  border: 1px solid color-mix(in srgb, var(--accent, var(--red)) 22%, transparent);
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--bg) 98%, var(--fg) 2%);
+}
+
+.dio-user-script-fields {
+  display: grid;
+  grid-template-columns: minmax(130px, .6fr) minmax(220px, 1fr);
+  gap: 7px;
+}
+
+.dio-user-script-fields label,
+.dio-user-script-source {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.dio-user-script-fields label > span,
+.dio-user-script-source > span {
+  font-size: 8px;
+  opacity: .58;
+}
+
+.dio-user-script-fields input {
+  min-width: 0;
+  height: 30px;
+  padding: 0 8px;
+  border: 1px solid color-mix(in srgb, var(--fg) 14%, transparent);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--bg) 95%, var(--fg) 5%);
+  color: inherit;
+  font-size: 9px;
+}
+
+.dio-user-script-source textarea {
+  width: 100%;
+  min-height: 150px;
+  resize: vertical;
+  padding: 9px;
+  border: 1px solid color-mix(in srgb, var(--fg) 12%, transparent);
+  border-radius: 6px;
+  outline: 0;
+  background: color-mix(in srgb, var(--bg) 98%, #000 2%);
+  color: inherit;
+  font: 9px/1.5 var(--mono, monospace);
+  tab-size: 2;
+}
+
 .dio-service-card > header {
   display: flex;
   align-items: flex-start;
@@ -42904,6 +43056,19 @@ details.uly-services-advanced .uly-advanced-section > p {
   .dio-card-tools code {
     flex-basis: 100%;
     text-align: left;
+  }
+
+  .dio-user-script-fields {
+    grid-template-columns: 1fr;
+  }
+
+  .dio-user-scripts-guide {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .dio-user-scripts-guide button {
+    width: max-content;
   }
 
   .dio-skills-window {
