@@ -53,6 +53,12 @@ From a reviewed `dev` checkout:
 web application on `0.0.0.0:7000`. In-place update and runtime-state instructions are in
 [`docs/DIOGENES_DEPLOYMENT.md`](docs/DIOGENES_DEPLOYMENT.md).
 
+After the optional OMP, Persephone, and local backend dependencies are installed,
+`./ompsettings.sh` can apply the workstation's optimized OMP preference baseline
+once. It is deliberately never run by **Integrate**, preserves MCP/model/auth/session
+configuration, and asks for confirmation before writing; open `omp`, then run
+`/settings` to review the result.
+
 ### Native services without system Node
 
 Diogenes integrates system services through a deliberately minimal control
