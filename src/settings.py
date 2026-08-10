@@ -62,6 +62,8 @@ DEFAULT_SETTINGS = {
     # safe to ship on by default for every user.
     "search_fallback_chain": ["duckduckgo"],
     "search_url": "",
+    "firecrawl_url": "http://localhost:3002",
+    "firecrawl_api_key": "",
     "search_result_count": 5,
     # SafeSearch level applied to every provider that exposes one.
     # "strict"   — apply the provider's strongest filtering level (default;

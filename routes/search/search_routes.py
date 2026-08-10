@@ -9,7 +9,11 @@ import time
 
 from services.search import get_search_config, comprehensive_web_search, PROVIDER_INFO
 from services.search.core import _call_provider
-from services.search.providers import _get_provider_key, _get_search_instance
+from services.search.providers import (
+    _get_firecrawl_instance,
+    _get_provider_key,
+    _get_search_instance,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -76,6 +80,8 @@ def setup_search_routes(config) -> APIRouter:
             if needs_key and not _get_provider_key(pid):
                 available = False
             if needs_url and pid == "searxng" and not _get_search_instance():
+                available = False
+            if needs_url and pid == "firecrawl" and not _get_firecrawl_instance():
                 available = False
             providers.append({
                 "id": pid,
