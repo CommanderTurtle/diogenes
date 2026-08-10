@@ -38,6 +38,7 @@
       "recommended": true,
       "capability_group": "search",
       "role": "Firecrawl search backend",
+      "integration": "diogenes-searxng",
       "root": "${ULYSSES_MICROSERVICES_ROOT}/SEARXNG/searxng",
       "compose": "docker-compose.yml",
       "compose_fallbacks": ["container/docker-compose.yml"],

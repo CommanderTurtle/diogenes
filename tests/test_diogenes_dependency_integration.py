@@ -85,3 +85,34 @@ def test_retrieval_intake_migration_preserves_existing_sources(
     assert content.count('name = "skill-intake"') == 1
     assert (services / "skill-library").is_dir()
     assert (root / "category-overrides.toml").read_text(encoding="utf-8") == "[skills]\n"
+
+
+def test_integrate_searxng_updates_only_the_managed_url(monkeypatch) -> None:
+    import src.settings as settings_module
+
+    current = {
+        "search_provider": "duckduckgo",
+        "search_url": "http://localhost:8080",
+    }
+    saved = {}
+    monkeypatch.setattr(settings_module, "load_settings", lambda: dict(current))
+    monkeypatch.setattr(settings_module, "save_settings", lambda value: saved.update(value))
+
+    integration._integrate_searxng()
+
+    assert saved["search_url"] == "http://localhost:7070"
+    assert saved["search_provider"] == "duckduckgo"
+
+
+def test_diogenes_searxng_contract_checks_the_managed_url(monkeypatch) -> None:
+    import src.settings as settings_module
+
+    monkeypatch.setattr(
+        settings_module,
+        "get_setting",
+        lambda key: "http://localhost:7070" if key == "search_url" else None,
+    )
+    assert integration._diogenes_searxng_current() is True
+
+    monkeypatch.setattr(settings_module, "get_setting", lambda _key: "http://localhost:8080")
+    assert integration._diogenes_searxng_current() is False

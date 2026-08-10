@@ -34,6 +34,7 @@ DEFAULT_HERMES_HOME = Path.home() / ".hermes"
 POLICY_PATH = ROOT / "config" / "ulysses" / "hermes-stack.json"
 MANAGED_SHELL_START = "# >>> diogenes services >>>"
 MANAGED_SHELL_END = "# <<< diogenes services <<<"
+DIOGENES_SEARXNG_URL = "http://localhost:7070"
 
 
 class IntegrationError(RuntimeError):
@@ -1659,6 +1660,31 @@ def _integrate_workspace() -> None:
     )
 
 
+def _integrate_searxng() -> None:
+    """Point Diogenes at the SearXNG instance managed by Services.
+
+    Upstream's standalone default is port 8080, while the managed workstation
+    service is intentionally published on loopback port 7070.  Persist the
+    latter through Diogenes' own settings API so web search and Deep Research
+    share the same live backend without rewriting an operator's provider
+    choice.
+    """
+    from src.settings import load_settings, save_settings
+
+    settings = dict(load_settings())
+    settings["search_url"] = DIOGENES_SEARXNG_URL
+    save_settings(settings)
+
+
+def _diogenes_searxng_current() -> bool:
+    try:
+        from src.settings import get_setting
+
+        return get_setting("search_url") == DIOGENES_SEARXNG_URL
+    except Exception:
+        return False
+
+
 def _integrate_firecrawl() -> None:
     _set_config_value("default", "FIRECRAWL_API_URL", "http://localhost:3002")
     _set_config_value("default", "FIRECRAWL_API_KEY", "fc-local")
@@ -1773,6 +1799,8 @@ def _contract_current(
             and _config_value("default", "web.use_gateway") is False
             and _shell_environment_current()
         )
+    if integration == "diogenes-searxng":
+        return _diogenes_searxng_current()
     if integration == "hermes-camofox":
         return bool(
             _config_value("default", "CAMOFOX_URL")
@@ -1872,7 +1900,9 @@ def integrate(runtime_id: str) -> bool:
         print(f"{item['label']}: integration is current{suffix}. Nothing to do.")
         return False
 
-    if integration == "hermes-firecrawl":
+    if integration == "diogenes-searxng":
+        _integrate_searxng()
+    elif integration == "hermes-firecrawl":
         _integrate_firecrawl()
     elif integration == "hermes-camofox":
         _integrate_camofox_browser()
@@ -1948,6 +1978,8 @@ def integrate(runtime_id: str) -> bool:
     next_step = (
         "Review ~/.config/persephone, then start its installed user service when ready."
         if integration == "persephone"
+        else "Diogenes web search and Deep Research now share the managed SearXNG endpoint."
+        if integration == "diogenes-searxng"
         else "Continue configuring or restart Hermes when ready."
     )
     print(f"{item['label']}: integration applied. {next_step}")
@@ -1958,6 +1990,7 @@ def integrate_all() -> None:
     # Dependency ordering mirrors the verified host: service routing, MCP
     # substrates, isolated Librarian profile, Retrieval, then curated skills.
     ordered = (
+        "searxng.search",
         "firecrawl.api",
         "camofox.browser",
         "context.mode.mcp",
