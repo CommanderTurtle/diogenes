@@ -57,7 +57,8 @@ from routes.email_helpers import (
     _extract_attachment_to_disk, _extract_html, _extract_text,
     _fetch_sender_thread_context, _pre_retrieve_context,
     _EMAIL_REPLY_SYS_PROMPT_BASE, _POOL_HOOKS,
-    _friendly_email_auth_error,
+    _friendly_email_auth_error, _email_summary_failure_log_detail,
+    _generate_email_summary, EMAIL_SUMMARY_ERROR_CODE, EMAIL_SUMMARY_ERROR_MESSAGE,
     SendEmailRequest, ExtractStyleRequest,
     ATTACHMENTS_DIR, COMPOSE_UPLOADS_DIR, SCHEDULED_DB,
     attachment_extract_dir, _email_cache_owner_clause, email_translation_body_hash,
@@ -4766,8 +4767,6 @@ def setup_email_routes():
         """Generate a quick AI summary of an email body."""
         try:
             from src.endpoint_resolver import resolve_endpoint
-            from src.llm_core import _uses_max_completion_tokens, _restricts_temperature
-            import requests as _req
 
             body = data.get("body", "")
             subject = data.get("subject", "")
@@ -4778,7 +4777,11 @@ def setup_email_routes():
             if account_id:
                 _assert_owns_account(account_id, owner)
             if not body:
-                return {"success": False, "error": "No body provided"}
+                return {
+                    "success": False,
+                    "error": "No body provided",
+                    "error_code": "email_summary_missing_body",
+                }
 
             # If we know which UID this is, fetch the raw message and pull
             # attachment text so the summary can reference invoice totals,
@@ -4807,53 +4810,43 @@ def setup_email_routes():
             if not url:
                 url, model, headers = resolve_endpoint("default", owner=owner)
             if not url or not model:
-                return {"success": False, "error": "No LLM endpoint configured"}
+                return {
+                    "success": False,
+                    "error": "No model configured for email summaries",
+                    "error_code": "email_summary_not_configured",
+                }
 
             req_headers = {"Content-Type": "application/json"}
             if headers:
                 req_headers.update(headers)
-            tok_key = "max_completion_tokens" if _uses_max_completion_tokens(model) else "max_tokens"
-            payload = {
-                "model": model,
-                "messages": [
-                    {"role": "system", "content": "You are an email summarizer. Format: 1-3 short bullet points (use '- '). Cover: main point, action items, deadlines. If the email has attachments (marked '--- ATTACHMENTS ---'), USE THEIR CONTENTS — pull invoice totals, deadlines, key clauses, concrete numbers/dates from PDFs/docs into the bullets. Be terse.\n\nOUTPUT FORMAT: Put ONLY the bullet points between these exact markers, each on its own line:\n<<<SUMMARY>>>\n- ...\n<<<END>>>\nAny reasoning must come BEFORE <<<SUMMARY>>> (ideally inside <think>...</think>). Only the text between the markers is kept."},
-                    {"role": "user", "content": f"From: {sender}\nSubject: {subject}\n\n{body_for_llm[:12000]}\n\n---\n\nSummarize the email. Output the bullets between <<<SUMMARY>>> and <<<END>>>."},
-                ],
-                tok_key: 8192,
-                "temperature": 0.3,
-                "stream": False,
-            }
-            # Reasoning models (o1/o3/o4/gpt-5) reject an explicit temperature.
-            if _restricts_temperature(model):
-                payload.pop("temperature", None)
-            resp = await asyncio.to_thread(
-                _req.post, url, json=payload, headers=req_headers, timeout=180
-            )
-            if not resp.ok:
-                return {"success": False, "error": f"LLM HTTP {resp.status_code}"}
-            rdata = resp.json()
-            msg = (rdata.get("choices") or [{}])[0].get("message", {})
-            content = (msg.get("content") or "").strip()
-            content = _extract_reply(content)
+            try:
+                content = await _generate_email_summary(
+                    url=url,
+                    model=model,
+                    sender=sender,
+                    subject=subject,
+                    body_for_llm=body_for_llm,
+                    headers=req_headers,
+                    max_tokens=8192,
+                    timeout=180,
+                )
+            except Exception as e:
+                logger.warning(
+                    "Email summary LLM call failed %s",
+                    _email_summary_failure_log_detail(e),
+                )
+                return {
+                    "success": False,
+                    "error": EMAIL_SUMMARY_ERROR_MESSAGE,
+                    "error_code": EMAIL_SUMMARY_ERROR_CODE,
+                }
 
             if not content:
-                # Model put everything in reasoning_content — extract bullet points
-                rc = (msg.get("reasoning_content") or "").strip()
-                # Find bullet-point style output (lines starting with -, •, *, or numbered)
-                bullet_lines = []
-                for line in rc.split("\n"):
-                    stripped = line.strip()
-                    if re.match(r"^[-•*]\s+|^\d+[.)]\s+", stripped):
-                        bullet_lines.append(stripped)
-                if bullet_lines:
-                    content = "\n".join(bullet_lines)
-                else:
-                    # Last resort: take the last paragraph
-                    paragraphs = [p.strip() for p in rc.split("\n\n") if p.strip()]
-                    content = paragraphs[-1] if paragraphs else rc[:500]
-
-            if not content:
-                return {"success": False, "error": "Empty response from model"}
+                return {
+                    "success": False,
+                    "error": "The model returned an empty summary",
+                    "error_code": "email_summary_empty",
+                }
 
             # Cache the summary if we have a message_id
             mid = data.get("message_id", "")
@@ -4876,8 +4869,15 @@ def setup_email_routes():
 
             return {"success": True, "summary": content, "model_used": model}
         except Exception as e:
-            logger.error(f"Failed to summarize: {e}")
-            return {"success": False, "error": "Mail operation failed"}
+            logger.error(
+                "Email summary route failed %s",
+                _email_summary_failure_log_detail(e),
+            )
+            return {
+                "success": False,
+                "error": EMAIL_SUMMARY_ERROR_MESSAGE,
+                "error_code": EMAIL_SUMMARY_ERROR_CODE,
+            }
 
     @router.post("/translate")
     async def translate_email(data: dict, owner: str = Depends(require_owner)):
