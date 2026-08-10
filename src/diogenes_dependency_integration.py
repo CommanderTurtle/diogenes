@@ -35,6 +35,7 @@ POLICY_PATH = ROOT / "config" / "ulysses" / "hermes-stack.json"
 MANAGED_SHELL_START = "# >>> diogenes services >>>"
 MANAGED_SHELL_END = "# <<< diogenes services <<<"
 DIOGENES_SEARXNG_URL = "http://localhost:7070"
+DIOGENES_FIRECRAWL_URL = "http://localhost:3002"
 
 
 class IntegrationError(RuntimeError):
@@ -1686,11 +1687,42 @@ def _diogenes_searxng_current() -> bool:
 
 
 def _integrate_firecrawl() -> None:
-    _set_config_value("default", "FIRECRAWL_API_URL", "http://localhost:3002")
+    _set_config_value("default", "FIRECRAWL_API_URL", DIOGENES_FIRECRAWL_URL)
     _set_config_value("default", "FIRECRAWL_API_KEY", "fc-local")
     _set_config_value("default", "web.backend", "firecrawl")
     _set_config_value("default", "web.use_gateway", False)
     _ensure_shell_environment()
+
+    # Diogenes owns its search adapter directly. Firecrawl is the preferred
+    # local appliance; the independently managed SearXNG service remains the
+    # only automatic fallback, keeping this profile entirely self-hosted.
+    from src.settings import load_settings, save_settings
+
+    settings = dict(load_settings())
+    settings.update({
+        "search_provider": "firecrawl",
+        "firecrawl_url": DIOGENES_FIRECRAWL_URL,
+        "search_url": DIOGENES_SEARXNG_URL,
+        "search_fallback_chain": ["searxng"],
+        "research_search_provider": "",
+    })
+    save_settings(settings)
+
+
+def _diogenes_firecrawl_current() -> bool:
+    try:
+        from src.settings import load_settings
+
+        settings = load_settings()
+        return bool(
+            settings.get("search_provider") == "firecrawl"
+            and settings.get("firecrawl_url") == DIOGENES_FIRECRAWL_URL
+            and settings.get("search_url") == DIOGENES_SEARXNG_URL
+            and settings.get("search_fallback_chain") == ["searxng"]
+            and not settings.get("research_search_provider")
+        )
+    except Exception:
+        return False
 
 
 def _integrate_camofox_browser() -> None:
@@ -1793,11 +1825,12 @@ def _contract_current(
     if integration in {"hermes-firecrawl", "firecrawl-cli"}:
         return bool(
             _config_value("default", "FIRECRAWL_API_URL")
-            == "http://localhost:3002"
+            == DIOGENES_FIRECRAWL_URL
             and _config_value("default", "FIRECRAWL_API_KEY") == "fc-local"
             and _config_value("default", "web.backend") == "firecrawl"
             and _config_value("default", "web.use_gateway") is False
             and _shell_environment_current()
+            and _diogenes_firecrawl_current()
         )
     if integration == "diogenes-searxng":
         return _diogenes_searxng_current()
@@ -1980,6 +2013,8 @@ def integrate(runtime_id: str) -> bool:
         if integration == "persephone"
         else "Diogenes web search and Deep Research now share the managed SearXNG endpoint."
         if integration == "diogenes-searxng"
+        else "Diogenes now searches through local Firecrawl with managed SearXNG as its fallback."
+        if integration in {"hermes-firecrawl", "firecrawl-cli"}
         else "Continue configuring or restart Hermes when ready."
     )
     print(f"{item['label']}: integration applied. {next_step}")

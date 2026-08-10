@@ -116,3 +116,45 @@ def test_diogenes_searxng_contract_checks_the_managed_url(monkeypatch) -> None:
 
     monkeypatch.setattr(settings_module, "get_setting", lambda _key: "http://localhost:8080")
     assert integration._diogenes_searxng_current() is False
+
+
+def test_integrate_firecrawl_sets_local_diogenes_search_chain(monkeypatch) -> None:
+    import src.settings as settings_module
+
+    saved = {}
+    monkeypatch.setattr(integration, "_set_config_value", lambda *args: None)
+    monkeypatch.setattr(integration, "_ensure_shell_environment", lambda: None)
+    monkeypatch.setattr(
+        settings_module,
+        "load_settings",
+        lambda: {"search_provider": "duckduckgo", "unrelated": "preserved"},
+    )
+    monkeypatch.setattr(settings_module, "save_settings", lambda value: saved.update(value))
+
+    integration._integrate_firecrawl()
+
+    assert saved == {
+        "search_provider": "firecrawl",
+        "firecrawl_url": "http://localhost:3002",
+        "search_url": "http://localhost:7070",
+        "search_fallback_chain": ["searxng"],
+        "research_search_provider": "",
+        "unrelated": "preserved",
+    }
+
+
+def test_diogenes_firecrawl_contract_requires_entire_local_chain(monkeypatch) -> None:
+    import src.settings as settings_module
+
+    current = {
+        "search_provider": "firecrawl",
+        "firecrawl_url": "http://localhost:3002",
+        "search_url": "http://localhost:7070",
+        "search_fallback_chain": ["searxng"],
+        "research_search_provider": "",
+    }
+    monkeypatch.setattr(settings_module, "load_settings", lambda: dict(current))
+    assert integration._diogenes_firecrawl_current() is True
+
+    current["search_fallback_chain"] = ["duckduckgo"]
+    assert integration._diogenes_firecrawl_current() is False
