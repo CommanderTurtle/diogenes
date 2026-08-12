@@ -1,5 +1,6 @@
 import json
 import os
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -67,7 +68,7 @@ async def test_run_ssh_command_executes_with_stdin_and_returns_output(monkeypatc
         timeout=5,
         connect_timeout=4,
         strict_host_key_checking=False,
-        stdin_data=b"python -m pip install vllm",
+        stdin_data=b"uv pip install --python python3 vllm",
     )
 
     assert rc == 0
@@ -87,7 +88,7 @@ async def test_run_ssh_command_executes_with_stdin_and_returns_output(monkeypatc
     assert captured["stdin"] is not None
     assert captured["stdout"] is not None
     assert captured["stderr"] is not None
-    assert captured["input"] == b"python -m pip install vllm"
+    assert captured["input"] == b"uv pip install --python python3 vllm"
 
 
 def test_safe_env_prefix_leaves_compound_conda_prefix_unchanged():
@@ -224,88 +225,43 @@ def test_local_tooling_path_export_preserves_spaces_and_expands_path():
     assert line.endswith(':$PATH"')  # $PATH stays expandable in double quotes
 
 
-def test_pip_install_fallback_chain_prefers_venv_safe_install():
+def test_pip_install_fallback_chain_uses_one_explicit_uv_target():
     chain = _pip_install_fallback_chain("huggingface_hub", upgrade=True)
-    # First attempt: plain install, wrapped in status-preserving subshell
+
     assert chain.startswith("bash -c '")
-    assert "python3 -m pip install -q -U huggingface_hub" in chain
-    # Fallback: --user first, then guarded --break-system-packages for PEP-668 pip.
-    assert "python3 -m pip install --user -q -U huggingface_hub" in chain
-    assert "python3 -m pip install --help 2>/dev/null | grep -q -- --break-system-packages" in chain
-    assert "--user --break-system-packages" in chain
-    assert "python3 -m pip install --user --break-system-packages -q -U huggingface_hub" in chain
-    # No bare `| tail` (which would mask pip's exit code)
+    assert "uv pip install --python python3 --no-cache -q -U huggingface_hub" in chain
+    assert chain.count("uv pip install") == 1
+    assert "--user" not in chain
+    assert "--break-system-packages" not in chain
     assert "| tail" not in chain
-    # Negated venv check with && — so failure in a venv propagates instead of
-    # being masked as success by the venv_check's exit-0.
-    assert "! python3 -c" in chain
-    # The group uses && (not ||) between venv check and user attempt
-    assert "&&" in chain
+    assert "_rc=$?" in chain
+    assert "exit $_rc" in chain
 
 
-def test_pip_install_fallback_chain_allows_custom_python_command():
+def test_pip_install_fallback_chain_maps_legacy_pip_to_python3():
     chain = _pip_install_fallback_chain("hf_xet", python_cmd="pip", upgrade=False)
-    assert "pip install -q hf_xet" in chain
-    assert "pip install --user -q hf_xet" in chain
-    assert "pip install --help 2>/dev/null | grep -q -- --break-system-packages" in chain
-    assert "pip install --user --break-system-packages -q hf_xet" in chain
-    # venv check uses the python executable derived from the pip command
-    assert 'python -c "import sys; sys.exit(0 if sys.prefix != sys.base_prefix else 1)"' in chain
-    # All install attempts are wrapped in bash -c subshells
-    assert chain.count("bash -c '") == 3
+
+    assert "uv pip install --python python3 --no-cache -q hf_xet" in chain
+    assert "--user" not in chain
+    assert "--break-system-packages" not in chain
+    assert chain.count("bash -c '") == 1
 
 
 def test_pip_install_fallback_chain_accepts_python_executable():
     chain = _pip_install_fallback_chain("llama-cpp-python[server]", python_cmd="python")
 
-    assert "python -m pip install -q 'llama-cpp-python[server]'" in chain
-    assert "python -m pip install --user -q 'llama-cpp-python[server]'" in chain
-    assert "python -m pip install --help 2>/dev/null | grep -q -- --break-system-packages" in chain
-    assert "python install " not in chain
-    assert 'python -c "import sys; sys.exit(0 if sys.prefix != sys.base_prefix else 1)"' in chain
+    assert "uv pip install --python python --no-cache -q 'llama-cpp-python[server]'" in chain
+    assert "--extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu" in chain
+    assert "python -m pip" not in chain
 
 
-def test_pip_install_fallback_chain_propagates_failure_in_venv():
-    """When base install fails inside a venv, the chain must exit non-zero.
+def test_pip_install_fallback_chain_has_no_system_mutation_fallback():
+    chain = _pip_install_fallback_chain("hf_xet")
 
-    The old `{ venv_check || user }` shape from #903 masked the failure:
-    venv_check exited 0 (in venv), || short-circuited, and the group
-    reported success even though nothing was installed.  The negated
-    `{ ! venv_check && user }` shape propagates the failure correctly.
-    """
-    # Simulate "inside a venv" deterministically: the venv check exits 0.
-    # Base install fails, venv_check exits 0, negated to 1,
-    # && skips user, group exits 1.  This avoids depending on whether the
-    # test runner's own interpreter happens to be inside a venv (which
-    # differs between local and CI environments).
-    script = (
-        "false || "
-        "{ ! true "  # venv_check=0 (in venv) → negated to 1 → user skipped
-        "&& echo user_attempt; }"
-    )
-    result = subprocess.run(
-        ["bash", "-c", script],
-        capture_output=True, text=True, timeout=10,
-    )
-    assert "user_attempt" not in result.stdout
-    assert result.returncode != 0, "Chain should propagate failure when base fails in venv"
-
-
-def test_pip_install_fallback_chain_tries_user_outside_venv():
-    """When base install fails outside a venv, the chain should try --user."""
-    # Force "not in venv" by making venv_check return 1 directly.
-    script = (
-        "bash -c '"
-        "python3 -c \"import sys; sys.exit(1)\" || "
-        "{ ! python3 -c \"import sys; sys.exit(1)\" "  # venv_check=1 → negated to 0 → user runs
-        "&& echo user_attempt; }"
-        "'"
-    )
-    result = subprocess.run(
-        ["bash", "-c", script],
-        capture_output=True, text=True, timeout=10,
-    )
-    assert "user_attempt" in result.stdout, "Chain should try --user when not in venv and base fails"
+    assert "uv pip install --python python3" in chain
+    assert "--user" not in chain
+    assert "--break-system-packages" not in chain
+    assert " -m pip " not in chain
 
 
 def test_pip_install_fallback_chain_quotes_extras_spec():
@@ -314,15 +270,15 @@ def test_pip_install_fallback_chain_quotes_extras_spec():
     (which pulls in starlette_context for ``python -m llama_cpp.server``) is
     actually installed instead of a bare ``llama-cpp-python`` (issue #730)."""
     chain = _pip_install_fallback_chain("llama-cpp-python[server]", python_cmd="pip")
-    # Quoted in the plain, --user, and guarded --break-system-packages attempts.
-    assert chain.count("'llama-cpp-python[server]'") == 3
+    # The one uv invocation preserves the quoted extra.
+    assert chain.count("'llama-cpp-python[server]'") == 1
     # llama-cpp installs must prefer prebuilt wheels to avoid fragile source builds.
     assert "--extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu" in chain
     # Never the unquoted form (bracket-glob risk).
     assert "install -q llama-cpp-python[server]" not in chain
     # A plain package name is still passed through unquoted (no regression).
     plain = _pip_install_fallback_chain("hf_xet", python_cmd="pip")
-    assert "install -q hf_xet" in plain
+    assert "--no-cache -q hf_xet" in plain
 
 
 def test_serve_runner_installs_llama_cpp_server_extra():
@@ -376,31 +332,31 @@ def test_venv_safe_local_pip_install_strips_user_flags_only_for_local_venv():
     assert _venv_safe_local_pip_install_cmd(cmd, local=True, in_venv=False) == cmd
 
 
-def test_pip_install_runner_guards_break_system_packages():
+def test_pip_install_runner_rejects_raw_pip_mutations():
     lines = []
     _append_pip_install_runner_lines(
         lines,
         'python3 -m pip install --no-cache-dir --user --break-system-packages "llama-cpp-python[server]"',
     )
-    script = "\n".join(lines)
 
-    assert "python3 -m pip install --help 2>/dev/null | grep -q -- --break-system-packages" in script
-    assert 'python3 -m pip install --no-cache-dir --user --break-system-packages "llama-cpp-python[server]"' in script
-    assert "python3 -m pip install --no-cache-dir --user 'llama-cpp-python[server]'" in script
-    assert "pip does not support --break-system-packages" in script
+    assert lines == [
+        'echo "ERROR: Diogenes rejected a non-uv Python mutation."; exit 127'
+    ]
 
 
-def test_pip_install_runner_leaves_plain_commands_unchanged():
+def test_pip_install_runner_accepts_only_normalized_uv_commands():
     lines = []
-    _append_pip_install_runner_lines(lines, "python3 -m pip install --no-cache-dir vllm")
+    command = "uv pip install --python /srv/Diogenes/.venv/bin/python --no-cache vllm"
+    _append_pip_install_runner_lines(lines, command)
 
-    assert lines == ["python3 -m pip install --no-cache-dir vllm"]
+    assert lines == [command]
 
 
 def test_pip_install_attempt_wraps_in_status_preserving_subshell():
-    """Each pip attempt must be a bash -c subshell that captures output,
-    prints tail, cleans up, and exits with pip's real status — not tail's."""
-    snippet = _pip_install_attempt("pip install -q huggingface_hub")
+    """Each uv attempt captures output and preserves uv's real exit status."""
+    snippet = _pip_install_attempt(
+        "uv pip install --python python3 --no-cache -q huggingface_hub"
+    )
     assert snippet.startswith("bash -c '")
     assert "$(mktemp)" in snippet
     assert "_rc=$?" in snippet
@@ -410,22 +366,26 @@ def test_pip_install_attempt_wraps_in_status_preserving_subshell():
 
 
 def test_pip_install_attempt_no_bare_pipe_tail():
-    """A bare `| tail` pipeline would mask pip's exit code — must not appear."""
-    snippet = _pip_install_attempt("pip install -q huggingface_hub")
+    """A bare `| tail` pipeline would mask uv's exit code — must not appear."""
+    snippet = _pip_install_attempt(
+        "uv pip install --python python3 --no-cache -q huggingface_hub"
+    )
     assert "| tail" not in snippet
 
 
 def test_pip_install_attempt_failure_propagates_real_exit_code():
-    """Run the generated snippet against a deliberately broken pip install
-    to confirm the subshell exits with pip's non-zero status."""
-    snippet = _pip_install_attempt("python3 -m pip install __nonexistent_package_12345__")
+    """A deliberately broken uv install must retain uv's non-zero status."""
+    snippet = _pip_install_attempt(
+        "uv pip install --python "
+        f"{shlex.quote(sys.executable)} --no-cache __nonexistent_package_12345__"
+    )
     result = subprocess.run(
         ["bash", "-c", snippet],
         capture_output=True,
         text=True,
         timeout=60,
     )
-    assert result.returncode != 0, "pip install of a nonexistent package should fail"
+    assert result.returncode != 0, "uv install of a nonexistent package should fail"
 
 
 def test_pip_install_attempt_success_exits_zero():
@@ -441,8 +401,11 @@ def test_pip_install_attempt_success_exits_zero():
 
 
 def test_pip_install_attempt_surfaces_stderr_on_failure():
-    """On failure, the last 5 lines of pip output should appear in stdout."""
-    snippet = _pip_install_attempt("python3 -m pip install __nonexistent_package_12345__")
+    """On failure, the last five lines of uv output should appear in stdout."""
+    snippet = _pip_install_attempt(
+        "uv pip install --python "
+        f"{shlex.quote(sys.executable)} --no-cache __nonexistent_package_12345__"
+    )
     result = subprocess.run(
         ["bash", "-c", snippet],
         capture_output=True,
@@ -876,10 +839,12 @@ def test_cached_model_scan_uses_huggingface_cache_env(tmp_path):
 
 def test_pip_install_no_cache_injects_flag():
     from routes.cookbook_helpers import _pip_install_no_cache
+    # Raw pip payloads are left untouched for the route's uv normalizer; this
+    # helper never creates a second system-pip execution path.
     assert _pip_install_no_cache("python -m pip install vllm") == \
-        "python -m pip install --no-cache-dir vllm"
+        "python -m pip install vllm"
     assert _pip_install_no_cache("pip install -q huggingface-hub") == \
-        "pip install --no-cache-dir -q huggingface-hub"
+        "pip install -q huggingface-hub"
     assert _pip_install_no_cache(
         "uv pip install --python /srv/Diogenes/.venv/bin/python -r /srv/vllm.lock"
     ) == (
