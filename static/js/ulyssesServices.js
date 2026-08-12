@@ -628,15 +628,44 @@ function dependencyStatus(runtime) {
   }
   if (runtime.integration) {
     const labels = {
-      current: 'Reconciled',
-      update_required: 'Reconcile needed',
-      not_integrated: 'Not reconciled',
-      unknown: 'Reconcile unknown',
+      current: 'Integration verified',
+      update_required: 'Recheck after source change',
+      not_integrated: 'Not yet verified',
+      unknown: 'Integration check unavailable',
     };
     const label = labels[runtime.integration_state];
     if (label) values.push(statusBadge(label));
   }
   return values.join('');
+}
+
+function dependencyIntegrationNote(runtime) {
+  if (!runtime.integration) return '';
+  const observation = runtime.integration_observation || {};
+  const recorded = String(observation.recorded_revision || '').slice(0, 7);
+  const current = String(observation.current_revision || '').slice(0, 7);
+  const revisions = recorded && current && recorded !== current
+    ? ` Last verified ${recorded}; current ${current}.`
+    : '';
+  return `<p class="dio-integration-note">${esc(observation.reason || '')}${esc(revisions)}</p>`;
+}
+
+function dependencyMaintenancePlan(runtime) {
+  const entries = DEPENDENCY_ACTIONS.map(([action, label]) => {
+    const detail = runtime.action_details?.[action] || {};
+    const steps = Array.isArray(detail.steps) ? detail.steps : [];
+    return `
+      <div class="dio-maintenance-contract-item">
+        <strong>${esc(label)}</strong>
+        <span>${esc(detail.summary || detail.reason || '')}</span>
+        ${steps.length ? `<ol>${steps.map((step) => `<li>${esc(step)}</li>`).join('')}</ol>` : ''}
+      </div>`;
+  });
+  return `
+    <details class="dio-dependency-files dio-maintenance-contract">
+      <summary>Exact maintenance contract</summary>
+      <div>${entries.join('')}</div>
+    </details>`;
 }
 
 function dependencyActionButton(runtime, action, label) {
@@ -671,7 +700,7 @@ function renderDependencies() {
   return `
     <div class="dio-dependency-guide">
       <strong>Independent, checked actions</strong>
-      <span>Install creates the runtime. Update refreshes packages and changed builds. Integrate reconciles Hermes or OMP. Git pull changes source only. No action silently chains a Git pull or Hermes restart.</span>
+      <span>Install creates the runtime. Update refreshes packages and changed builds. Integrate verifies Hermes/OMP wiring and writes only drifted contracts. Git pull changes source only. “Recheck after source change” is a stale verification receipt, not a service failure. No action silently chains a Git pull or Hermes restart.</span>
     </div>
     <div class="dio-dependency-toolbar">
       <input type="search" data-dependency-search value="${esc(dependencyQuery)}" placeholder="Find a dependency…">
@@ -689,8 +718,9 @@ function renderDependencies() {
                    ${runtime.recommended ? statusBadge('recommended') : ''}
                    ${statusBadge(runtime.source_state === 'missing' ? 'not installed' : runtime.source_state)}
                    ${dependencyStatus(runtime)}
-                 </div>
+                </div>
                 <p>${esc(runtime.role || '')}</p>
+                ${dependencyIntegrationNote(runtime)}
                 <code>${esc(runtime.root)}${dependencyCommit(runtime) ? ` · ${esc(dependencyCommit(runtime))}` : ''}</code>
               </div>
               <div class="dio-dependency-actions">
@@ -700,6 +730,7 @@ function renderDependencies() {
                 <summary data-expand-owner="runtime" data-owner="${esc(runtime.id)}">Configuration</summary>
                 ${renderDocumentEditor('runtime', runtime.id)}
               </details>
+              ${dependencyMaintenancePlan(runtime)}
             </article>`).join('')}
         </section>`).join('')}
     </div>

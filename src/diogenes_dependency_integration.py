@@ -199,8 +199,8 @@ def _source_fingerprint(item: dict[str, Any]) -> str:
     return digest.hexdigest()
 
 
-def observe_integration(item: dict[str, Any]) -> str:
-    """Return a cheap, read-only integration state for Services.
+def observe_integration_details(item: dict[str, Any]) -> dict[str, Any]:
+    """Return a cheap, read-only integration receipt for Services.
 
     Deep native contract checks remain part of the explicit Integrate action.
     The Services refresh path only compares the last successfully reconciled
@@ -210,27 +210,73 @@ def observe_integration(item: dict[str, Any]) -> str:
 
     integration = str(item.get("integration") or "")
     if not integration:
-        return "not_applicable"
+        return {
+            "state": "not_applicable",
+            "reason": "This dependency has no harness integration contract.",
+        }
     root = item.get("root")
     if not isinstance(root, Path) or not root.is_dir():
-        return "not_installed"
+        return {
+            "state": "not_installed",
+            "reason": "Install the dependency source before checking integration.",
+        }
     state = _read_state(str(item["id"]))
     if not state.get("fingerprint"):
         try:
-            return (
-                "current"
-                if _installed_contract_current(item, integration)
-                else "not_integrated"
-            )
+            installed = _installed_contract_current(item, integration)
         except (IntegrationError, OSError, ValueError):
-            return "unknown"
+            return {
+                "state": "unknown",
+                "reason": "Diogenes could not read the existing integration safely.",
+            }
+        return {
+            "state": "not_integrated",
+            "reason": (
+                "Existing integration wiring is present, but Diogenes has not completed its full verification."
+                if installed
+                else "Diogenes has no successful integration receipt for this checkout."
+            ),
+            "recorded_revision": "",
+            "current_revision": _git_revision(root),
+        }
     if state.get("integration") != integration:
-        return "update_required"
+        return {
+            "state": "update_required",
+            "reason": "The declared integration contract changed since its last successful check.",
+            "recorded_revision": str(state.get("source_revision") or ""),
+            "current_revision": _git_revision(root),
+        }
     try:
         current = _source_fingerprint(item)
     except (IntegrationError, OSError, subprocess.SubprocessError):
-        return "unknown"
-    return "current" if state.get("fingerprint") == current else "update_required"
+        return {
+            "state": "unknown",
+            "reason": "Diogenes could not fingerprint the current integration artifacts.",
+        }
+    current_revision = _git_revision(root)
+    if state.get("fingerprint") == current:
+        return {
+            "state": "current",
+            "reason": "The integration was verified against this exact source and build output.",
+            "recorded_revision": str(state.get("source_revision") or ""),
+            "current_revision": current_revision,
+        }
+    return {
+        "state": "update_required",
+        "reason": (
+            "Source or built integration artifacts changed after the last successful check. "
+            "This does not mean the running service is broken; Integrate verifies the live "
+            "contract first and writes only when it differs."
+        ),
+        "recorded_revision": str(state.get("source_revision") or ""),
+        "current_revision": current_revision,
+    }
+
+
+def observe_integration(item: dict[str, Any]) -> str:
+    """Return only the stable state name for older callers."""
+
+    return str(observe_integration_details(item)["state"])
 
 
 def _installed_contract_current(item: dict[str, Any], integration: str) -> bool:
@@ -641,6 +687,10 @@ def _librarian_contract(profile: str) -> tuple[str, dict[str, Any]]:
     if profile == "default":
         environment = {
             "BUNDLE_ROOT": bundle_root,
+            "LIBRARIAN_AGENT_BACKEND": pick(
+                "LIBRARIAN_AGENT_BACKEND",
+                "hermes",
+            ),
             "HERMES_PROFILE_HOME": pick(
                 "HERMES_PROFILE_HOME",
                 str(_profile_home("librarian")),
@@ -656,6 +706,27 @@ def _librarian_contract(profile: str) -> tuple[str, dict[str, Any]]:
                 ),
             ),
             "HERMES_TIMEOUT_MS": pick("HERMES_TIMEOUT_MS", "600000"),
+            "OMP_COMMAND": pick(
+                "OMP_COMMAND",
+                str(Path.home() / ".bun" / "bin" / "omp"),
+            ),
+            "OMP_HOME": pick("OMP_HOME", str(Path.home() / ".omp")),
+            "OMP_AGENT_DIR": pick(
+                "OMP_AGENT_DIR",
+                str(Path.home() / ".omp" / "agent"),
+            ),
+            "OMP_PROFILE_AGENT_DIR": pick(
+                "OMP_PROFILE_AGENT_DIR",
+                str(Path.home() / ".omp" / "profiles" / "librarian" / "agent"),
+            ),
+            "OMP_PROFILE": pick("OMP_PROFILE", "librarian"),
+            "OMP_MODEL": pick("OMP_MODEL", ""),
+            "OMP_PROVIDER": pick("OMP_PROVIDER", ""),
+            "OMP_TIMEOUT_MS": pick("OMP_TIMEOUT_MS", "600000"),
+            "QUERY_CACHE": pick("QUERY_CACHE", "true"),
+            "QUERY_CACHE_TTL": pick("QUERY_CACHE_TTL", "24h"),
+            "HOT_MEMORY": pick("HOT_MEMORY", "true"),
+            "HOT_MEMORY_TTL": pick("HOT_MEMORY_TTL", "1h"),
             "GIT_AUTOCOMMIT": pick("GIT_AUTOCOMMIT", "false"),
         }
         model = pick("HERMES_MODEL", "")
@@ -1258,8 +1329,9 @@ def _integrate_leetcoder() -> None:
     omp = _binary("omp", Path.home() / ".bun" / "bin" / "omp")
     _binary("hermes", Path.home() / ".local" / "bin" / "hermes")
     _binary("git", Path("/usr/bin/git"))
-    _run([bun, "install", "--frozen-lockfile"], cwd=root, timeout=1800)
-    _run([bun, "run", "build"], cwd=root, timeout=1800)
+    if not all((root / "dist" / name).is_file() for name in ("cli.js", "mcp.js")):
+        _run([bun, "install", "--frozen-lockfile"], cwd=root, timeout=1800)
+        _run([bun, "run", "build"], cwd=root, timeout=1800)
 
     config_dir = Path.home() / ".config" / "leetcoder"
     token_file = config_dir / "token"
@@ -1620,11 +1692,16 @@ def _integrate_codebase_memory() -> None:
 
 def _integrate_librarian() -> None:
     root = _services_root() / "librarian"
-    _run(
-        [_binary("bun", Path.home() / ".bun" / "bin" / "bun"), "run", "setup"],
-        cwd=root,
-        timeout=1800,
-    )
+    if not (root / ".env").is_file():
+        _run(
+            [
+                _binary("bun", Path.home() / ".bun" / "bin" / "bun"),
+                "run",
+                "setup",
+            ],
+            cwd=root,
+            timeout=1800,
+        )
     for profile in _shared_profiles():
         name, expected = _librarian_contract(profile)
         _ensure_mcp(profile, name, expected)
@@ -1814,14 +1891,9 @@ def _workflows_current() -> bool:
     return True
 
 
-def _contract_current(
-    item: dict[str, Any],
-    integration: str,
-    fingerprint: str,
-) -> bool:
-    state = _read_state(str(item["id"]))
-    if state.get("fingerprint") != fingerprint:
-        return False
+def _native_contract_current(item: dict[str, Any], integration: str) -> bool:
+    """Inspect the live contract without consulting Diogenes' receipt."""
+
     if integration in {"hermes-firecrawl", "firecrawl-cli"}:
         return bool(
             _config_value("default", "FIRECRAWL_API_URL")
@@ -1904,9 +1976,26 @@ def _contract_current(
         return result.returncode == 0
     if integration == "leetcoder":
         return _leetcoder_current()
-    # Retrieval-index contracts are represented by the exact source
-    # fingerprint written only after a successful targeted sync.
-    return integration == "retrieval-index"
+    # Retrieval-index contracts have no cheap native equality check. Their
+    # successful source receipt remains authoritative after an explicit sync.
+    return False
+
+
+def _contract_current(
+    item: dict[str, Any],
+    integration: str,
+    fingerprint: str,
+) -> bool:
+    state = _read_state(str(item["id"]))
+    if (
+        state.get("fingerprint") != fingerprint
+        or state.get("integration") != integration
+    ):
+        return False
+    return integration == "retrieval-index" or _native_contract_current(
+        item,
+        integration,
+    )
 
 
 def integrate(runtime_id: str) -> bool:
@@ -1931,6 +2020,25 @@ def integrate(runtime_id: str) -> bool:
         revision = _git_revision(item["root"])
         suffix = f" at {revision[:7]}" if revision else ""
         print(f"{item['label']}: integration is current{suffix}. Nothing to do.")
+        return False
+    if integration != "retrieval-index" and _native_contract_current(
+        item,
+        integration,
+    ):
+        revision = _git_revision(item["root"])
+        _write_state(
+            runtime_id,
+            {
+                "fingerprint": fingerprint,
+                "source_revision": revision,
+                "integration": integration,
+            },
+        )
+        suffix = f" at {revision[:7]}" if revision else ""
+        print(
+            f"{item['label']}: live integration verified{suffix}; "
+            "only the Diogenes receipt was refreshed."
+        )
         return False
 
     if integration == "diogenes-searxng":
@@ -1967,11 +2075,12 @@ def integrate(runtime_id: str) -> bool:
         _retrieval_command("sync", *([source] if source else []))
     elif integration == "persephone":
         bun = _binary("bun", Path.home() / ".bun" / "bin" / "bun")
-        _run(
-            [bun, "install", "--frozen-lockfile"],
-            cwd=item["root"],
-            environment=_host_environment({"OTEL_SDK_DISABLED": "true"}),
-        )
+        if not (item["root"] / "node_modules").is_dir():
+            _run(
+                [bun, "install", "--frozen-lockfile"],
+                cwd=item["root"],
+                environment=_host_environment({"OTEL_SDK_DISABLED": "true"}),
+            )
         _run(
             [bun, "src/cli.ts", "init", "--install-service"],
             cwd=item["root"],
@@ -1984,30 +2093,21 @@ def integrate(runtime_id: str) -> bool:
         _integrate_firecrawl()
     else:
         raise IntegrationError(f"unsupported integration contract: {integration}")
-    if not _contract_current(item, integration, fingerprint):
-        # Write the source fingerprint only after the actual native/file
-        # contracts have been observed, then perform the final equality check.
-        _write_state(
-            runtime_id,
-            {
-                "fingerprint": fingerprint,
-                "source_revision": _git_revision(item["root"]),
-                "integration": integration,
-            },
+    if integration != "retrieval-index" and not _native_contract_current(
+        item,
+        integration,
+    ):
+        raise IntegrationError(
+            f"{item['label']} integration did not retain its declared contract"
         )
-        if not _contract_current(item, integration, fingerprint):
-            raise IntegrationError(
-                f"{item['label']} integration did not retain its declared contract"
-            )
-    else:
-        _write_state(
-            runtime_id,
-            {
-                "fingerprint": fingerprint,
-                "source_revision": _git_revision(item["root"]),
-                "integration": integration,
-            },
-        )
+    _write_state(
+        runtime_id,
+        {
+            "fingerprint": fingerprint,
+            "source_revision": _git_revision(item["root"]),
+            "integration": integration,
+        },
+    )
     next_step = (
         "Review ~/.config/persephone, then start its installed user service when ready."
         if integration == "persephone"

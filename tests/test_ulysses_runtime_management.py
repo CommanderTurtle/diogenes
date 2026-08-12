@@ -821,8 +821,11 @@ def test_integration_state_uses_read_only_persisted_observation(
     }
     monkeypatch.setattr(
         integrations,
-        "observe_integration",
-        lambda observed: "current" if observed is item else "unknown",
+        "observe_integration_details",
+        lambda observed: {
+            "state": "current" if observed is item else "unknown",
+            "reason": "verified",
+        },
     )
 
     assert manager._integration_state(item, source_exists=True) == "current"
@@ -834,6 +837,32 @@ def test_integration_state_uses_read_only_persisted_observation(
         )
         == "not_applicable"
     )
+
+
+def test_dependency_maintenance_preview_explains_independent_javascript_actions(
+    tmp_path: Path,
+) -> None:
+    package_json = tmp_path / "package.json"
+    package_json.write_text('{"workspaces":["packages/*"]}\n', encoding="utf-8")
+    preview = manager._dependency_maintenance_previews(
+        {
+            "id": "librarian.mcp",
+            "root": tmp_path,
+            "category": "javascript",
+            "package_json": package_json,
+            "build_script": "build",
+            "setup_on_update": False,
+            "git_update": True,
+            "source_url": "https://github.com/CommanderTurtle/librarian.git",
+            "source_branch": "main",
+            "integration": "librarian",
+        }
+    )
+
+    assert preview["update"]["steps"][0] == "bun update --no-save --recursive"
+    assert "only when those inputs changed" in preview["update"]["steps"][2]
+    assert "do not reinstall packages or rebuild" in preview["integrate"]["steps"][1]
+    assert "Fast-forward source only" in preview["sync"]["steps"][2]
 
 
 def test_native_git_update_never_installs_javascript_dependencies(

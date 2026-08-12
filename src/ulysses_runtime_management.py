@@ -1274,17 +1274,126 @@ def _install_path_available(root: Path) -> bool:
         return False
 
 
-def _integration_state(item: dict[str, Any], *, source_exists: bool) -> str:
+def _integration_observation(
+    item: dict[str, Any],
+    *,
+    source_exists: bool,
+) -> dict[str, Any]:
     if not item.get("integration"):
-        return "not_applicable"
+        return {
+            "state": "not_applicable",
+            "reason": "This dependency has no harness integration contract.",
+        }
     if not source_exists:
-        return "not_installed"
+        return {
+            "state": "not_installed",
+            "reason": "Install the dependency source before checking integration.",
+        }
     # This is intentionally a persisted source-fingerprint observation. The
     # explicit Integrate action owns deep Hermes/OMP/service verification; a UI
     # refresh never launches an MCP or mutates an external configuration.
-    from src.diogenes_dependency_integration import observe_integration
+    from src.diogenes_dependency_integration import observe_integration_details
 
-    return observe_integration(item)
+    return observe_integration_details(item)
+
+
+def _integration_state(item: dict[str, Any], *, source_exists: bool) -> str:
+    """Compatibility wrapper for callers that only need the state name."""
+
+    return str(
+        _integration_observation(item, source_exists=source_exists)["state"]
+    )
+
+
+def _dependency_maintenance_previews(
+    item: dict[str, Any],
+) -> dict[str, dict[str, Any]]:
+    """Describe the fixed dependency actions shown before a job is created."""
+
+    root: Path = item["root"]
+    branch = str(item.get("source_branch") or "")
+    update_steps: list[str]
+    package_json = item.get("package_json")
+    if isinstance(package_json, Path) and package_json.is_file():
+        recursive = False
+        try:
+            payload = json.loads(package_json.read_text(encoding="utf-8"))
+            recursive = bool(payload.get("workspaces"))
+        except (OSError, json.JSONDecodeError, AttributeError):
+            pass
+        command = "bun update --no-save" + (" --recursive" if recursive else "")
+        update_steps = [command, "Compare the package graph and recorded build inputs."]
+        if item.get("build_script"):
+            update_steps.append(
+                f"Run bun run {item['build_script']} only when those inputs changed."
+            )
+        if item.get("setup_on_update"):
+            update_steps.append("Refresh the declared project-local runtime artifacts.")
+    elif item["id"] == "retrieval.mcp":
+        update_steps = [
+            "uv sync --frozen --python .venv/bin/python",
+            "Leave source, harness registrations, and the watcher unchanged.",
+        ]
+    elif item.get("setup"):
+        update_steps = [
+            "Run the declared project-native dependency setup.",
+            "Leave Git source and harness registrations unchanged.",
+        ]
+    else:
+        update_steps = ["Check the declared installed dependency runtime."]
+
+    integration_steps = {
+        "librarian": [
+            "Verify the selected Librarian backend, public MCP, isolated OKF profile, and routing skill.",
+            "If .env already exists, do not reinstall packages or rebuild; rewrite only mismatched registrations.",
+        ],
+        "persephone": [
+            "Run Persephone's integration-only doctor first.",
+            "If healthy, refresh only the Diogenes receipt; otherwise re-apply its OMP plugin and user-service contract.",
+        ],
+        "retrieval": [
+            "Verify the separate Hermes and OMP MCP/projection lanes, skill intake, IWE paths, and watcher.",
+            "Reconcile only missing or drifted registrations, then sync the skill-intake source.",
+        ],
+        "leetcoder": [
+            "Verify the isolated OMP profile, provider state, service, Hermes MCP, and routing skill.",
+            "Reuse existing dist artifacts; rebuild only if cli.js or mcp.js is absent.",
+        ],
+    }.get(
+        str(item.get("integration") or ""),
+        ["Verify the declared live harness contract and rewrite only mismatches."],
+    )
+
+    return {
+        "install": {
+            "summary": "Create the checkout and its initial local runtime; do not start it.",
+            "steps": [
+                (
+                    f"Clone {item.get('source_url')} at {branch}."
+                    if item.get("git_update")
+                    else f"Prepare {root}."
+                ),
+                "Install the declared dependencies and any initial build or setup artifacts.",
+                "Do not integrate a harness or restart Hermes implicitly.",
+            ],
+        },
+        "update": {
+            "summary": "Refresh installed dependencies and only the builds they invalidate.",
+            "steps": update_steps,
+        },
+        "integrate": {
+            "summary": "Check live harness wiring; package and Git updates remain separate.",
+            "steps": integration_steps,
+        },
+        "sync": {
+            "summary": "Fast-forward only a clean checkout; run no package or integration step.",
+            "steps": [
+                f"Fetch the declared {branch} branch from {item.get('source_url')}",
+                "Refuse dirty, diverged, or origin-mismatched checkouts.",
+                "Fast-forward source only; use Update and Integrate explicitly afterward.",
+            ],
+        },
+    }
 
 
 def _update_state(item: dict[str, Any], git: dict[str, Any]) -> str:
@@ -1347,10 +1456,11 @@ def collect_managed_runtimes() -> dict[str, Any]:
             if source_exists
             else "missing"
         )
-        integration_state = _integration_state(
+        integration_observation = _integration_observation(
             item,
             source_exists=source_exists,
         )
+        integration_state = str(integration_observation["state"])
         update_state = _update_state(item, git)
         if not source_exists and process_state == "running_external":
             status = "unmanaged"
@@ -1581,6 +1691,7 @@ def collect_managed_runtimes() -> dict[str, Any]:
             "integrate": "Diff and reconcile only the declared harness integration.",
             "sync": "Check and fast-forward only the clean declared Git checkout.",
         }
+        maintenance_previews = _dependency_maintenance_previews(item)
         action_details = {
             action: {
                 "enabled": enabled,
@@ -1588,6 +1699,11 @@ def collect_managed_runtimes() -> dict[str, Any]:
                     enabled_reasons[action]
                     if enabled
                     else disabled_reason(action)
+                ),
+                **(
+                    maintenance_previews[action]
+                    if action in maintenance_previews
+                    else {}
                 ),
             }
             for action, enabled in actions.items()
@@ -1627,6 +1743,7 @@ def collect_managed_runtimes() -> dict[str, Any]:
                 "source_state": source_state,
                 "process_state": process_state,
                 "integration_state": integration_state,
+                "integration_observation": integration_observation,
                 "update_state": update_state,
                 "git": git,
                 "package": _package(item),

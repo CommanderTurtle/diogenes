@@ -21,7 +21,9 @@ def test_observe_integration_tracks_last_successful_source_fingerprint(
         "integration": "retrieval",
     }
 
-    assert integration.observe_integration(item) == "not_integrated"
+    observed = integration.observe_integration_details(item)
+    assert observed["state"] == "not_integrated"
+    assert "no successful integration receipt" in observed["reason"]
     fingerprint = integration._source_fingerprint(item)
     integration._write_state(
         "retrieval.mcp",
@@ -33,7 +35,41 @@ def test_observe_integration_tracks_last_successful_source_fingerprint(
     assert integration.observe_integration(item) == "current"
 
     artifact.write_text("version = 2\n", encoding="utf-8")
-    assert integration.observe_integration(item) == "update_required"
+    observed = integration.observe_integration_details(item)
+    assert observed["state"] == "update_required"
+    assert "does not mean the running service is broken" in observed["reason"]
+
+
+def test_integrate_refreshes_only_receipt_when_live_contract_is_current(
+    monkeypatch,
+    tmp_path: Path,
+    capsys,
+) -> None:
+    source = tmp_path / "service"
+    source.mkdir()
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    item = {
+        "id": "example.mcp",
+        "label": "Example",
+        "root": source,
+        "integration": "example",
+    }
+    monkeypatch.setattr(integration, "load_runtime_management", lambda: (item,))
+    monkeypatch.setattr(integration, "_source_fingerprint", lambda _item: "fresh")
+    monkeypatch.setattr(integration, "_git_revision", lambda _root: "1234567890")
+    monkeypatch.setattr(
+        integration,
+        "_native_contract_current",
+        lambda _item, _integration: True,
+    )
+
+    assert integration.integrate("example.mcp") is False
+    assert integration._read_state("example.mcp") == {
+        "fingerprint": "fresh",
+        "integration": "example",
+        "source_revision": "1234567890",
+    }
+    assert "only the Diogenes receipt was refreshed" in capsys.readouterr().out
 
 
 def test_observe_integration_distinguishes_absent_and_irrelevant_sources(

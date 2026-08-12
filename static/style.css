@@ -42783,6 +42783,14 @@ details.uly-services-advanced .uly-advanced-section > p {
   margin-top: 5px;
 }
 
+.dio-dependency-copy .dio-integration-note {
+  margin-top: 4px;
+  max-width: 760px;
+  color: color-mix(in srgb, var(--fg) 72%, transparent);
+  font-size: 8px;
+  line-height: 1.45;
+}
+
 .dio-dependency-actions {
   display: grid;
   grid-template-columns: repeat(4, auto);
@@ -42800,6 +42808,46 @@ details.uly-services-advanced .uly-advanced-section > p {
   cursor: pointer;
   font-size: 9px;
   opacity: .64;
+}
+
+.dio-maintenance-contract > div {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 7px;
+  padding-top: 7px;
+}
+
+.dio-maintenance-contract-item {
+  min-width: 0;
+  padding: 7px 8px;
+  border: 1px solid color-mix(in srgb, var(--fg) 7%, transparent);
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--bg) 98%, var(--fg) 2%);
+}
+
+.dio-maintenance-contract-item strong,
+.dio-maintenance-contract-item span {
+  display: block;
+}
+
+.dio-maintenance-contract-item strong {
+  font-size: 9px;
+}
+
+.dio-maintenance-contract-item span,
+.dio-maintenance-contract-item li {
+  font-size: 8px;
+  line-height: 1.45;
+}
+
+.dio-maintenance-contract-item span {
+  margin-top: 3px;
+  opacity: .65;
+}
+
+.dio-maintenance-contract-item ol {
+  margin: 6px 0 0;
+  padding-left: 16px;
 }
 
 .dio-maintenance-grid {
@@ -43038,6 +43086,10 @@ details.uly-services-advanced .uly-advanced-section > p {
   }
 
   .dio-maintenance-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .dio-maintenance-contract > div {
     grid-template-columns: 1fr;
   }
 
