@@ -783,6 +783,20 @@ def _append_serve_preflight_exit_lines(runner_lines: list[str], *, keep_shell_op
     runner_lines.append('fi')
 
 
+def _append_vllm_linux_preflight_lines(runner_lines: list[str]) -> None:
+    """Append Linux vLLM readiness lines that identify the runtime being used."""
+    runner_lines.append('export PATH="$HOME/.local/bin:$PATH"')
+    runner_lines.append('ODYSSEUS_VLLM_BIN="$(command -v vllm 2>/dev/null || true)"')
+    runner_lines.append('if [ -z "$ODYSSEUS_VLLM_BIN" ]; then')
+    runner_lines.append('  echo "ERROR: vLLM is not installed."')
+    runner_lines.append('  ODYSSEUS_PREFLIGHT_EXIT=127')
+    runner_lines.append('else')
+    runner_lines.append('  echo "[odysseus] vLLM CLI: $ODYSSEUS_VLLM_BIN"')
+    runner_lines.append('  ODYSSEUS_VLLM_VERSION="$("$ODYSSEUS_VLLM_BIN" --version 2>&1 | head -n 1 || true)"')
+    runner_lines.append('  if [ -n "$ODYSSEUS_VLLM_VERSION" ]; then echo "[odysseus] vLLM version: $ODYSSEUS_VLLM_VERSION"; fi')
+    runner_lines.append('fi')
+
+
 def _append_serve_exit_code_lines(
     runner_lines: list[str],
     *,
