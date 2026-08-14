@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import copy
 import hashlib
 import json
 import os
@@ -19,10 +20,13 @@ import re
 import secrets
 import shlex
 import shutil
+import sqlite3
 import subprocess
 import sys
 import tempfile
 from typing import Any
+
+import yaml
 
 from core.atomic_io import atomic_write_text
 from src.ulysses_jobs import native_host_environment
@@ -40,6 +44,25 @@ DIOGENES_FIRECRAWL_URL = "http://localhost:3002"
 
 class IntegrationError(RuntimeError):
     """A native integration command failed or did not retain its result."""
+
+
+class _OmpYamlLoader(yaml.SafeLoader):
+    """Read OMP's YAML 1.2 booleans without YAML 1.1's on/off coercion."""
+
+
+_OmpYamlLoader.yaml_implicit_resolvers = {
+    initial: [
+        (tag, expression)
+        for tag, expression in resolvers
+        if tag != "tag:yaml.org,2002:bool"
+    ]
+    for initial, resolvers in yaml.SafeLoader.yaml_implicit_resolvers.items()
+}
+_OmpYamlLoader.add_implicit_resolver(
+    "tag:yaml.org,2002:bool",
+    re.compile(r"^(?:true|True|TRUE|false|False|FALSE)$"),
+    list("tTfF"),
+)
 
 
 def _policy() -> dict[str, Any]:
@@ -151,6 +174,9 @@ SOURCE_ARTIFACTS: dict[str, tuple[str, ...]] = {
     ),
     "camofox.mcp": ("dist/index.js", "skill/SKILL.md"),
     "librarian.mcp": (
+        "package.json",
+        "bun.lock",
+        "scripts/setup.ts",
         "packages/server/dist/mcp/stdio.js",
         "packages/server/dist/mcp/okf-stdio.js",
         "skills/hermes-mcp-integration/SKILL.md",
@@ -762,6 +788,7 @@ def _librarian_contract(profile: str) -> tuple[str, dict[str, Any]]:
             ],
             "env": {
                 "BUNDLE_ROOT": bundle_root,
+                "LIBRARIAN_BUNDLE_ROOT": "${LIBRARIAN_BUNDLE_ROOT}",
                 "GIT_AUTOCOMMIT": pick("GIT_AUTOCOMMIT", "false"),
             },
             "enabled": True,
@@ -1260,22 +1287,126 @@ def _retrieval_intake_current() -> bool:
     )
 
 
-LEETCODER_OMP_SETTINGS: tuple[tuple[str, str], ...] = (
-    ("advisor.enabled", "true"),
-    ("advisor.subagents", "false"),
+LEETCODER_OMP_SETTINGS: tuple[tuple[str, Any], ...] = (
+    ("advisor.enabled", True),
+    ("advisor.subagents", False),
     ("advisor.syncBacklog", "1"),
+    ("async.enabled", False),
     ("memory.backend", "off"),
-    ("task.maxConcurrency", "1"),
-    ("task.maxRecursionDepth", "1"),
+    ("task.maxConcurrency", 1),
+    ("task.maxRecursionDepth", 1),
     ("task.isolation.mode", "auto"),
-    ("task.batch", "true"),
-    ("exa.enabled", "false"),
-    ("exa.enableSearch", "false"),
-    ("exa.enableResearcher", "false"),
-    ("exa.enableWebsets", "false"),
-    ("startup.checkUpdate", "false"),
+    ("task.batch", True),
+    ("exa.enabled", False),
+    ("exa.enableSearch", False),
+    ("exa.enableResearcher", False),
+    ("exa.enableWebsets", False),
+    ("startup.checkUpdate", False),
     ("marketplace.autoUpdate", "off"),
 )
+
+
+LEETCODER_AUDITOR_OMP_SETTINGS: tuple[tuple[str, Any], ...] = (
+    ("advisor.enabled", False),
+    ("advisor.subagents", False),
+    ("task.maxConcurrency", 1),
+    ("task.maxRecursionDepth", 0),
+    ("task.batch", False),
+)
+
+
+def _read_yaml_mapping(path: Path) -> dict[str, Any]:
+    try:
+        value = yaml.load(
+            path.read_text(encoding="utf-8"),
+            Loader=_OmpYamlLoader,
+        )
+    except (OSError, yaml.YAMLError) as exc:
+        raise IntegrationError(f"OMP config is invalid: {path}") from exc
+    if not isinstance(value, dict):
+        raise IntegrationError(f"OMP config is not a mapping: {path}")
+    return value
+
+
+def _nested_value(value: dict[str, Any], key: str) -> Any:
+    current: Any = value
+    for part in key.split("."):
+        if not isinstance(current, dict) or part not in current:
+            return None
+        current = current[part]
+    return current
+
+
+def _apply_nested_settings(
+    value: dict[str, Any],
+    settings: tuple[tuple[str, Any], ...],
+) -> None:
+    for key, expected in settings:
+        parts = key.split(".")
+        current = value
+        for part in parts[:-1]:
+            child = current.get(part)
+            if not isinstance(child, dict):
+                child = {}
+                current[part] = child
+            current = child
+        current[parts[-1]] = copy.deepcopy(expected)
+
+
+def _write_yaml_mapping(path: Path, value: dict[str, Any]) -> None:
+    _write_managed_text(
+        path,
+        yaml.safe_dump(value, sort_keys=False, allow_unicode=True),
+    )
+
+
+def _sync_leetcoder_provider_rows(profile: str, providers: set[str]) -> None:
+    source = Path.home() / ".omp" / "agent"
+    target = Path.home() / ".omp" / "profiles" / profile / "agent"
+    omp = _binary("omp", Path.home() / ".bun" / "bin" / "omp")
+    _run(
+        [omp, "--profile", profile, "models", "--json"],
+        environment=_host_environment({"OTEL_SDK_DISABLED": "true"}),
+        timeout=180,
+    )
+    for database, table, key, excluded in (
+        ("agent.db", "auth_credentials", "provider", {"id"}),
+        ("models.db", "model_cache", "provider_id", set()),
+    ):
+        source_path = source / database
+        target_path = target / database
+        if not source_path.is_file() or not target_path.is_file():
+            raise IntegrationError(f"OMP profile database is missing: {database}")
+        with sqlite3.connect(f"file:{source_path}?mode=ro", uri=True) as source_db:
+            with sqlite3.connect(target_path) as target_db:
+                source_columns = {
+                    str(row[1])
+                    for row in source_db.execute(f"PRAGMA table_info({table})")
+                }
+                columns = [
+                    str(row[1])
+                    for row in target_db.execute(f"PRAGMA table_info({table})")
+                    if str(row[1]) in source_columns and str(row[1]) not in excluded
+                ]
+                if key not in columns or not columns:
+                    raise IntegrationError(f"OMP profile table is incompatible: {table}")
+                names = ", ".join(columns)
+                placeholders = ", ".join("?" for _ in columns)
+                with target_db:
+                    for provider in providers:
+                        target_db.execute(
+                            f"DELETE FROM {table} WHERE {key} = ?",
+                            (provider,),
+                        )
+                        rows = source_db.execute(
+                            f"SELECT {names} FROM {table} WHERE {key} = ?",
+                            (provider,),
+                        ).fetchall()
+                        for row in rows:
+                            target_db.execute(
+                                f"INSERT INTO {table} ({names}) VALUES ({placeholders})",
+                                row,
+                            )
 
 
 def _prepare_leetcoder_profile(root: Path) -> None:
@@ -1288,12 +1419,9 @@ def _prepare_leetcoder_profile(root: Path) -> None:
         if not path.is_file():
             raise IntegrationError(f"OMP profile source is missing: {path}")
     target.mkdir(parents=True, exist_ok=True, mode=0o700)
-    _write_managed_text(
-        target / "config.yml",
-        source_config.read_text(encoding="utf-8"),
-    )
-    for key, value in LEETCODER_OMP_SETTINGS:
-        _set_omp_value("leetcoder", key, value)
+    profile_config = _read_yaml_mapping(source_config)
+    _apply_nested_settings(profile_config, LEETCODER_OMP_SETTINGS)
+    _write_yaml_mapping(target / "config.yml", profile_config)
 
     try:
         mcp = json.loads(source_mcp.read_text(encoding="utf-8"))
@@ -1322,6 +1450,36 @@ def _prepare_leetcoder_profile(root: Path) -> None:
         advisor.read_text(encoding="utf-8"),
     )
 
+    auditor = Path.home() / ".omp" / "profiles" / "leetcoder-auditor" / "agent"
+    auditor.mkdir(parents=True, exist_ok=True, mode=0o700)
+    auditor_config = copy.deepcopy(profile_config)
+    _apply_nested_settings(auditor_config, LEETCODER_AUDITOR_OMP_SETTINGS)
+    _write_yaml_mapping(auditor / "config.yml", auditor_config)
+    auditor_mcp = copy.deepcopy(mcp)
+    auditor_mcp["mcpServers"] = {}
+    _write_managed_text(
+        auditor / "mcp.json",
+        json.dumps(auditor_mcp, indent=2) + "\n",
+    )
+    _write_managed_text(
+        auditor / "models.yml",
+        source_models.read_text(encoding="utf-8"),
+    )
+    roles = profile_config.get("modelRoles")
+    providers = (
+        {
+            selector.split("/", 1)[0]
+            for selector in roles.values()
+            if isinstance(selector, str) and "/" in selector
+        }
+        if isinstance(roles, dict)
+        else set()
+    )
+    if not providers:
+        raise IntegrationError("OMP's default profile does not define any model providers")
+    _sync_leetcoder_provider_rows("leetcoder", providers)
+    _sync_leetcoder_provider_rows("leetcoder-auditor", providers)
+
 
 def _integrate_leetcoder() -> None:
     root = _services_root() / "leetcoder"
@@ -1343,7 +1501,14 @@ def _integrate_leetcoder() -> None:
         _write_managed_text(token_file, secrets.token_hex(32) + "\n")
     else:
         os.chmod(token_file, 0o600)
-    if not config_file.is_file():
+    if config_file.is_file():
+        try:
+            value = json.loads(config_file.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise IntegrationError(f"Leetcoder config is invalid: {config_file}") from exc
+        if not isinstance(value, dict):
+            raise IntegrationError(f"Leetcoder config is invalid: {config_file}")
+    else:
         value = {
             "version": 1,
             "listen": {
@@ -1362,9 +1527,12 @@ def _integrate_leetcoder() -> None:
             "confirmation": {"ttlMinutes": 15},
             "history": {"eventsPerSession": 5000},
         }
-        _write_managed_text(config_file, json.dumps(value, indent=2) + "\n")
-    else:
-        os.chmod(config_file, 0o600)
+    value["verification"] = {
+        "enabled": True,
+        "maxRounds": 2,
+        "profile": "leetcoder-auditor",
+    }
+    _write_managed_text(config_file, json.dumps(value, indent=2) + "\n")
 
     _prepare_leetcoder_profile(root)
     env = (
@@ -1373,6 +1541,7 @@ def _integrate_leetcoder() -> None:
         f"LEETCODER_TOKEN_FILE={token_file}\n"
         f"OMP_COMMAND={omp}\n"
         "OMP_PROFILE=leetcoder\n"
+        "LEETCODER_AUDITOR_PROFILE=leetcoder-auditor\n"
         "OTEL_SDK_DISABLED=true\n"
     )
     _write_managed_text(root / ".env", env)
@@ -1409,6 +1578,7 @@ def _leetcoder_current() -> bool:
     token = Path.home() / ".config" / "leetcoder" / "token"
     config = Path.home() / ".config" / "leetcoder" / "config.json"
     profile = Path.home() / ".omp" / "profiles" / "leetcoder" / "agent"
+    auditor = Path.home() / ".omp" / "profiles" / "leetcoder-auditor" / "agent"
     skill_source = root / "skills" / "leetcoder" / "SKILL.md"
     skill_target = (
         DEFAULT_HERMES_HOME
@@ -1418,30 +1588,54 @@ def _leetcoder_current() -> bool:
         / "SKILL.md"
     )
     try:
+        config_value = json.loads(config.read_text(encoding="utf-8"))
+        profile_config = _read_yaml_mapping(profile / "config.yml")
+        auditor_config = _read_yaml_mapping(auditor / "config.yml")
         mcp = json.loads((profile / "mcp.json").read_text(encoding="utf-8"))
         servers = mcp.get("mcpServers") if isinstance(mcp, dict) else None
+        auditor_mcp = json.loads((auditor / "mcp.json").read_text(encoding="utf-8"))
+        auditor_servers = (
+            auditor_mcp.get("mcpServers")
+            if isinstance(auditor_mcp, dict)
+            else None
+        )
+        environment = _dotenv(root / ".env")
         skill_matches = skill_source.read_bytes() == skill_target.read_bytes()
         token_ready = len(token.read_text(encoding="utf-8").strip()) >= 32
-    except (OSError, json.JSONDecodeError):
+    except (OSError, json.JSONDecodeError, IntegrationError):
         return False
+    verification = (
+        config_value.get("verification")
+        if isinstance(config_value, dict)
+        else None
+    )
     if not (
-        config.is_file()
+        isinstance(verification, dict)
+        and verification.get("enabled") is True
+        and verification.get("maxRounds") == 2
+        and verification.get("profile") == "leetcoder-auditor"
         and token_ready
         and isinstance(servers, dict)
         and "librarian" in servers
         and "leetcoder" not in servers
+        and auditor_servers == {}
         and skill_matches
         and (profile / "models.yml").is_file()
         and (profile / "WATCHDOG.md").is_file()
+        and (profile / "agent.db").is_file()
+        and (profile / "models.db").is_file()
+        and (auditor / "models.yml").is_file()
+        and (auditor / "agent.db").is_file()
+        and (auditor / "models.db").is_file()
+        and environment.get("LEETCODER_AUDITOR_PROFILE") == "leetcoder-auditor"
         and _mcp_current("default", "leetcoder", _mcp_contract("leetcoder"))
     ):
         return False
-    for key, rendered in LEETCODER_OMP_SETTINGS:
-        try:
-            expected = json.loads(rendered)
-        except json.JSONDecodeError:
-            expected = rendered
-        if _omp_value("leetcoder", key) != expected:
+    for key, expected in LEETCODER_OMP_SETTINGS:
+        if _nested_value(profile_config, key) != expected:
+            return False
+    for key, expected in LEETCODER_AUDITOR_OMP_SETTINGS:
+        if _nested_value(auditor_config, key) != expected:
             return False
     for action in ("is-enabled", "is-active"):
         result = subprocess.run(

@@ -5,6 +5,63 @@ from pathlib import Path
 import src.diogenes_dependency_integration as integration
 
 
+def test_nested_settings_match_current_leetcoder_profile_contract() -> None:
+    value = {
+        "advisor": {"unrelated": "preserved"},
+        "task": {"isolation": {"unrelated": True}},
+        "unrelated": {"value": 7},
+    }
+
+    integration._apply_nested_settings(value, integration.LEETCODER_OMP_SETTINGS)
+
+    assert value["unrelated"] == {"value": 7}
+    assert value["advisor"] == {
+        "unrelated": "preserved",
+        "enabled": True,
+        "subagents": False,
+        "syncBacklog": "1",
+    }
+    assert value["task"]["isolation"] == {
+        "unrelated": True,
+        "mode": "auto",
+    }
+    assert value["task"]["maxConcurrency"] == 1
+    assert value["task"]["batch"] is True
+
+
+def test_omp_yaml_reader_preserves_yaml_12_off_strings(tmp_path: Path) -> None:
+    config = tmp_path / "config.yml"
+    config.write_text(
+        "memory:\n  backend: off\nadvisor:\n  enabled: true\n",
+        encoding="utf-8",
+    )
+
+    value = integration._read_yaml_mapping(config)
+
+    assert value["memory"]["backend"] == "off"
+    assert value["advisor"]["enabled"] is True
+
+
+def test_librarian_private_contract_retains_dream_bundle_indirection(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    services = tmp_path / "Hermes"
+    root = services / "librarian"
+    root.mkdir(parents=True)
+    (root / ".env").write_text(
+        "BUNDLE_ROOT=/tmp/library\nGIT_AUTOCOMMIT=false\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("ULYSSES_MICROSERVICES_ROOT", str(services))
+
+    name, contract = integration._librarian_contract("librarian")
+
+    assert name == "librarian-okf"
+    assert contract["env"]["LIBRARIAN_BUNDLE_ROOT"] == "${LIBRARIAN_BUNDLE_ROOT}"
+    assert contract["env"]["BUNDLE_ROOT"] == "/tmp/library"
+
+
 def test_observe_integration_tracks_last_successful_source_fingerprint(
     monkeypatch,
     tmp_path: Path,
