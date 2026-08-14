@@ -15,6 +15,7 @@ const INTERACTIVE_IDS = new Set([
   'bifrost.gateway',
   'signal.cli',
   'hermes.workspace',
+  'librarian.mcp',
 ]);
 const DEPENDENCY_ACTIONS = [
   ['install', 'Install'],

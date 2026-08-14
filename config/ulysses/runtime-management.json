@@ -335,9 +335,15 @@
       },
       "setup_on_update": false,
       "setup_during_install": false,
+      "launch": ["bash", "start.sh"],
+      "tmux_session": "diogenes-librarian-web",
+      "dashboard": {
+        "label": "Open Librarian",
+        "url": "http://127.0.0.1:3800"
+      },
       "hermes_mcp": true,
       "optional": true,
-      "ports": []
+      "ports": [3800]
     },
     {
       "id": "iwe.graph",
