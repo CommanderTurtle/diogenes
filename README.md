@@ -147,10 +147,22 @@ setup bugs, mobile/editor polish, docs, and small focused refactors. See
 
 ## Security
 
-[Odysseus](https://github.com/odysseus-dev/odysseus) is a self-hosted workspace with powerful local tools. Keep auth enabled, keep private data out of Git, and do not expose raw model/service ports publicly. Deployment details are in the [setup guide](docs/setup.md#security-notes).
+[Odysseus](https://github.com/odysseus-dev/odysseus) is a self-hosted workspace with powerful local tools. Keep auth enabled, keep private data out of Git, and do not expose raw model/service ports publicly.
+
+- Keep `AUTH_ENABLED=true` for any network-accessible deployment.
+- Keep `LOCALHOST_BYPASS=false` outside local development.
+
+Deployment details are in the [setup guide](docs/setup.md#security-notes).
 
 ## Visit my docs/blog! ReadThe [docs.shel.sh](https://docs.shel.sh/)
 
+<a href="https://star-history.dera.page/#odysseus-dev/odysseus&type=date&legend=top-left">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://star-history.dera.page/svg?repos=odysseus-dev/odysseus&type=date&theme=dark&legend=top-left" />
+   <source media="(prefers-color-scheme: light)" srcset="https://star-history.dera.page/svg?repos=odysseus-dev/odysseus&type=date&legend=top-left" />
+   <img alt="Star History Chart" src="https://star-history.dera.page/svg?repos=odysseus-dev/odysseus&type=date&legend=top-left" />
+ </picture>
+</a>
 
 ## License
 

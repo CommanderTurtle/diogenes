@@ -55,7 +55,7 @@ from routes.cookbook_helpers import (
     _SESSION_ID_RE, _validate_repo_id, _validate_serve_model_id, _validate_include, _validate_token,
     _validate_local_dir, _validate_gpus, _shell_path,
     _ps_squote, _bash_squote, _validate_serve_cmd, _parse_serve_phase, OLLAMA_MISSING_HINT,
-    _safe_env_prefix, _local_tooling_path_export, _append_serve_preflight_exit_lines,
+    _safe_env_prefix, _local_windows_bash_env_prefix, _local_tooling_path_export, _append_serve_preflight_exit_lines,
     _append_serve_exit_code_lines, _append_llama_cpp_linux_accel_build_lines, _cached_model_scan_script,
     load_stored_hf_token,
     _ollama_bind_from_cmd, _pip_install_fallback_chain,
@@ -1499,10 +1499,15 @@ def setup_cookbook_routes() -> APIRouter:
         else:
             # Local: run hf download in the background (tmux on POSIX, a detached
             # process + logfile on Windows where tmux doesn't exist).
-            # Local tmux is intentionally pinned to Diogenes's inner .venv by
-            # app startup. Environment selectors apply to remote hosts only;
-            # there is no activation/deactivation escape hatch locally.
-            lines.append(": # Diogenes tmux environment inherited")
+            # Windows detached Git Bash must activate the selected Windows
+            # environment explicitly. POSIX tmux inherits Diogenes's uv-owned
+            # environment and must not activate a second Python environment.
+            if local_windows and req.env_prefix:
+                lines.append(_safe_env_prefix(_local_windows_bash_env_prefix(req.env_prefix) if local_windows else req.env_prefix))
+            elif local_windows:
+                lines.append("deactivate 2>/dev/null; hash -r")
+            else:
+                lines.append(": # Diogenes tmux environment inherited")
             # Show whether the HF token reached this run (masked) — tells a gated
             # "not authorized" failure apart from a missing token.
             if not is_ollama_download:
@@ -2529,10 +2534,15 @@ def setup_cookbook_routes() -> APIRouter:
                 runner_lines.append(f"export HF_TOKEN='{_bash_squote(req.hf_token)}'")
             if req.gpus:
                 runner_lines.append(f"export CUDA_VISIBLE_DEVICES='{req.gpus}'")
-            # Local serves always use the repository's uv-owned environment.
-            # Separate native engines are invoked by absolute executable path,
-            # not by activating a second Python environment inside tmux.
-            runner_lines.append(": # Diogenes tmux environment inherited")
+            # Windows detached Git Bash must activate the selected Windows
+            # environment explicitly. POSIX tmux inherits Diogenes's uv-owned
+            # environment; native engines use absolute executable paths.
+            if local_windows and req.env_prefix:
+                runner_lines.append(_safe_env_prefix(_local_windows_bash_env_prefix(req.env_prefix) if local_windows else req.env_prefix))
+            elif local_windows:
+                runner_lines.append("deactivate 2>/dev/null; hash -r")
+            else:
+                runner_lines.append(": # Diogenes tmux environment inherited")
             if managed_vllm_reconcile:
                 runner_lines.append(
                     'echo "[ulysses] Replacing an unconstrained vLLM/Torch/Triton '
