@@ -54,7 +54,7 @@
         {
           "path": ".env",
           "mode": "0600",
-          "content": "# Official SearXNG container settings for a loopback workstation\nSEARXNG_VERSION=latest\nSEARXNG_HOST=127.0.0.1\nSEARXNG_PORT=7070\n"
+          "content": "# Official SearXNG container settings for the local workstation network\nSEARXNG_VERSION=latest\nSEARXNG_HOST=0.0.0.0\nSEARXNG_PORT=7070\n"
         },
         {
           "path": "core-config/settings.yml",
@@ -64,7 +64,7 @@
         {
           "path": "docker-compose.yml",
           "mode": "0644",
-          "content": "name: searxng\n\nservices:\n  core:\n    container_name: searxng-core\n    image: docker.io/searxng/searxng:${SEARXNG_VERSION:-latest}\n    restart: unless-stopped\n    ports:\n      - \"${SEARXNG_HOST:-127.0.0.1}:${SEARXNG_PORT:-7070}:${SEARXNG_PORT:-7070}\"\n    env_file: ./.env\n    volumes:\n      - ./core-config/:/etc/searxng/:Z\n      - core-data:/var/cache/searxng/\n\n  valkey:\n    container_name: searxng-valkey\n    image: docker.io/valkey/valkey:9-alpine\n    command: valkey-server --save 30 1 --loglevel warning\n    restart: unless-stopped\n    volumes:\n      - valkey-data:/data/\n\nvolumes:\n  core-data:\n  valkey-data:\n"
+          "content": "name: searxng\n\nservices:\n  core:\n    container_name: searxng-core\n    image: docker.io/searxng/searxng:${SEARXNG_VERSION:-latest}\n    restart: unless-stopped\n    ports:\n      - \"${SEARXNG_HOST:-0.0.0.0}:${SEARXNG_PORT:-7070}:${SEARXNG_PORT:-7070}\"\n    env_file: ./.env\n    volumes:\n      - ./core-config/:/etc/searxng/:Z\n      - core-data:/var/cache/searxng/\n\n  valkey:\n    container_name: searxng-valkey\n    image: docker.io/valkey/valkey:9-alpine\n    command: valkey-server --save 30 1 --loglevel warning\n    restart: unless-stopped\n    volumes:\n      - valkey-data:/data/\n\nvolumes:\n  core-data:\n  valkey-data:\n"
         }
       ],
       "git_update": false,

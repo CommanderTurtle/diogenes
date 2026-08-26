@@ -1344,6 +1344,9 @@ class DockerProjectControl:
                         "up",
                         "-d",
                         "--remove-orphans",
+                        "--wait",
+                        "--wait-timeout",
+                        "300",
                         *selected,
                     ],
                     "cwd": str(root),
@@ -1372,11 +1375,26 @@ class DockerProjectControl:
         elif action == "restart":
             steps = [
                 {
-                    "label": "Restart Compose services",
-                    "argv": [*base, "restart", *selected],
+                    "label": "Stop Compose services before ordered restart",
+                    "argv": [*base, "stop", *selected],
                     "cwd": str(root),
                     "timeout": 900,
-                }
+                },
+                {
+                    "label": "Start Compose services and wait for readiness",
+                    "argv": [
+                        *base,
+                        "up",
+                        "-d",
+                        "--remove-orphans",
+                        "--wait",
+                        "--wait-timeout",
+                        "300",
+                        *selected,
+                    ],
+                    "cwd": str(root),
+                    "timeout": 1200,
+                },
             ]
         elif action == "pull":
             steps = [
@@ -1429,13 +1447,15 @@ class DockerProjectControl:
                 )
             steps.append(
                 {
-                    "label": "Redeploy Compose project",
+                    "label": "Apply Compose update and wait for readiness",
                     "argv": [
                         *base,
                         "up",
                         "-d",
                         "--remove-orphans",
-                        "--force-recreate",
+                        "--wait",
+                        "--wait-timeout",
+                        "300",
                         *selected,
                     ],
                     "cwd": str(root),

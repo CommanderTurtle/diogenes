@@ -1154,6 +1154,21 @@ def test_firecrawl_lifecycle_operates_the_complete_official_stack(
     assert "USE_DB_AUTHENTICATION=false" in firecrawl_env
     assert "SEARXNG_ENDPOINT=http://host.docker.internal:7070" in firecrawl_env
 
+    searxng = next(
+        runtime
+        for runtime in manager.load_runtime_management(
+            home=tmp_path,
+            services_root=tmp_path / "services",
+        )
+        if runtime["id"] == "searxng.search"
+    )
+    searxng_bootstrap = {
+        bootstrap["path"].name: bootstrap["content"]
+        for bootstrap in searxng["bootstrap_files"]
+    }
+    assert "SEARXNG_HOST=0.0.0.0" in searxng_bootstrap[".env"]
+    assert "${SEARXNG_HOST:-0.0.0.0}" in searxng_bootstrap["docker-compose.yml"]
+
 
 def test_missing_declared_artifact_reports_incomplete_and_keeps_repair(
     monkeypatch: pytest.MonkeyPatch,
