@@ -1289,18 +1289,15 @@ def _retrieval_intake_current() -> bool:
 
 LEETCODER_OMP_SETTINGS: tuple[tuple[str, Any], ...] = (
     ("advisor.enabled", True),
-    ("advisor.subagents", False),
     ("advisor.syncBacklog", "1"),
     ("async.enabled", False),
     ("memory.backend", "off"),
     ("task.maxConcurrency", 1),
     ("task.maxRecursionDepth", 1),
+    ("task.agentAdvisor", {"task": "off"}),
     ("task.isolation.mode", "auto"),
     ("task.batch", True),
     ("exa.enabled", False),
-    ("exa.enableSearch", False),
-    ("exa.enableResearcher", False),
-    ("exa.enableWebsets", False),
     ("startup.checkUpdate", False),
     ("marketplace.autoUpdate", "off"),
 )
@@ -1308,9 +1305,9 @@ LEETCODER_OMP_SETTINGS: tuple[tuple[str, Any], ...] = (
 
 LEETCODER_AUDITOR_OMP_SETTINGS: tuple[tuple[str, Any], ...] = (
     ("advisor.enabled", False),
-    ("advisor.subagents", False),
     ("task.maxConcurrency", 1),
     ("task.maxRecursionDepth", 0),
+    ("task.agentAdvisor", {"task": "off"}),
     ("task.batch", False),
 )
 

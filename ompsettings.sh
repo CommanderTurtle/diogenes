@@ -97,15 +97,13 @@ cat >"$baseline_file" <<'JSON'
   "emojiAutocomplete": false,
 
   "advisor.enabled": true,
-  "advisor.subagents": false,
   "advisor.syncBacklog": "1",
   "advisor.immuneTurns": 3,
   "prewalk.enabled": false,
 
   "compaction.enabled": true,
   "compaction.midTurnEnabled": true,
-  "compaction.strategy": "snapcompact",
-  "compaction.remoteEnabled": false,
+  "compaction.methodOrder": ["snapcompact", "soft"],
   "compaction.remoteStreamingV2Enabled": false,
   "compaction.keepRecentTokens": 20000,
   "compaction.autoContinue": true,
@@ -155,6 +153,7 @@ cat >"$baseline_file" <<'JSON'
   "task.disabledAgents": [],
   "task.agentModelOverrides": {},
   "task.agentPrewalk": {},
+  "task.agentAdvisor": {"task": "off"},
   "task.prewalk": false,
   "tasks.todoClearDelay": 300,
 
@@ -276,9 +275,6 @@ cat >"$baseline_file" <<'JSON'
   "providers.anthropic.serverSideFallback": false,
   "providers.ollama-cloud.maxConcurrency": 0,
   "exa.enabled": false,
-  "exa.enableSearch": false,
-  "exa.enableResearcher": false,
-  "exa.enableWebsets": false,
 
   "startup.checkUpdate": false,
   "marketplace.autoUpdate": "off",
