@@ -4,11 +4,11 @@
   "workspaces": {
     "": {
       "devDependencies": {
-        "@antithesishq/bombadil": "^0.6.1",
+        "@antithesishq/bombadil": "^0.7.0",
       },
     },
   },
   "packages": {
-    "@antithesishq/bombadil": ["@antithesishq/bombadil@0.6.1", "", { "bin": { "bombadil": "bin/bombadil.js" } }, "sha512-d1iufG3MI7gSMSiSmMeNdcMW+qR0yQXL2zdkVynC3n3DYgFJYlYXKUQzygmqU12m4RWlR5iOdQU1hsx5UT6+IA=="],
+    "@antithesishq/bombadil": ["@antithesishq/bombadil@0.7.0", "", { "bin": { "bombadil": "bin/bombadil.js" } }, "sha512-alJmnphJ/iUoL5mCsnV3DwtajGy/sEQ3NJJCiMhgjqXshSq2BUtAs0vqdXEiiSkB8HbsOX5CLrAcaogYdwfAJg=="],
   }
 }
