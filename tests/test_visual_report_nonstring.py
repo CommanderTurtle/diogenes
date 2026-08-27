@@ -31,7 +31,34 @@ def test_bracketed_bare_url_keeps_bracket_out_of_href():
     assert soup.get_text() == "See [https://example.com/article] for details."
 
 
-def test_balanced_ipv6_bracket_remains_part_of_url():
-    linked = _autolink_urls("Open http://[::1] locally.")
+def test_bracketed_bare_url_keeps_closing_bracket_and_period_out_of_href():
+    text = "Some sentence [https://thisisareference.com/]. The next sentence is here."
+    soup = BeautifulSoup(_md_to_html(text), "html.parser")
+    link = soup.find("a")
 
-    assert "](http://[::1])" in linked
+    assert link is not None
+    assert link["href"] == "https://thisisareference.com/"
+    assert link.get_text() == "https://thisisareference.com/"
+    assert soup.get_text() == text
+
+
+def test_bare_url_keeps_sentence_period_out_of_href():
+    text = "See https://example.com/article. Then continue."
+    soup = BeautifulSoup(_md_to_html(text), "html.parser")
+    link = soup.find("a")
+
+    assert link is not None
+    assert link["href"] == "https://example.com/article"
+    assert link.get_text() == "https://example.com/article"
+    assert soup.get_text() == text
+
+
+def test_balanced_ipv6_bracket_remains_part_of_url():
+    text = "Open http://[::1]. Then continue."
+    soup = BeautifulSoup(_md_to_html(text), "html.parser")
+    link = soup.find("a")
+
+    assert link is not None
+    assert link["href"] == "http://[::1]"
+    assert link.get_text() == "http://[::1]"
+    assert soup.get_text() == text

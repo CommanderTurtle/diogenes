@@ -61,14 +61,23 @@ def _autolink_urls(md_text: str) -> str:
     def _link(match: re.Match) -> str:
         url = match.group(1)
         trailing = ""
-        # Research models commonly cite a bare URL as ``[https://example]``.
-        # The opening bracket is outside this match, but the old URL pattern
-        # consumed the closing bracket and made it part of the generated href.
-        # Remove only unmatched closing brackets so a balanced IPv6 literal
-        # such as ``http://[::1]`` remains intact.
-        while url.endswith("]") and url.count("]") > url.count("["):
-            url = url[:-1]
-            trailing = "]" + trailing
+        # Research prose commonly ends a bare URL with sentence punctuation,
+        # and models also emit citation-like ``[https://example]`` text.  Peel
+        # those delimiters from right to left so ``https://example].`` keeps
+        # both ``]`` and ``.`` in the prose rather than in the generated href.
+        # An unmatched closing bracket is removed, while a balanced IPv6
+        # literal such as ``http://[::1]`` remains part of the URL.
+        while url:
+            last = url[-1]
+            if last in ".,;:!?":
+                url = url[:-1]
+                trailing = last + trailing
+                continue
+            if last == "]" and url.count("]") > url.count("["):
+                url = url[:-1]
+                trailing = last + trailing
+                continue
+            break
         return f"[{url}]({url}){trailing}"
 
     # Match bare URLs not already inside ](...)
