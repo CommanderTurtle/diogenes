@@ -10,13 +10,16 @@
   <a href="#native-model-engines">Native Engines</a> ·
   <a href="#hermes-knowledge-orchestration">Hermes</a> ·
   <a href="#upstream-docker-quick-start">Upstream Docker</a> ·
-  <a href="docs/setup.md">Setup Guide</a> ·
-  <a href="CONTRIBUTING.md">Contributing</a>
+  <a href="#quick-start">Quick Start</a> ·
+  <a href="website/setup.md">Setup Guide</a> ·
+  <a href="CONTRIBUTING.md">Contributing</a> ·
+  <a href="ROADMAP.md">Roadmap</a>
 </p>
 
 <p align="center">
   <a href="https://repology.org/project/odysseus-ai/versions"><img src="https://repology.org/badge/vertical-allrepos/odysseus-ai.svg" alt="Packaging status"></a>
 </p>
+
 
 ![aviv](https://huggingface.co/sHEL1562/shelling/resolve/main/src/1-dashboard.avif)
 
@@ -122,7 +125,7 @@ docker compose up -d --build
 
 Open `http://localhost:7000` when the containers are healthy. The first admin password is printed in `docker compose logs odysseus`.
 
-Native installs, GPU notes, Windows/macOS instructions, HTTPS, and configuration live in the [setup guide](docs/setup.md).
+Native installs, GPU notes, Windows/macOS instructions, HTTPS, and configuration live in the [setup guide](website/setup.md).
 
 ## Features
 
@@ -137,7 +140,7 @@ Native installs, GPU notes, Windows/macOS instructions, HTTPS, and configuration
 
 ## Demo
 
-A full hover-to-play tour lives on the landing page: [`docs/index.html`](docs/index.html).
+A full hover-to-play tour lives on the [Odysseus landing page](https://odysseus-dev.github.io/odysseus/). Its source lives under [`website/`](website/).
 
 ## Contributing
 
@@ -152,7 +155,7 @@ setup bugs, mobile/editor polish, docs, and small focused refactors. See
 - Keep `AUTH_ENABLED=true` for any network-accessible deployment.
 - Keep `LOCALHOST_BYPASS=false` outside local development.
 
-Deployment details are in the [setup guide](docs/setup.md#security-notes).
+Deployment details are in the [setup guide](website/setup.md#security-notes).
 
 ## Visit my docs/blog! ReadThe [docs.shel.sh](https://docs.shel.sh/)
 
