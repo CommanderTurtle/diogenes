@@ -13,6 +13,7 @@ import re
 import time
 from datetime import datetime
 from typing import Callable, Dict, List, Optional, Set
+from urllib.parse import unquote, urlparse
 
 from src.research_utils import strip_thinking, is_low_quality
 
@@ -20,6 +21,37 @@ from src.goal_based_extractor import EXTRACTOR_SYSTEM
 from src.prompt_security import untrusted_context_message
 
 logger = logging.getLogger(__name__)
+
+_URL_PATTERN = re.compile(r'https?://[^\s<>"\'`]+', re.IGNORECASE)
+
+
+def _extract_explicit_urls(text: str) -> List[str]:
+    """Return deduplicated public URL strings embedded in a research prompt."""
+    urls: List[str] = []
+    seen: Set[str] = set()
+    for match in _URL_PATTERN.finditer(text or ""):
+        candidate = match.group(0)
+        # Keep balanced URL delimiters (notably IPv6 brackets/parenthesized
+        # paths), but leave prose punctuation and unmatched Markdown closers
+        # outside the URL sent to Firecrawl.
+        while candidate:
+            last = candidate[-1]
+            if last in ".,;:!?":
+                candidate = candidate[:-1]
+                continue
+            pairs = {")": "(", "]": "[", "}": "{"}
+            opener = pairs.get(last)
+            if opener and candidate.count(last) > candidate.count(opener):
+                candidate = candidate[:-1]
+                continue
+            break
+        parsed = urlparse(candidate)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            continue
+        if candidate not in seen:
+            seen.add(candidate)
+            urls.append(candidate)
+    return urls
 
 
 def current_date_context() -> str:
@@ -185,8 +217,8 @@ class DeepResearcher:
     """
     Iterative research engine following the IterResearch pattern.
 
-    Each round: LLM generates queries → SearXNG search → LLM extracts from
-    top pages → LLM synthesizes into evolving report → LLM decides continue/stop.
+    Each round: LLM generates queries → configured search provider → selected
+    page renderer/fetcher → LLM extraction → synthesis → continue/stop.
     """
 
     def __init__(
@@ -483,6 +515,7 @@ class DeepResearcher:
             round_instruction=round_instruction,
         )
 
+        queries: List[str] = []
         try:
             response = await self._llm(
                 [{"role": "user", "content": prompt}],
@@ -491,15 +524,109 @@ class DeepResearcher:
                 timeout=getattr(self, "query_timeout", 120),
             )
             queries = self._parse_json_array(response)
-            # Deduplicate
-            new_queries = [q for q in queries if q not in self.queries_used]
-            self.queries_used.update(new_queries)
-            logger.info(f"Round {round_num} queries: {new_queries}")
-            return new_queries
         except Exception as e:
             logger.error(f"Query generation failed: {e}")
             self._emit(phase="warning", message=f"Query generation failed: {e}")
-            return []
+
+        if not queries:
+            logger.warning(
+                "Round %d query response was empty or malformed; retrying with "
+                "a minimal strict-JSON prompt",
+                round_num,
+            )
+            self._emit(
+                phase="warning",
+                message="Search planning returned malformed output; retrying once",
+            )
+            retry_prompt = (
+                current_date_context()
+                + f"Return exactly {num_queries} useful web-search queries for the "
+                "research question below. Output ONLY one valid JSON array of "
+                "strings. No prose, Markdown, or code fence.\n\n"
+                f"Question:\n{question}\n\nJSON array:"
+            )
+            try:
+                response = await self._llm(
+                    [{"role": "user", "content": retry_prompt}],
+                    temperature=0,
+                    max_tokens=1024,
+                    timeout=getattr(self, "query_timeout", 120),
+                )
+                queries = self._parse_json_array(response)
+            except Exception as e:
+                logger.error(f"Query generation retry failed: {e}")
+
+        if not queries:
+            queries = self._fallback_queries(question, num_queries)
+            logger.warning(
+                "Round %d using deterministic fallback queries: %s",
+                round_num,
+                queries,
+            )
+            self._emit(
+                phase="warning",
+                message="Using deterministic search queries after planner failure",
+            )
+
+        # Normalize and deduplicate against earlier rounds.
+        new_queries = []
+        for query in queries:
+            query = str(query).strip()
+            if not query or query in self.queries_used or query in new_queries:
+                continue
+            new_queries.append(query)
+        self.queries_used.update(new_queries)
+        logger.info(f"Round {round_num} queries: {new_queries}")
+        return new_queries
+
+    @staticmethod
+    def _fallback_queries(question: str, limit: int = 4) -> List[str]:
+        """Build useful searches without relying on a well-formed LLM reply."""
+        candidates: List[str] = []
+        urls = _extract_explicit_urls(question)
+        text_without_urls = _URL_PATTERN.sub(" ", question or "")
+
+        # Repository/model identifiers are usually the most discriminating
+        # terms in technical research prompts (owner/project or org/model).
+        reference_pattern = re.compile(
+            r"\b[A-Za-z0-9][A-Za-z0-9_.-]{1,80}/"
+            r"[A-Za-z0-9][A-Za-z0-9_.:+-]{1,160}\b"
+        )
+        candidates.extend(reference_pattern.findall(text_without_urls))
+
+        # Direct references are scraped separately, but a site-scoped query
+        # finds related cards, docs, discussions, and lineage information.
+        for url in urls:
+            parsed = urlparse(url)
+            path = unquote(parsed.path).strip("/")
+            path_terms = re.sub(r"[/_-]+", " ", path).strip()
+            query = f"site:{parsed.hostname} {path_terms}".strip()
+            if query != f"site:{parsed.hostname}":
+                candidates.append(query)
+
+        # Preserve one broad question for context after removing code blocks,
+        # URLs, and one-line comparison separators.
+        broad = re.sub(r"```[\s\S]*?```", " ", text_without_urls)
+        lines = [
+            re.sub(r"\s+", " ", line).strip(" -\t")
+            for line in broad.splitlines()
+        ]
+        broad = " ".join(line for line in lines if len(line) > 3 and line.upper() != "VS")
+        if broad:
+            candidates.append(broad[:320])
+
+        queries: List[str] = []
+        seen: Set[str] = set()
+        for candidate in candidates:
+            candidate = re.sub(r"\s+", " ", candidate).strip()
+            key = candidate.casefold()
+            if not candidate or key in seen:
+                continue
+            seen.add(key)
+            queries.append(candidate)
+            if len(queries) >= max(1, limit):
+                break
+        return queries or ["research " + re.sub(r"\s+", " ", question).strip()[:300]]
 
     # ------------------------------------------------------------------
     # SEARCH + EXTRACT
@@ -513,8 +640,31 @@ class DeepResearcher:
         search_tasks = [self._search(q) for q in queries]
         search_results = await asyncio.gather(*search_tasks, return_exceptions=True)
 
-        # Collect URLs to fetch from all search results
+        # Collect URLs to fetch from all search results. Explicit URLs in the
+        # user's prompt are authoritative inputs, so queue them first rather
+        # than hoping a search engine happens to return the same page.
         urls_to_fetch = []
+        url_budget = self.max_urls_per_round * max(len(queries), 1)
+
+        def _queue_result(result: Dict) -> None:
+            if len(urls_to_fetch) >= url_budget:
+                return
+            url = result.get("url", "")
+            if not url or url in self.urls_fetched:
+                return
+            queued = dict(result)
+            queued["title"] = queued.get("title", "") or url
+            urls_to_fetch.append(queued)
+            self.urls_fetched.add(url)
+            self.analyzed_urls.append({"url": url, "title": queued["title"]})
+
+        for url in _extract_explicit_urls(question):
+            _queue_result({
+                "url": url,
+                "title": urlparse(url).hostname or url,
+                "direct_reference": True,
+            })
+
         for result in search_results:
             if isinstance(result, Exception):
                 logger.warning(f"Search error: {result}")
@@ -522,15 +672,8 @@ class DeepResearcher:
             if not result:
                 continue
             for r in result:
-                url = r.get("url", "")
-                if url and url not in self.urls_fetched:
-                    urls_to_fetch.append(r)
-                    self.urls_fetched.add(url)
-                    self.analyzed_urls.append({
-                        "url": url,
-                        "title": r.get("title", "") or url,
-                    })
-                if len(urls_to_fetch) >= self.max_urls_per_round * len(queries):
+                _queue_result(r)
+                if len(urls_to_fetch) >= url_budget:
                     break
 
         if self._cancelled or self._time_exceeded():
@@ -560,15 +703,8 @@ class DeepResearcher:
     async def _search(self, query: str) -> List[Dict]:
         """Run a search query using the configured research search provider."""
         try:
-            from src.search.providers import _get_search_settings
             from src.search.core import _call_provider, _build_provider_chain
-
-            settings = _get_search_settings()
-            provider = (self.search_provider_override or "").strip()
-            if not provider:
-                provider = (settings.get("research_search_provider") or "").strip()
-            if not provider:
-                provider = settings.get("search_provider", "searxng")
+            provider = self._active_search_provider()
 
             if provider == "disabled":
                 logger.info("Search is disabled for research")
@@ -606,18 +742,47 @@ class DeepResearcher:
             self._last_search_error = str(e)
             return []
 
+    def _active_search_provider(self) -> str:
+        """Resolve the research provider using the same precedence as search."""
+        provider = (self.search_provider_override or "").strip()
+        if provider:
+            return provider
+
+        from src.search.providers import _get_search_settings
+
+        settings = _get_search_settings()
+        if not provider:
+            provider = (settings.get("research_search_provider") or "").strip()
+        if not provider:
+            provider = settings.get("search_provider", "searxng")
+        return str(provider or "searxng").strip()
+
     async def _fetch_and_extract(self, url: str, question: str,
                                  title: str) -> Optional[Dict]:
         """Fetch a URL's content and use LLM to extract relevant info."""
         display = title or url
         self._emit(phase="reading", url=url, title=display,
                    total_sources=len(self.urls_fetched))
-        try:
-            from src.search import fetch_webpage_content
-            page = await asyncio.to_thread(fetch_webpage_content, url, 10)
-        except Exception as e:
-            logger.warning(f"Failed to fetch {url}: {e}")
-            return None
+        from src.search import fetch_webpage_content, firecrawl_scrape
+
+        page = None
+        if self._active_search_provider() == "firecrawl":
+            scrape_timeout = min(180, max(30, self.extraction_timeout))
+            page = await asyncio.to_thread(firecrawl_scrape, url, scrape_timeout)
+            if not page.get("success") or not page.get("content"):
+                logger.warning(
+                    "Firecrawl could not scrape %s (%s); falling back to the "
+                    "native bounded fetcher",
+                    url,
+                    page.get("error", "empty response"),
+                )
+
+        if not page or not page.get("success") or not page.get("content"):
+            try:
+                page = await asyncio.to_thread(fetch_webpage_content, url, 10)
+            except Exception as e:
+                logger.warning(f"Failed to fetch {url}: {e}")
+                return None
 
         if not page.get("success") or not page.get("content"):
             return None

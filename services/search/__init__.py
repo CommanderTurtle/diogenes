@@ -8,8 +8,20 @@ from .core import (
     update_search_config,
 )
 from .content import fetch_webpage_content
-from .providers import firecrawl_search, searxng_search, searxng_search_api, PROVIDER_INFO
-from .analytics import get_search_stats, SearchEngineError, NetworkError, ParseError, RateLimitError
+from .providers import (
+    firecrawl_scrape,
+    firecrawl_search,
+    searxng_search,
+    searxng_search_api,
+    PROVIDER_INFO,
+)
+from .analytics import (
+    get_search_stats,
+    SearchEngineError,
+    NetworkError,
+    ParseError,
+    RateLimitError,
+)
 from .service import SearchService, SearchResult, SearchResponse
 
 __all__ = [
@@ -23,6 +35,7 @@ __all__ = [
     "get_search_config",
     "get_search_stats",
     "invalidate_search_cache",
+    "firecrawl_scrape",
     "firecrawl_search",
     "searxng_search",
     "searxng_search_api",

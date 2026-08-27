@@ -60,6 +60,31 @@ async def test_search_and_extract_tracks_all_urls_selected_for_analysis():
 
 
 @pytest.mark.asyncio
+async def test_search_and_extract_prioritizes_urls_from_the_question():
+    researcher = _ControlledResearcher(extraction_concurrency=2, max_urls_per_round=2)
+    researcher._start_time = time.time()
+
+    async def no_search_results(query):
+        return []
+
+    researcher._search = no_search_results
+    findings = await researcher._search_and_extract(
+        ["supplemental query"],
+        "Compare this exact card: https://example.test/model].",
+    )
+
+    assert findings == [{
+        "url": "https://example.test/model",
+        "title": "example.test",
+        "summary": "ok",
+    }]
+    assert researcher.analyzed_urls == [{
+        "url": "https://example.test/model",
+        "title": "example.test",
+    }]
+
+
+@pytest.mark.asyncio
 async def test_fetch_and_extract_uses_configured_timeout(monkeypatch):
     captured = {}
     search_mod = types.ModuleType("src.search")
@@ -73,6 +98,9 @@ async def test_fetch_and_extract_uses_configured_timeout(monkeypatch):
         }
 
     search_mod.fetch_webpage_content = fake_fetch_webpage_content
+    search_mod.firecrawl_scrape = lambda *args, **kwargs: pytest.fail(
+        "Firecrawl should not run when SearXNG is explicitly selected"
+    )
     monkeypatch.setitem(sys.modules, "src.search", search_mod)
 
     async def immediate_to_thread(fn, *args, **kwargs):
@@ -84,6 +112,7 @@ async def test_fetch_and_extract_uses_configured_timeout(monkeypatch):
         llm_endpoint="http://local.test/v1/chat/completions",
         llm_model="local-model",
         extraction_timeout=123,
+        search_provider="searxng",
     )
 
     async def fake_llm(messages, temperature=0.3, max_tokens=4096, timeout=60):
@@ -100,6 +129,106 @@ async def test_fetch_and_extract_uses_configured_timeout(monkeypatch):
 
     assert result["summary"] == "useful page content"
     assert captured["timeout"] == 123
+
+
+@pytest.mark.asyncio
+async def test_fetch_and_extract_prefers_firecrawl_scrape(monkeypatch):
+    calls = []
+    search_mod = types.ModuleType("src.search")
+
+    def fake_firecrawl_scrape(url, timeout):
+        calls.append(("firecrawl", url, timeout))
+        return {
+            "success": True,
+            "content": "Firecrawl-rendered Markdown",
+            "title": "Rendered page",
+            "og_image": "https://example.test/card.png",
+        }
+
+    def fail_native_fetch(*args, **kwargs):
+        pytest.fail("native fetch must not run after a successful Firecrawl scrape")
+
+    search_mod.firecrawl_scrape = fake_firecrawl_scrape
+    search_mod.fetch_webpage_content = fail_native_fetch
+    monkeypatch.setitem(sys.modules, "src.search", search_mod)
+
+    async def immediate_to_thread(fn, *args, **kwargs):
+        return fn(*args, **kwargs)
+
+    monkeypatch.setattr(asyncio, "to_thread", immediate_to_thread)
+    researcher = DeepResearcher(
+        llm_endpoint="http://local.test/v1/chat/completions",
+        llm_model="local-model",
+        extraction_timeout=90,
+        search_provider="firecrawl",
+    )
+
+    async def fake_llm(messages, **kwargs):
+        assert "Firecrawl-rendered Markdown" in messages[1]["content"]
+        return json.dumps({
+            "rational": "relevant",
+            "evidence": "evidence",
+            "summary": "rendered finding",
+        })
+
+    researcher._llm = fake_llm
+    result = await researcher._fetch_and_extract(
+        "https://example.test/article", "question", "Search title"
+    )
+
+    assert result["summary"] == "rendered finding"
+    assert result["title"] == "Search title"
+    assert result["og_image"] == "https://example.test/card.png"
+    assert calls == [("firecrawl", "https://example.test/article", 90)]
+
+
+@pytest.mark.asyncio
+async def test_fetch_and_extract_falls_back_when_firecrawl_scrape_fails(monkeypatch):
+    calls = []
+    search_mod = types.ModuleType("src.search")
+
+    def fake_firecrawl_scrape(url, timeout):
+        calls.append("firecrawl")
+        return {"success": False, "content": "", "error": "offline"}
+
+    def fake_native_fetch(url, timeout):
+        calls.append("native")
+        return {
+            "success": True,
+            "content": "Bounded native content",
+            "title": "Native page",
+            "og_image": "",
+        }
+
+    search_mod.firecrawl_scrape = fake_firecrawl_scrape
+    search_mod.fetch_webpage_content = fake_native_fetch
+    monkeypatch.setitem(sys.modules, "src.search", search_mod)
+
+    async def immediate_to_thread(fn, *args, **kwargs):
+        return fn(*args, **kwargs)
+
+    monkeypatch.setattr(asyncio, "to_thread", immediate_to_thread)
+    researcher = DeepResearcher(
+        llm_endpoint="http://local.test/v1/chat/completions",
+        llm_model="local-model",
+        search_provider="firecrawl",
+    )
+
+    async def fake_llm(messages, **kwargs):
+        assert "Bounded native content" in messages[1]["content"]
+        return json.dumps({
+            "rational": "relevant",
+            "evidence": "evidence",
+            "summary": "native fallback finding",
+        })
+
+    researcher._llm = fake_llm
+    result = await researcher._fetch_and_extract(
+        "https://example.test/article", "question", ""
+    )
+
+    assert result["summary"] == "native fallback finding"
+    assert calls == ["firecrawl", "native"]
 
 
 def test_extraction_timeout_allows_long_local_model_runs():

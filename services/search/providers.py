@@ -137,6 +137,80 @@ def _safesearch_for(provider: str) -> Optional[str]:
 
 # ── Firecrawl (self-hosted) ──
 
+def firecrawl_scrape(url: str, timeout: int = 60) -> dict:
+    """Render one public URL through the configured local Firecrawl appliance.
+
+    Search discovery and page extraction are separate Firecrawl operations.
+    Deep research uses this helper after ``/v2/search`` returns each result's
+    ``url`` field.  A normalized failure result lets callers retain their
+    existing hardened HTTP fetcher as a fallback without ever reaching the
+    hosted Firecrawl API.
+    """
+    instance = _get_firecrawl_instance()
+    if not instance:
+        return {
+            "url": url,
+            "title": "",
+            "content": "",
+            "og_image": "",
+            "success": False,
+            "error": "no local Firecrawl endpoint configured",
+        }
+
+    headers = {"User-Agent": WEB_FETCH_USER_AGENT}
+    api_key = _get_provider_key("firecrawl")
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+
+    try:
+        response = httpx.post(
+            f"{instance}/v2/scrape",
+            json={
+                "url": url,
+                "formats": ["markdown"],
+                "onlyMainContent": True,
+            },
+            headers=headers,
+            timeout=max(5, int(timeout or 60)),
+        )
+        response.raise_for_status()
+        payload = response.json()
+        data = payload.get("data", {}) if isinstance(payload, dict) else {}
+        metadata = data.get("metadata", {}) if isinstance(data, dict) else {}
+        if not isinstance(metadata, dict):
+            metadata = {}
+        content = data.get("markdown", "") if isinstance(data, dict) else ""
+        if not isinstance(content, str) or not content.strip():
+            raise ValueError("Firecrawl returned no markdown content")
+
+        logger.info("Firecrawl scraped %d characters from: %s", len(content), url)
+        return {
+            "url": metadata.get("sourceURL") or metadata.get("url") or url,
+            "title": metadata.get("title") or "",
+            "content": content,
+            "og_image": (
+                metadata.get("ogImage")
+                or metadata.get("og:image")
+                or metadata.get("image")
+                or ""
+            ),
+            "success": True,
+            "error": "",
+            "provider": "firecrawl",
+        }
+    except Exception as exc:
+        logger.warning("Local Firecrawl scrape failed for %s: %s", url, exc)
+        return {
+            "url": url,
+            "title": "",
+            "content": "",
+            "og_image": "",
+            "success": False,
+            "error": str(exc),
+            "provider": "firecrawl",
+        }
+
+
 def firecrawl_search(
     query: str,
     count: Optional[int] = None,
