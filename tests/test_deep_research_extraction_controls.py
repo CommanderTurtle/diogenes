@@ -7,6 +7,7 @@ import types
 import pytest
 
 from src.deep_research import DeepResearcher
+from src.research_handler import ResearchHandler
 
 
 class _ControlledResearcher(DeepResearcher):
@@ -229,6 +230,104 @@ async def test_fetch_and_extract_falls_back_when_firecrawl_scrape_fails(monkeypa
 
     assert result["summary"] == "native fallback finding"
     assert calls == ["firecrawl", "native"]
+
+
+@pytest.mark.asyncio
+async def test_empty_extractor_answer_preserves_rendered_page_evidence(monkeypatch):
+    search_mod = types.ModuleType("src.search")
+    search_mod.firecrawl_scrape = lambda url, timeout: {
+        "success": True,
+        "content": "# Model card\n\nVerified benchmark details from the rendered page.",
+        "title": "Rendered model card",
+        "og_image": "",
+    }
+    search_mod.fetch_webpage_content = lambda *args, **kwargs: pytest.fail(
+        "native fetch must not run after a successful Firecrawl scrape"
+    )
+    monkeypatch.setitem(sys.modules, "src.search", search_mod)
+
+    async def immediate_to_thread(fn, *args, **kwargs):
+        return fn(*args, **kwargs)
+
+    monkeypatch.setattr(asyncio, "to_thread", immediate_to_thread)
+    researcher = DeepResearcher(
+        llm_endpoint="http://local.test/v1/chat/completions",
+        llm_model="thinking-only-model",
+        search_provider="firecrawl",
+    )
+
+    async def empty_final_answer(*args, **kwargs):
+        return ""
+
+    researcher._llm = empty_final_answer
+    result = await researcher._fetch_and_extract(
+        "https://example.test/model", "compare models", "",
+    )
+
+    assert result["url"] == "https://example.test/model"
+    assert result["title"] == "Rendered model card"
+    assert result["extraction_mode"] == "rendered_page_fallback"
+    assert "Verified benchmark details" in result["summary"]
+    assert "Verified benchmark details" in result["evidence"]
+    assert ResearchHandler._extract_sources([result]) == [{
+        "url": "https://example.test/model",
+        "title": "Rendered model card",
+    }]
+    assert ResearchHandler._extract_raw_findings([result])[0]["url"] == (
+        "https://example.test/model"
+    )
+
+
+@pytest.mark.asyncio
+async def test_extractor_exception_preserves_rendered_page_evidence(monkeypatch):
+    search_mod = types.ModuleType("src.search")
+    search_mod.firecrawl_scrape = lambda url, timeout: {
+        "success": True,
+        "content": "Rendered evidence survives a model timeout.",
+        "title": "Source",
+        "og_image": "",
+    }
+    search_mod.fetch_webpage_content = lambda *args, **kwargs: pytest.fail(
+        "native fetch must not run after a successful Firecrawl scrape"
+    )
+    monkeypatch.setitem(sys.modules, "src.search", search_mod)
+
+    async def immediate_to_thread(fn, *args, **kwargs):
+        return fn(*args, **kwargs)
+
+    monkeypatch.setattr(asyncio, "to_thread", immediate_to_thread)
+    researcher = DeepResearcher(
+        llm_endpoint="http://local.test/v1/chat/completions",
+        llm_model="timeout-model",
+        search_provider="firecrawl",
+    )
+
+    async def timeout(*args, **kwargs):
+        raise TimeoutError("model timed out")
+
+    researcher._llm = timeout
+    result = await researcher._fetch_and_extract(
+        "https://example.test/source", "question", "",
+    )
+
+    assert result["extraction_mode"] == "rendered_page_fallback"
+    assert result["summary"] == "Rendered evidence survives a model timeout."
+
+
+def test_format_findings_keeps_summary_and_evidence():
+    researcher = DeepResearcher(
+        llm_endpoint="http://local.test/v1/chat/completions",
+        llm_model="local-model",
+    )
+    rendered = researcher._format_findings([{
+        "url": "https://example.test/source",
+        "title": "Source",
+        "summary": "Concise conclusion.",
+        "evidence": "Detailed benchmark evidence.",
+    }])
+
+    assert "Concise conclusion." in rendered
+    assert "Detailed benchmark evidence." in rendered
 
 
 def test_extraction_timeout_allows_long_local_model_runs():

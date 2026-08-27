@@ -985,14 +985,20 @@ function _buildJobCard(job) {
     // Library-loaded jobs have sources=null but pre-set sourceCount; fresh jobs
     // populate sources directly. Prefer the pre-set count if present.
     const srcCount = job.sources?.length ?? job.sourceCount ?? 0;
-    // 0 sources = the research couldn't gather/extract anything — flag it.
+    const analyzedCount = job.analyzedCount || job.progress?.total_sources || 0;
+    // Distinguish discovery failure from extraction failure. The old card told
+    // users to switch search engines even when Firecrawl had rendered dozens
+    // of pages and the research model alone returned no usable extracts.
     const failed = srcCount === 0;
+    const extractionFailed = failed && analyzedCount > 0;
     if (failed) card.classList.add('research-job-failed');
     const doneBadge = failed
-      ? `<span class="research-cat-badge research-cat-failed">${_cancelIcon} no results</span>`
+      ? `<span class="research-cat-badge research-cat-failed">${_cancelIcon} ${extractionFailed ? 'extraction failed' : 'no results'}</span>`
       : (job.category ? `<span class="research-cat-badge">${_esc(job.category)}</span>` : `<span class="research-cat-badge research-cat-standard">standard</span>`);
     const failNote = failed
-      ? `<div class="research-job-failnote">Couldn't extract anything — try rephrasing the question, or switch the search engine in Settings.</div>`
+      ? `<div class="research-job-failnote">${extractionFailed
+          ? `Found and rendered ${analyzedCount} page${analyzedCount === 1 ? '' : 's'}, but the research model returned no usable source extracts. Rerun after changing the research model or extraction settings.`
+          : `Search returned no pages. Try rephrasing the question or switch the search engine in Settings.`}</div>`
       : '';
     const thumbSource = (job.sources || []).find(s => s && (s.image || s.og_image));
     const thumbUrl = job.thumbnail || thumbSource?.image || thumbSource?.og_image || '';
@@ -1003,7 +1009,7 @@ function _buildJobCard(job) {
       <div class="research-job-header">
         <span class="research-job-query">${_esc(job.query)}</span>${doneBadge}
         ${modelTag}
-        <span class="research-job-meta">${elapsed} -- ${srcCount} sources</span>
+        <span class="research-job-meta">${elapsed} -- ${srcCount} sources${failed && analyzedCount ? ` -- ${analyzedCount} pages rendered` : ''}</span>
       </div>
       ${failNote}
       <div class="research-job-actions">

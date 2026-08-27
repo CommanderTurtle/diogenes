@@ -817,18 +817,74 @@ class DeepResearcher:
                     logger.info(f"Skipping low-quality extraction from {url}")
                     return None
                 return parsed
-            # If JSON parsing fails, treat entire response as evidence
-            return {
-                "url": url,
-                "title": title or page.get("title", ""),
-                "og_image": page.get("og_image", ""),
-                "rational": "LLM extraction (raw)",
-                "evidence": response[:3000],
-                "summary": response[:500],
-            }
+            # Preserve a substantive non-JSON reply as raw evidence. An empty
+            # final answer is different: reasoning models can spend their whole
+            # generation inside a stripped thinking block, which previously
+            # created a fake finding whose summary/evidence were both empty.
+            raw_response = str(response or "").strip()
+            if raw_response:
+                if is_low_quality(raw_response):
+                    logger.info(f"Skipping low-quality extraction from {url}")
+                    return None
+                return {
+                    "url": url,
+                    "title": title or page.get("title", ""),
+                    "og_image": page.get("og_image", ""),
+                    "rational": "LLM extraction (raw)",
+                    "evidence": raw_response[:3000],
+                    "summary": raw_response[:500],
+                }
+
+            logger.warning(
+                "Structured extraction returned an empty final answer for %s; "
+                "preserving bounded rendered-page evidence",
+                url,
+            )
+            return self._rendered_page_finding(url, title, page, content)
         except Exception as e:
             logger.warning(f"LLM extraction failed for {url}: {e}")
+            # Retrieval already succeeded. Retain a bounded excerpt so a
+            # transient or model-specific extractor failure does not erase the
+            # page, its attribution, and all useful input to synthesis.
+            return self._rendered_page_finding(url, title, page, content)
+
+    @staticmethod
+    def _rendered_page_finding(
+        url: str,
+        title: str,
+        page: Dict,
+        content: str,
+    ) -> Optional[Dict]:
+        """Build a source-grounded fallback from successfully rendered text."""
+        rendered = str(content or "").strip()
+        if not rendered:
             return None
+
+        evidence = rendered[:6000]
+        if len(rendered) > 6000:
+            last_para = evidence.rfind("\n\n")
+            if last_para > 4800:
+                evidence = evidence[:last_para]
+
+        summary = evidence[:1200]
+        if len(evidence) > 1200:
+            last_para = summary.rfind("\n\n")
+            if last_para > 800:
+                summary = summary[:last_para]
+
+        return {
+            "url": url,
+            "title": title or page.get("title", ""),
+            "og_image": page.get("og_image", ""),
+            "rational": (
+                "The page rendered successfully, but the research model did "
+                "not return a usable structured extraction. Bounded original "
+                "page evidence was retained instead."
+            ),
+            "evidence": evidence,
+            "summary": summary,
+            "extraction_mode": "rendered_page_fallback",
+        }
 
     # ------------------------------------------------------------------
     # SYNTHESIZE
@@ -916,6 +972,12 @@ class DeepResearcher:
                 max_tokens=self.max_report_tokens,
                 timeout=180,
             )
+            if not str(result or "").strip():
+                logger.warning(
+                    "Final report model returned an empty final answer; "
+                    "keeping the source-grounded evolving report"
+                )
+                return report
 
             # If report is too short, ask the LLM to expand it
             if len(result.split()) < 400:
@@ -1057,8 +1119,17 @@ class DeepResearcher:
             title = f.get("title", "")
             summary = f.get("summary", "")
             evidence = f.get("evidence", "")
-            # Use summary if available, fall back to truncated evidence
-            content = summary if summary else (evidence[:1000] if evidence else "(no content)")
+            # Give synthesis both the extractor's conclusion and its actual
+            # evidence. Previously a non-empty summary silently displaced the
+            # evidence field, weakening source grounding even on good runs.
+            if evidence:
+                bounded_evidence = evidence[:4000]
+                if summary and not bounded_evidence.startswith(summary):
+                    content = f"Summary: {summary}\n\nEvidence:\n{bounded_evidence}"
+                else:
+                    content = bounded_evidence
+            else:
+                content = summary or "(no content)"
             parts.append(f"**Finding {i}** — [{title}]({url})\n{content}")
         return "\n\n".join(parts)
 
@@ -1085,6 +1156,7 @@ class DeepResearcher:
             "Rounds": self.round_count,
             "Queries": len(self.queries_used),
             "URLs": len(self.urls_fetched),
+            "Findings": len(self.findings),
             "Model": self.llm_model,
         }
         if self.providers_used:

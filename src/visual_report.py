@@ -806,6 +806,11 @@ body::after {{
   color: var(--text-muted); font-size: 0.75rem;
   margin-left: auto; flex-shrink: 0;
 }}
+.source-warning {{
+  padding: 1rem 1.1rem; border: 1px solid #a8612a;
+  border-radius: 10px; color: #f0b77e; background: rgba(168, 97, 42, 0.1);
+  font-size: 0.9rem; line-height: 1.55;
+}}
 
 /* ── Chat-about CTA ────────────────────────────────── */
 .chat-cta {{
@@ -1841,7 +1846,7 @@ def generate_visual_report(
 
     # Build stats bar
     stat_items = []
-    for key, label in [("Duration", "Duration"), ("Rounds", "Rounds"), ("Queries", "Queries"), ("URLs", "URLs Analyzed"), ("Model", "Model"), ("Search", "Search")]:
+    for key, label in [("Duration", "Duration"), ("Rounds", "Rounds"), ("Queries", "Queries"), ("URLs", "URLs Analyzed"), ("Findings", "Findings Retained"), ("Model", "Model"), ("Search", "Search")]:
         val = stats.get(key)
         if val is not None:
             stat_items.append(
@@ -1877,6 +1882,15 @@ def generate_visual_report(
             '<div class="sources-list">\n'
             + "\n".join(items)
             + "\n</div>\n</details>\n</div>"
+        )
+    elif stats.get("URLs"):
+        sources_html = (
+            '<div class="sources-panel">\n'
+            '<div class="source-warning"><strong>Unsourced draft:</strong> '
+            'pages were discovered and rendered, but no usable source extracts '
+            'were retained. Treat this narrative as unverified and rerun the '
+            'research with a working extraction model.</div>\n'
+            '</div>'
         )
 
     timestamp = datetime.now().strftime("%B %d, %Y at %H:%M")

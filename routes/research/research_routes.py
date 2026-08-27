@@ -390,14 +390,20 @@ def setup_research_routes(research_handler, session_manager=None) -> APIRouter:
                 if search and search.lower() not in query.lower():
                     continue
                 sources = d.get("sources", [])
+                stats = d.get("stats") if isinstance(d.get("stats"), dict) else {}
+                try:
+                    analyzed_count = int(stats.get("URLs", 0) or 0)
+                except (TypeError, ValueError):
+                    analyzed_count = 0
                 items.append({
                     "id": p.stem,
                     "query": query,
                     "category": d.get("category") or "",
                     "source_count": len(sources),
+                    "analyzed_count": analyzed_count,
                     "status": d.get("status", "done"),
-                    "duration": d.get("stats", {}).get("Duration", ""),
-                    "rounds": d.get("stats", {}).get("Rounds", ""),
+                    "duration": stats.get("Duration", ""),
+                    "rounds": stats.get("Rounds", ""),
                     "started_at": d.get("started_at", 0),
                     "completed_at": d.get("completed_at", 0),
                     "archived": bool(d.get("archived")),

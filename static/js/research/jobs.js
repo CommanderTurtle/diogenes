@@ -107,7 +107,8 @@ async function _syncLibrary(options = {}) {
             query: item.query || existing.query,
             status: 'done',
             elapsed: elapsed || existing.elapsed || 0,
-            sourceCount: item.source_count || existing.sourceCount || 0,
+            sourceCount: item.source_count ?? existing.sourceCount ?? 0,
+            analyzedCount: item.analyzed_count ?? existing.analyzedCount ?? 0,
             thumbnail: item.thumbnail || existing.thumbnail || '',
             category: item.category || existing.category || '',
             _fromLibrary: true,
@@ -125,7 +126,8 @@ async function _syncLibrary(options = {}) {
           id: item.id, query: item.query, status: 'done',
           progress: {}, startedAt: (item.started_at || 0) * 1000,
           elapsed, result: null, sources: null, findings: null,
-          sourceCount: item.source_count || 0,
+          sourceCount: item.source_count ?? 0,
+          analyzedCount: item.analyzed_count ?? 0,
           thumbnail: item.thumbnail || '',
           category: item.category || '',
           errorMsg: null, avgDuration: null, modelName: null,
@@ -198,6 +200,8 @@ export async function retryJob(jobId) {
   job.result = null;
   job.sources = null;
   job.findings = null;
+  job.sourceCount = 0;
+  job.analyzedCount = 0;
   job.elapsed = 0;
   job.avgDuration = null;
   _notify();
@@ -262,6 +266,7 @@ function _makeJob(query, settings) {
     query, settings, status: 'queued',
     progress: {}, startedAt: null, elapsed: 0,
     result: null, sources: null, findings: null,
+    analyzedCount: 0,
     category: settings?.category || '',
     errorMsg: null, avgDuration: null,
     modelName: null, endpointName: null,

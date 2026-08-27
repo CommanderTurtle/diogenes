@@ -532,7 +532,8 @@ class ResearchHandler:
             url = f.get("url", "")
             title = f.get("title", "") or url
             summary = f.get("summary", "") or f.get("evidence", "")
-            if url and url not in seen and not is_low_quality(summary):
+            rendered_fallback = f.get("extraction_mode") == "rendered_page_fallback"
+            if url and url not in seen and (rendered_fallback or not is_low_quality(summary)):
                 seen.add(url)
                 entry = {"url": url, "title": title}
                 og_img = f.get("og_image", "")
@@ -554,7 +555,8 @@ class ResearchHandler:
                 summary = f.get("summary", "")
                 evidence = f.get("evidence", "")
                 content = summary if summary else (evidence[:2000] if evidence else "")
-                if url and content and not is_low_quality(content):
+                rendered_fallback = f.get("extraction_mode") == "rendered_page_fallback"
+                if url and content and (rendered_fallback or not is_low_quality(content)):
                     items.append({"url": url, "title": title, "summary": content})
             return items
         except Exception as e:

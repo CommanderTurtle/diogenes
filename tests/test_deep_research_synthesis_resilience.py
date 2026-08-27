@@ -84,3 +84,18 @@ def test_synthesis_failure_keeps_previous_report():
     prev = "existing report body"
     out = asyncio.run(r._synthesize("q", _FINDINGS, prev))
     assert out == prev  # unchanged, not emptied
+
+
+def test_empty_final_report_keeps_source_grounded_evolving_report():
+    r = _researcher()
+    r.category = None
+
+    async def _empty(messages, **kwargs):
+        return ""
+
+    r._llm = _empty
+    evolving = "Grounded report with [a source](https://example.test)."
+
+    out = asyncio.run(r._final_report("q", evolving))
+
+    assert out == evolving
