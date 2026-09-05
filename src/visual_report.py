@@ -53,13 +53,26 @@ _REPORT_ALLOWED_ATTRS.setdefault("img", set()).update({"src", "alt", "title"})
 def _autolink_urls(md_text: str) -> str:
     """Convert bare URLs to markdown links before processing.
 
-    Skips URLs already inside markdown link syntax [text](url).
+    Skips URLs already inside markdown link syntax [text](url).  A URL used
+    as the *label* of a Markdown link needs the same protection as its
+    destination: turning ``[https://a](https://a)`` into a nested link makes
+    python-markdown absorb later citations into the first link's href.
     """
     if not isinstance(md_text, str):
         return md_text
 
     def _link(match: re.Match) -> str:
-        url = match.group(1)
+        bracketed_url = match.group("bracketed_url")
+        if bracketed_url is not None:
+            # This is already the label portion of ``[url](destination)``.
+            # Leave it intact; the destination is excluded by the bare-URL
+            # alternative below and Markdown will render the original link.
+            if md_text[match.end():].startswith("("):
+                return match.group(0)
+            url = bracketed_url
+        else:
+            url = match.group("bare_url")
+
         trailing = ""
         # Research prose commonly ends a bare URL with sentence punctuation,
         # and models also emit citation-like ``[https://example]`` text.  Peel
@@ -78,11 +91,20 @@ def _autolink_urls(md_text: str) -> str:
                 trailing = last + trailing
                 continue
             break
+
+        if bracketed_url is not None:
+            # Preserve the model's visible citation brackets, but escape the
+            # outer pair so it cannot form nested Markdown link syntax when a
+            # paragraph contains more than one ``[https://...]`` citation.
+            return f"\\[[{url}]({url}){trailing}\\]"
         return f"[{url}]({url}){trailing}"
 
-    # Match bare URLs not already inside ](...)
+    # Handle ``[https://...]`` as one token, then match ordinary bare URLs not
+    # already inside a Markdown destination.  Keeping the bracketed case in
+    # this single pass prevents us from autolinking the URL we just generated.
     return re.sub(
-        r'(?<!\]\()(?<!\()(https?://[^\s\)<>]+)',
+        r'\[(?P<bracketed_url>https?://[^\s<>\]]+)\]'
+        r'|(?<!\]\()(?<!\()(?P<bare_url>https?://[^\s\)<>]+)',
         _link,
         md_text,
     )
