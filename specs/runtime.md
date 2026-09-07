@@ -14,6 +14,7 @@ This spec covers current app runtime wiring in:
 - `src/constants.py`;
 - `src/interactive_gate.py`;
 - `src/host_docker_access.py`;
+- `src/diogenes_host_services.py`;
 - `core/middleware.py`;
 - all route setup functions registered from `app.py`, including canonical
   `routes/admin_wipe/`, `routes/cleanup/`, `routes/compare/`, `routes/contacts/`, `routes/document/`, `routes/gallery/`, `routes/history/`, `routes/mcp/`, `routes/memory/`, `routes/note/`, `routes/research/`, `routes/search/`, `routes/task/`, `routes/vault/`, and `routes/webhook/` packages plus top-level compatibility shims;
@@ -29,6 +30,13 @@ This spec covers current app runtime wiring in:
 `src/app_initializer.initialize_managers()` owns shared manager construction. It creates memory, skills, sessions, uploads, personal docs, API keys, presets, chat processor/handler, research handler, model discovery, and optional memory vector store. Route modules receive these dependencies from `app.py`; they should not recreate manager singletons.
 
 `app.py` separately owns runtime singletons and integration hooks for auth, vector RAG, TTS/STT, webhooks, scheduled tasks, MCP, assistant log globals, event bus wiring, AI interaction globals, API-token cache invalidation, and foreground activity tracking. `src.runtime_paths` owns source-versus-frozen app/data path resolution; `src.constants` derives `DATA_DIR` from `ODYSSEUS_DATA_DIR` or that runtime default. `core/constants.py` and `src/constants.py` are both live import paths and are not fully identical today, so new constants need explicit placement/compatibility decisions.
+
+`src.diogenes_host_services` owns the admin-only **Venvs** operator plane. Its
+fixed mm-tools catalog starts each selected project through its own launcher and
+virtual environment. Services and interactive host-shell tabs live on the named
+`diogenes-operator` tmux socket, with wrappers and logs under
+`DATA_DIR/diogenes-operator`; no command in this plane lists, attaches to, or
+kills a session on Diogenes' default tmux server.
 
 The shared upload handler is also installed on the session manager and tool
 helper, and `app.py` injects it into attachment-bearing route factories so
@@ -56,6 +64,15 @@ Effective middleware order matters. CORS, `SecurityHeadersMiddleware`, `_Request
 
 Security headers include HSTS and a restrictive `Permissions-Policy` that disables camera/geolocation and only allows microphone from self.
 
+The operator-service HTTP routes require a human cookie-authenticated admin and
+explicitly reject the internal-agent and bearer-token bypass identities.
+Interactive
+terminal WebSockets independently validate the session cookie and admin role,
+and reject browser `Origin` hosts that do not match the request host. The named
+tmux socket is a control-plane boundary rather than an OS-user sandbox: another
+process deliberately running as the same Unix account could address that socket
+by name, while it remains absent from Diogenes agent/runtime controls.
+
 `_TIMEOUT_EXEMPT_PREFIXES` owns hard-timeout bypass policy. It is prefix-based and currently exempts all subroutes under `/api/chat`, `/api/shell/stream`, `/api/research`, `/api/model/download`, `/api/model/probe`, `/api/model-endpoints`, `/api/cookbook/setup`, `/api/upload`, `/api/image`, and `/api/memory/audit`. Memory audit has its own longer inactivity timeout.
 
 Generated-image path resolution fails closed for invalid names, path escape, and missing files. Ownership checks are best-effort when a current user exists: gallery rows owned by a different user return 404, rowless generated files are allowed, and DB/helper failures fail open. See `auth-security.md` for `LOCALHOST_BYPASS`, internal-tool loopback, proxy-header exclusion, and owner-impersonation policy.
@@ -64,6 +81,9 @@ Generated-image path resolution fails closed for invalid names, path escape, and
 
 - Request hard timeout applies to non-exempt paths that reach `_RequestTimeoutMiddleware`.
 - `src.interactive_gate` tracks foreground requests, browser heartbeats, and active chat streams. Background task/email work can wait for a quiet window so scheduled jobs do not compete with visible browser or model activity. Status polling and `/api/email/unread-state` are passive reads: they do not cancel running scheduled work or manufacture foreground pressure.
+- Operator shell browser attachments are disposable PTYs connected to persistent
+  tmux sessions. Closing a browser or Services window ends only that attachment;
+  closing the shell tab explicitly ends the corresponding tmux session.
 - YouTube support is initialized through `services.youtube.init_youtube()`.
 - Vector document RAG is initialized lazily through `src.rag_singleton.get_rag_manager()` and may be unavailable at startup.
 - `routes.workspace_routes` lets the browser choose a server directory for agent turns; execution confinement is enforced below the route layer by tool execution.

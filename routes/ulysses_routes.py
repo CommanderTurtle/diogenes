@@ -2,13 +2,19 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable
+from contextlib import suppress
+import json
+from urllib.parse import urlsplit
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
-from core.middleware import require_admin
+from core.middleware import INTERNAL_TOOL_HEADER, require_admin
+from routes.auth_routes import SESSION_COOKIE
+from src.diogenes_host_services import HostServiceError, HostServicesManager
 from src.diogenes_docker_projects import (
     DockerProjectControl,
     DockerResourceControl,
@@ -57,6 +63,7 @@ from src.ulysses_runtime_management import (
 from src.ulysses_sandwich_control import SandwichControl
 from src.ulysses_topology import build_topology_report
 from src.tmux_ownership import list_owned_sessions, shutdown_owned_sessions
+from src.owner_identity import INTERNAL_TOOL_USER, auth_disabled
 
 
 class HermesAdoptionApplyRequest(BaseModel):
@@ -160,12 +167,44 @@ class TmuxShutdownRequest(BaseModel):
     identities: list[str] | None = None
 
 
+class HostServiceActionRequest(BaseModel):
+    action: str
+
+
+class HostShellCreateRequest(BaseModel):
+    title: str = ""
+    cwd: str = ""
+    cols: int = Field(default=100, ge=20, le=400)
+    rows: int = Field(default=30, ge=8, le=200)
+
+
 def _job_http_error(exc: RuntimeJobError) -> HTTPException:
     if isinstance(exc, RuntimeJobConflict):
         return HTTPException(409, str(exc))
     if isinstance(exc, RuntimeJobConfirmationError):
         return HTTPException(400, str(exc))
     return HTTPException(400, str(exc))
+
+
+def _require_operator_admin(request: Request) -> None:
+    """Require a human admin; internal agent and bearer-token bypasses stay out."""
+    user = getattr(request.state, "current_user", None)
+    if (
+        user == INTERNAL_TOOL_USER
+        or getattr(request.state, "api_token", False)
+        or request.headers.get(INTERNAL_TOOL_HEADER)
+    ):
+        raise HTTPException(403, "Operator admin only")
+    require_admin(request)
+    if auth_disabled():
+        return
+    auth_manager = getattr(request.app.state, "auth_manager", None)
+    if (
+        not user
+        or auth_manager is None
+        or not auth_manager.is_admin(user)
+    ):
+        raise HTTPException(403, "Operator admin only")
 
 
 def setup_ulysses_routes(
@@ -196,6 +235,9 @@ def setup_ulysses_routes(
     sandwich_collector: Callable[[], dict] = collect_sandwich_status,
     managed_runtime_collector: Callable[[], dict] = collect_managed_runtimes,
     docker_project_collector: Callable[[], dict] = collect_docker_projects,
+    host_services_manager_factory: Callable[
+        [], HostServicesManager
+    ] = HostServicesManager,
 ) -> APIRouter:
     router = APIRouter(prefix="/api/odysseus", tags=["odysseus"])
 
@@ -774,5 +816,173 @@ def setup_ulysses_routes(
             )
         except RuntimeJobError as exc:
             raise _job_http_error(exc) from exc
+
+    @router.get("/host-services")
+    async def get_host_services(request: Request) -> dict:
+        _require_operator_admin(request)
+        return await run_in_threadpool(host_services_manager_factory().observe)
+
+    @router.post("/host-services/{service_id}")
+    async def control_host_service(
+        request: Request,
+        service_id: str,
+        body: HostServiceActionRequest,
+    ) -> dict:
+        _require_operator_admin(request)
+        try:
+            return await run_in_threadpool(
+                host_services_manager_factory().act,
+                service_id,
+                body.action,
+            )
+        except HostServiceError as exc:
+            raise HTTPException(400, str(exc)) from exc
+
+    @router.get("/host-services/{service_id}/log")
+    async def get_host_service_log(
+        request: Request,
+        service_id: str,
+        max_chars: int = 40000,
+    ) -> dict:
+        _require_operator_admin(request)
+        try:
+            return await run_in_threadpool(
+                host_services_manager_factory().read_log,
+                service_id,
+                max_chars=max_chars,
+            )
+        except HostServiceError as exc:
+            raise HTTPException(404, str(exc)) from exc
+
+    @router.get("/host-shell/sessions")
+    async def get_host_shells(request: Request) -> dict:
+        _require_operator_admin(request)
+        return await run_in_threadpool(host_services_manager_factory().list_shells)
+
+    @router.post("/host-shell/sessions")
+    async def create_host_shell(
+        request: Request,
+        body: HostShellCreateRequest,
+    ) -> dict:
+        _require_operator_admin(request)
+        try:
+            return await run_in_threadpool(
+                host_services_manager_factory().create_shell,
+                title=body.title,
+                cwd=body.cwd,
+                cols=body.cols,
+                rows=body.rows,
+            )
+        except HostServiceError as exc:
+            raise HTTPException(400, str(exc)) from exc
+
+    @router.delete("/host-shell/sessions/{shell_id}")
+    async def delete_host_shell(request: Request, shell_id: str) -> dict:
+        _require_operator_admin(request)
+        try:
+            return await run_in_threadpool(
+                host_services_manager_factory().delete_shell,
+                shell_id,
+            )
+        except HostServiceError as exc:
+            raise HTTPException(400, str(exc)) from exc
+
+    async def _authorize_host_shell(websocket: WebSocket) -> bool:
+        # Cookies alone must not authorize a cross-site WebSocket connection.
+        origin = websocket.headers.get("origin", "")
+        if origin:
+            origin_host = urlsplit(origin).netloc.lower()
+            request_host = websocket.headers.get("host", "").lower()
+            forwarded_host = websocket.headers.get("x-forwarded-host", "").split(",")[0].strip().lower()
+            allowed_hosts = {value for value in (request_host, forwarded_host) if value}
+            if not origin_host or origin_host not in allowed_hosts:
+                await websocket.close(code=4403, reason="Origin rejected")
+                return False
+        if auth_disabled():
+            return True
+        app = websocket.scope.get("app")
+        manager = getattr(getattr(app, "state", None), "auth_manager", None)
+        token = websocket.cookies.get(SESSION_COOKIE)
+        if manager is not None and manager.validate_token(token):
+            username = manager.get_username_for_token(token)
+            if username and manager.is_admin(username):
+                return True
+        await websocket.close(code=4403, reason="Admin only")
+        return False
+
+    @router.websocket("/host-shell/sessions/{shell_id}/ws")
+    async def attach_host_shell(websocket: WebSocket, shell_id: str) -> None:
+        if not await _authorize_host_shell(websocket):
+            return
+        try:
+            cols = max(20, min(int(websocket.query_params.get("cols", "100")), 400))
+            rows = max(8, min(int(websocket.query_params.get("rows", "30")), 200))
+            attachment = await run_in_threadpool(
+                host_services_manager_factory().attach_shell,
+                shell_id,
+                cols=cols,
+                rows=rows,
+            )
+        except (HostServiceError, TypeError, ValueError):
+            await websocket.close(code=4404, reason="Operator shell unavailable")
+            return
+
+        await websocket.accept()
+        loop = asyncio.get_running_loop()
+        output: asyncio.Queue[bytes | None] = asyncio.Queue()
+
+        def terminal_ready() -> None:
+            try:
+                chunk = attachment.read()
+            except BlockingIOError:
+                return
+            except OSError:
+                chunk = b""
+            output.put_nowait(chunk or None)
+
+        async def send_terminal() -> None:
+            while True:
+                chunk = await output.get()
+                if chunk is None:
+                    return
+                await websocket.send_bytes(chunk)
+
+        async def receive_terminal() -> None:
+            while True:
+                message = await websocket.receive()
+                if message["type"] == "websocket.disconnect":
+                    return
+                raw = message.get("text")
+                if not raw or len(raw) > 131072:
+                    continue
+                try:
+                    event = json.loads(raw)
+                except (TypeError, json.JSONDecodeError):
+                    continue
+                if event.get("type") == "input" and isinstance(event.get("data"), str):
+                    attachment.write(event["data"].encode("utf-8")[:65536])
+                elif event.get("type") == "resize":
+                    try:
+                        attachment.resize(int(event.get("cols", 100)), int(event.get("rows", 30)))
+                    except (TypeError, ValueError):
+                        continue
+
+        loop.add_reader(attachment.fileno(), terminal_ready)
+        tasks = {
+            asyncio.create_task(send_terminal()),
+            asyncio.create_task(receive_terminal()),
+        }
+        try:
+            done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+            for task in pending:
+                task.cancel()
+            for task in done | pending:
+                with suppress(asyncio.CancelledError, WebSocketDisconnect, RuntimeError):
+                    await task
+        finally:
+            loop.remove_reader(attachment.fileno())
+            attachment.close()
+            with suppress(RuntimeError):
+                await websocket.close()
 
     return router

@@ -75,6 +75,8 @@ Vendored in `static/lib/` and served directly:
 | [node-qrcode](https://github.com/soldair/node-qrcode) (`qrcode.min.js`) | QR-code rendering (2FA setup) | MIT |
 | [KaTeX](https://github.com/KaTeX/KaTeX) v0.16.22 (`katex/katex.min.{js,css}` + `katex/fonts/*.woff2`) | Math typesetting | MIT ([`licenses/KaTeX-MIT-LICENSE.txt`](licenses/KaTeX-MIT-LICENSE.txt)) |
 | [Mermaid](https://github.com/mermaid-js/mermaid) v11.16.1 (`mermaid.min.js`) | Diagrams from text | MIT ([`licenses/Mermaid-MIT-LICENSE.txt`](licenses/Mermaid-MIT-LICENSE.txt)) |
+| [xterm.js](https://github.com/xtermjs/xterm.js) v6.0.0 (`vendor/xterm/xterm.mjs`, `xterm.css`) | Browser terminal emulator for the admin-only operator shell | MIT ([`licenses/xterm-MIT-LICENSE.txt`](licenses/xterm-MIT-LICENSE.txt)) |
+| [@xterm/addon-fit](https://www.npmjs.com/package/@xterm/addon-fit) v0.11.0 (`vendor/xterm/addon-fit.mjs`) | Fits the operator terminal to its pane | MIT ([`licenses/xterm-MIT-LICENSE.txt`](licenses/xterm-MIT-LICENSE.txt)) |
 
 KaTeX and Mermaid are loaded on first use by `static/js/markdown.js` rather than
 from `index.html`, so a session that renders no math and no diagram never fetches

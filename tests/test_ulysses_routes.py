@@ -1,3 +1,7 @@
+import json
+import os
+from types import SimpleNamespace
+
 import pytest
 
 
@@ -6,6 +10,7 @@ pytest.importorskip("starlette.testclient")
 
 from fastapi import FastAPI, HTTPException, Request
 from starlette.testclient import TestClient
+from starlette.websockets import WebSocketDisconnect
 
 from src.ulysses_discovery import HostDiscoverySnapshot
 
@@ -146,6 +151,79 @@ class _FakeSandwichControl:
         )
 
 
+class _FakeHostServices:
+    def __init__(self):
+        self.actions = []
+        self.shells = []
+        self.attachment = None
+
+    def observe(self):
+        return {
+            "schema_version": "diogenes.operator-services.v1",
+            "supported": True,
+            "tmux_socket": "diogenes-operator",
+            "root": "/home/example/multimedia",
+            "services": [{"id": "mm.translate", "port": 8177}],
+        }
+
+    def act(self, service_id, action):
+        self.actions.append((service_id, action))
+        return self.observe()
+
+    def read_log(self, service_id, *, max_chars=40000):
+        return {"service_id": service_id, "text": "host log", "max_chars": max_chars}
+
+    def list_shells(self):
+        return {
+            "schema_version": "diogenes.operator-shells.v1",
+            "supported": True,
+            "tmux_socket": "diogenes-operator",
+            "sessions": list(self.shells),
+        }
+
+    def create_shell(self, **kwargs):
+        self.shells.append({"id": "host-shell-aabbccddeeff", "title": kwargs["title"] or "Shell 1"})
+        return self.list_shells()
+
+    def delete_shell(self, shell_id):
+        self.shells = [value for value in self.shells if value["id"] != shell_id]
+        return self.list_shells()
+
+    def attach_shell(self, _shell_id, **_kwargs):
+        self.attachment = _FakeAttachment()
+        return self.attachment
+
+
+class _FakeAttachment:
+    def __init__(self):
+        self.reader, self.writer = os.pipe()
+        os.set_blocking(self.reader, False)
+        self.received = []
+        self.closed = False
+        os.write(self.writer, b"ready")
+
+    def fileno(self):
+        return self.reader
+
+    def read(self):
+        return os.read(self.reader, 65536)
+
+    def write(self, data):
+        self.received.append(data)
+        os.write(self.writer, b"echo:" + data)
+
+    def resize(self, cols, rows):
+        self.received.append(f"resize:{cols}x{rows}".encode())
+
+    def close(self):
+        self.closed = True
+        for descriptor in (self.reader, self.writer):
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+
+
 def _client(
     monkeypatch,
     gate,
@@ -154,6 +232,7 @@ def _client(
     hermes_report=None,
     colibri_report=None,
     prism_report=None,
+    host_services_manager=None,
 ):
     monkeypatch.setattr(routes, "require_admin", gate)
     monkeypatch.setattr(
@@ -213,6 +292,8 @@ def _client(
                 "sandwich_installed": True,
                 "runtimes": [{"id": "firecrawl.api", "category": "docker"}],
             },
+            host_services_manager_factory=lambda: host_services_manager
+            or _FakeHostServices(),
         )
     )
     return TestClient(app, raise_server_exceptions=False)
@@ -541,3 +622,128 @@ def test_runtime_job_execution_requires_admin(monkeypatch):
         },
     )
     assert response.status_code == 403
+
+
+def test_operator_venvs_require_admin_and_expose_only_the_fixed_catalog(monkeypatch):
+    manager = _FakeHostServices()
+    monkeypatch.setattr(routes, "auth_disabled", lambda: True)
+
+    def gate(_request: Request):
+        raise HTTPException(403, "Admin only")
+
+    denied = _client(
+        monkeypatch,
+        gate,
+        host_services_manager=manager,
+    ).get("/api/odysseus/host-services")
+    allowed = _client(
+        monkeypatch,
+        lambda _request: None,
+        host_services_manager=manager,
+    ).get("/api/odysseus/host-services")
+
+    assert denied.status_code == 403
+    assert allowed.status_code == 200
+    assert allowed.json()["tmux_socket"] == "diogenes-operator"
+    assert allowed.json()["services"] == [{"id": "mm.translate", "port": 8177}]
+
+
+def test_internal_agent_identity_cannot_enter_the_operator_plane(monkeypatch):
+    monkeypatch.setattr(routes, "require_admin", lambda _request: None)
+    monkeypatch.setattr(routes, "auth_disabled", lambda: False)
+    request = SimpleNamespace(
+        headers={},
+        state=SimpleNamespace(current_user="internal-tool", api_token=False),
+        app=SimpleNamespace(
+            state=SimpleNamespace(
+                auth_manager=SimpleNamespace(is_admin=lambda _user: True)
+            )
+        ),
+    )
+
+    with pytest.raises(HTTPException, match="Operator admin only"):
+        routes._require_operator_admin(request)
+
+
+def test_admin_can_control_a_fixed_venv_and_read_its_log(monkeypatch):
+    manager = _FakeHostServices()
+    monkeypatch.setattr(routes, "auth_disabled", lambda: True)
+    client = _client(
+        monkeypatch,
+        lambda _request: None,
+        host_services_manager=manager,
+    )
+
+    controlled = client.post(
+        "/api/odysseus/host-services/mm.translate",
+        json={"action": "restart"},
+    )
+    log = client.get("/api/odysseus/host-services/mm.translate/log?max_chars=1234")
+
+    assert controlled.status_code == 200
+    assert manager.actions == [("mm.translate", "restart")]
+    assert log.status_code == 200
+    assert log.json()["text"] == "host log"
+    assert log.json()["max_chars"] == 1234
+
+
+def test_admin_can_create_and_close_an_operator_shell_tab(monkeypatch):
+    manager = _FakeHostServices()
+    monkeypatch.setattr(routes, "auth_disabled", lambda: True)
+    client = _client(
+        monkeypatch,
+        lambda _request: None,
+        host_services_manager=manager,
+    )
+
+    created = client.post(
+        "/api/odysseus/host-shell/sessions",
+        json={"title": "Scratch", "cwd": "/tmp", "cols": 120, "rows": 42},
+    )
+    closed = client.delete(
+        "/api/odysseus/host-shell/sessions/host-shell-aabbccddeeff"
+    )
+
+    assert created.status_code == 200
+    assert created.json()["sessions"] == [
+        {"id": "host-shell-aabbccddeeff", "title": "Scratch"}
+    ]
+    assert closed.status_code == 200
+    assert closed.json()["sessions"] == []
+
+
+def test_operator_shell_websocket_rejects_cross_site_origins(monkeypatch):
+    monkeypatch.setattr(routes, "auth_disabled", lambda: True)
+    client = _client(monkeypatch, lambda _request: None)
+
+    with pytest.raises(WebSocketDisconnect) as closed:
+        with client.websocket_connect(
+            "/api/odysseus/host-shell/sessions/host-shell-aabbccddeeff/ws",
+            headers={"origin": "https://attacker.invalid"},
+        ):
+            pass
+
+    assert closed.value.code == 4403
+
+
+def test_operator_shell_websocket_bridges_terminal_bytes(monkeypatch):
+    monkeypatch.setattr(routes, "auth_disabled", lambda: True)
+    manager = _FakeHostServices()
+    client = _client(
+        monkeypatch,
+        lambda _request: None,
+        host_services_manager=manager,
+    )
+
+    with client.websocket_connect(
+        "/api/odysseus/host-shell/sessions/host-shell-aabbccddeeff/ws?cols=88&rows=31",
+        headers={"origin": "http://testserver"},
+    ) as websocket:
+        assert websocket.receive_bytes() == b"ready"
+        websocket.send_text(json.dumps({"type": "input", "data": "pwd\r"}))
+        assert websocket.receive_bytes() == b"echo:pwd\r"
+        websocket.send_text(json.dumps({"type": "resize", "cols": 112, "rows": 44}))
+
+    assert b"pwd\r" in manager.attachment.received
+    assert b"resize:112x44" in manager.attachment.received
+    assert manager.attachment.closed is True

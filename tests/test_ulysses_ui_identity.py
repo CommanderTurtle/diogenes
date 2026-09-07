@@ -54,7 +54,7 @@ def test_explicit_background_choice_is_used_on_login() -> None:
     assert "obj.bgPattern = opts.bgPattern || 'none';" in theme
 
 
-def test_services_window_has_four_bounded_host_management_views() -> None:
+def test_services_window_has_five_bounded_host_management_views() -> None:
     services = _read("static/js/ulyssesServices.js")
     index = _read("static/index.html")
     app = _read("static/app.js")
@@ -64,7 +64,7 @@ def test_services_window_has_four_bounded_host_management_views() -> None:
     assert "ulyssesServicesModule.init(API_BASE);" in app
     assert "'/services': () =>" in app
 
-    for tab in ("docker", "interactive", "dependencies", "sandwich"):
+    for tab in ("docker", "interactive", "dependencies", "sandwich", "venvs"):
         assert f'data-tab="{tab}"' in services
     assert "/api/odysseus/docker/projects" in services
     assert "/api/odysseus/runtimes" in services
@@ -93,8 +93,55 @@ def test_services_window_uses_planned_confirmed_runtime_jobs() -> None:
     assert "STOP DIOGENES SESSIONS" in services
     assert "Clear completed" in services
     assert "Jump to latest" in services
-    assert "method: 'DELETE'" not in services
+    assert "method: 'DELETE'" in services
+    assert "/api/odysseus/host-shell/sessions/${encodeURIComponent(shellId)}" in services
     assert "arbitrary shell command" not in services
+
+
+def test_venvs_view_uses_operator_only_services_and_a_real_terminal() -> None:
+    services = _read("static/js/ulyssesServices.js")
+    styles = _read("static/style.css")
+    host_services = _read("src/diogenes_host_services.py")
+    service_worker = _read("static/sw.js")
+
+    assert "/api/odysseus/host-services" in services
+    assert "/api/odysseus/host-shell/sessions" in services
+    assert "../vendor/xterm/xterm.mjs" in services
+    assert "../vendor/xterm/addon-fit.mjs" in services
+    assert "WebSocket" in services
+    assert "data-host-terminal-mod" in services
+    assert 'data-host-terminal-key="flag"' in services
+    assert "Independent operator tmux" in services
+    assert "host-shell-fullscreen" in styles
+    assert ".dio-host-terminal-keys" in styles
+    for asset in (
+        "static/vendor/xterm/xterm.mjs",
+        "static/vendor/xterm/xterm.css",
+        "static/vendor/xterm/addon-fit.mjs",
+        "licenses/xterm-MIT-LICENSE.txt",
+    ):
+        assert (REPO / asset).is_file()
+    assert "/static/vendor/xterm/xterm.mjs" in service_worker
+    assert "/static/vendor/xterm/xterm.css" in service_worker
+    assert "/static/vendor/xterm/addon-fit.mjs" in service_worker
+
+    for service in (
+        "ideogram",
+        "img2svg",
+        "longcat",
+        "minimax",
+        "muscriptor",
+        "musvit",
+        "redesign",
+        "stableaudio",
+        "symphony",
+        "translate",
+        "videocompact",
+        "video-to-gif-avif",
+        "vocalrender",
+        "whisper",
+    ):
+        assert f'"{service}"' in host_services
 
 
 def test_services_exposes_project_files_zed_and_managed_active_sessions() -> None:

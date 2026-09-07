@@ -18159,6 +18159,500 @@ body:not(.email-doc-split-active) #email-lib-modal.email-lib-fullscreen:not(.mod
   }
 }
 
+/* ── Diogenes operator venvs and host shell ── */
+.dio-host-plane-note {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 10px;
+  align-items: baseline;
+  margin-bottom: 10px;
+  padding: 9px 11px;
+  border: 1px solid color-mix(in srgb, var(--accent, var(--red)) 24%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--accent, var(--red)) 5%, transparent);
+  font-size: 9px;
+  line-height: 1.5;
+}
+
+.dio-host-plane-note > span {
+  opacity: .62;
+}
+
+.dio-host-tree,
+.dio-host-shell,
+.dio-host-service-branch,
+.dio-host-service-log {
+  margin: 0 0 9px;
+  border: 1px solid color-mix(in srgb, var(--fg) 11%, transparent);
+  border-radius: 9px;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--bg) 96%, var(--fg) 4%);
+}
+
+.dio-host-tree > summary,
+.dio-host-shell > summary,
+.dio-host-service-branch > summary,
+.dio-host-service-log > summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  cursor: pointer;
+  list-style-position: inside;
+}
+
+.dio-host-tree > summary > span:first-child,
+.dio-host-shell > summary > span:first-child,
+.dio-host-service-branch > summary > span:first-child {
+  display: inline-flex;
+  min-width: 0;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.dio-host-tree summary small,
+.dio-host-shell summary small,
+.dio-host-service-branch summary small {
+  overflow: hidden;
+  opacity: .48;
+  font-size: 8px;
+  font-weight: 400;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dio-host-tree-body,
+.dio-host-shell-body {
+  padding: 9px;
+  border-top: 1px solid color-mix(in srgb, var(--fg) 8%, transparent);
+}
+
+.dio-host-service-branch {
+  border-radius: 7px;
+}
+
+.dio-host-service-branch > summary {
+  padding: 8px 10px;
+  font-size: 9px;
+}
+
+.dio-host-service-branch > summary > span:last-child,
+.dio-host-shell > summary > span:last-child {
+  flex: 0 0 auto;
+  font-size: 8px;
+  opacity: .48;
+}
+
+.dio-host-service-list {
+  border-top: 1px solid color-mix(in srgb, var(--fg) 7%, transparent);
+}
+
+.dio-host-service-row {
+  display: grid;
+  grid-template-columns: minmax(140px, 1fr) minmax(118px, .65fr) auto;
+  gap: 10px;
+  align-items: center;
+  padding: 7px 9px;
+  border-bottom: 1px solid color-mix(in srgb, var(--fg) 6%, transparent);
+}
+
+.dio-host-service-row:last-child {
+  border-bottom: 0;
+}
+
+.dio-host-service-row.active {
+  background: color-mix(in srgb, #4bbf83 4%, transparent);
+}
+
+.dio-host-service-identity {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+}
+
+.dio-host-service-identity > div {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.dio-host-service-identity strong {
+  font-size: 9px;
+}
+
+.dio-host-service-identity small {
+  opacity: .4;
+  font: 7px/1.3 var(--mono, monospace);
+}
+
+.dio-host-status-dot {
+  width: 8px;
+  height: 8px;
+  flex: 0 0 auto;
+  border: 1px solid color-mix(in srgb, var(--fg) 22%, transparent);
+  border-radius: 50%;
+  background: transparent;
+}
+
+.dio-host-status-dot.active {
+  border-color: #4bbf83;
+  background: #4bbf83;
+  box-shadow: 0 0 7px color-mix(in srgb, #4bbf83 66%, transparent);
+}
+
+.dio-host-service-address {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+  font: 8px/1.25 var(--mono, monospace);
+}
+
+.dio-host-port-conflict {
+  overflow: hidden;
+  color: #d6a84b;
+  font-size: 7px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dio-host-service-actions,
+.dio-host-terminal-toolbar > div,
+.dio-host-terminal-keys {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.dio-host-service-actions button,
+.dio-host-shell-create button,
+.dio-host-shell-tabs button,
+.dio-host-terminal-toolbar button,
+.dio-host-terminal-keys button,
+.dio-host-terminal-touch-menu button {
+  min-height: 26px;
+  padding: 4px 7px;
+  border: 1px solid color-mix(in srgb, var(--fg) 14%, transparent);
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 8px;
+  line-height: 1.2;
+  cursor: pointer;
+}
+
+.dio-host-service-actions button:hover:not(:disabled),
+.dio-host-shell-create button:hover:not(:disabled),
+.dio-host-shell-tabs button:hover:not(:disabled),
+.dio-host-terminal-toolbar button:hover:not(:disabled),
+.dio-host-terminal-keys button:hover:not(:disabled),
+.dio-host-terminal-keys button.active,
+.dio-host-terminal-keys button[aria-pressed="true"] {
+  border-color: color-mix(in srgb, var(--accent, var(--red)) 52%, transparent);
+  background: color-mix(in srgb, var(--accent, var(--red)) 12%, transparent);
+}
+
+.dio-host-service-actions button:disabled,
+.dio-host-shell-create button:disabled {
+  cursor: default;
+  opacity: .3;
+}
+
+.dio-host-service-log pre {
+  max-height: 260px;
+  margin: 0;
+  padding: 10px;
+  border-top: 1px solid color-mix(in srgb, var(--fg) 8%, transparent);
+  overflow: auto;
+  background: #0b0d12;
+  color: #e7eaf0;
+  font: 9px/1.45 var(--mono, monospace);
+  white-space: pre-wrap;
+}
+
+.dio-host-shell-create {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 7px;
+}
+
+.dio-host-shell-create input {
+  min-width: 0;
+  flex: 1 1 auto;
+  padding: 6px 8px;
+  border: 1px solid color-mix(in srgb, var(--fg) 14%, transparent);
+  border-radius: 6px;
+  outline: none;
+  background: var(--bg);
+  color: var(--fg);
+  font: 9px/1.2 var(--mono, monospace);
+}
+
+.dio-host-shell-create input:focus {
+  border-color: color-mix(in srgb, var(--accent, var(--red)) 60%, transparent);
+}
+
+.dio-host-shell-tabs {
+  display: flex;
+  gap: 4px;
+  overflow-x: auto;
+  padding: 2px 0 7px;
+}
+
+.dio-host-shell-tabs > span {
+  display: inline-flex;
+  flex: 0 0 auto;
+  border: 1px solid transparent;
+  border-radius: 6px;
+}
+
+.dio-host-shell-tabs > span.active {
+  border-color: color-mix(in srgb, var(--accent, var(--red)) 46%, transparent);
+  background: color-mix(in srgb, var(--accent, var(--red)) 8%, transparent);
+}
+
+.dio-host-shell-tabs > span > button {
+  border: 0;
+  border-radius: 0;
+}
+
+.dio-host-shell-tabs > span > button:last-child {
+  padding-inline: 6px;
+  opacity: .55;
+}
+
+.dio-host-terminal-panel {
+  min-width: 0;
+  border: 1px solid color-mix(in srgb, var(--fg) 12%, transparent);
+  border-radius: 7px;
+  overflow: hidden;
+  background: #0b0d12;
+}
+
+.dio-host-terminal-toolbar {
+  display: flex;
+  min-height: 35px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 5px 7px;
+  border-bottom: 1px solid rgba(255, 255, 255, .09);
+  color: #e7eaf0;
+}
+
+.dio-host-terminal-path {
+  min-width: 0;
+  overflow: hidden;
+  opacity: .55;
+  font: 8px/1.2 var(--mono, monospace);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dio-host-terminal-toolbar output {
+  min-width: 31px;
+  opacity: .55;
+  font: 8px/1 var(--mono, monospace);
+  text-align: center;
+}
+
+.dio-host-terminal-keys {
+  padding: 5px 7px;
+  overflow-x: auto;
+  border-bottom: 1px solid rgba(255, 255, 255, .09);
+  color: #e7eaf0;
+  scrollbar-width: thin;
+}
+
+.dio-host-terminal-keys button {
+  min-width: 34px;
+  flex: 0 0 auto;
+}
+
+.dio-host-terminal-stage {
+  position: relative;
+  height: clamp(280px, 44vh, 500px);
+  min-height: 240px;
+  padding: 7px;
+}
+
+.dio-host-terminal {
+  width: 100%;
+  height: 100%;
+  outline: none;
+}
+
+.dio-host-terminal .xterm,
+.dio-host-terminal .xterm-viewport {
+  height: 100%;
+}
+
+.dio-host-terminal-touch-menu {
+  position: absolute;
+  z-index: 4;
+  top: 12px;
+  right: 12px;
+  display: none;
+  gap: 5px;
+  padding: 5px;
+  border: 1px solid rgba(255, 255, 255, .16);
+  border-radius: 7px;
+  background: #171a22;
+  color: #e7eaf0;
+  box-shadow: 0 5px 18px rgba(0, 0, 0, .35);
+}
+
+.dio-host-terminal-touch-menu.visible {
+  display: flex;
+}
+
+.dio-host-terminal-clipboard-tray {
+  position: absolute;
+  z-index: 5;
+  right: 12px;
+  bottom: 12px;
+  left: 12px;
+  display: flex;
+  gap: 5px;
+  padding: 6px;
+  border: 1px solid rgba(255, 255, 255, .16);
+  border-radius: 7px;
+  background: #171a22;
+  box-shadow: 0 5px 18px rgba(0, 0, 0, .4);
+}
+
+.dio-host-terminal-clipboard-input {
+  min-height: 42px;
+  min-width: 0;
+  flex: 1 1 auto;
+  resize: vertical;
+  border: 1px solid rgba(255, 255, 255, .16);
+  border-radius: 5px;
+  padding: 7px;
+  outline: none;
+  background: #0b0d12;
+  color: #e7eaf0;
+  font: 11px/1.35 var(--mono, monospace);
+}
+
+.dio-host-terminal-clipboard-tray button {
+  min-width: 58px;
+  border: 1px solid rgba(255, 255, 255, .16);
+  border-radius: 5px;
+  background: transparent;
+  color: #e7eaf0;
+}
+
+.uly-services-window.host-shell-fullscreen {
+  position: fixed !important;
+  inset: 8px !important;
+  width: auto !important;
+  height: auto !important;
+  min-width: 0 !important;
+  min-height: 0 !important;
+  max-width: none !important;
+  max-height: none !important;
+  margin: 0 !important;
+  transform: none !important;
+}
+
+.uly-services-window.host-shell-fullscreen .uly-services-body {
+  overflow: hidden;
+}
+
+.uly-services-window.host-shell-fullscreen .uly-services-content,
+.uly-services-window.host-shell-fullscreen .dio-host-shell,
+.uly-services-window.host-shell-fullscreen .dio-host-shell-body,
+.uly-services-window.host-shell-fullscreen .dio-host-terminal-panel {
+  display: flex;
+  min-height: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+}
+
+.uly-services-window.host-shell-fullscreen .uly-services-content {
+  height: 100%;
+}
+
+.uly-services-window.host-shell-fullscreen .dio-host-plane-note,
+.uly-services-window.host-shell-fullscreen .dio-host-tree {
+  display: none;
+}
+
+.uly-services-window.host-shell-fullscreen .dio-host-shell {
+  margin: 0;
+}
+
+.uly-services-window.host-shell-fullscreen .dio-host-terminal-stage {
+  height: auto;
+  min-height: 0;
+  flex: 1 1 auto;
+}
+
+@media (max-width: 760px) {
+  .uly-services-window {
+    width: 100vw !important;
+    height: 100dvh !important;
+    min-width: 0;
+    min-height: 0;
+    border-radius: 0;
+  }
+
+  .uly-services-content {
+    padding: 9px;
+  }
+
+  .dio-host-plane-note,
+  .dio-host-service-row {
+    grid-template-columns: 1fr;
+  }
+
+  .dio-host-service-address,
+  .dio-host-service-actions {
+    padding-left: 16px;
+  }
+
+  .dio-host-service-actions {
+    overflow-x: auto;
+  }
+
+  .dio-host-service-actions button,
+  .dio-host-terminal-toolbar button,
+  .dio-host-terminal-keys button {
+    min-height: 38px;
+    min-width: 42px;
+    padding: 7px 9px;
+    font-size: 10px;
+  }
+
+  .dio-host-terminal-toolbar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .dio-host-terminal-toolbar > div {
+    overflow-x: auto;
+  }
+
+  .dio-host-terminal-stage {
+    height: 54dvh;
+    padding: 5px;
+  }
+
+  .dio-host-shell-create {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .uly-services-window.host-shell-fullscreen {
+    inset: 0 !important;
+  }
+}
+
 /* ── Archive browser ── */
 .archive-list {
   grid-template-columns: 1fr !important;

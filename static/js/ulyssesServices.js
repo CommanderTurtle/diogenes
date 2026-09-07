@@ -1,5 +1,5 @@
 // Diogenes Services — Docker, interactive processes, dependency commands,
-// and Sandwich maintenance. All mutations are planned as fixed argv jobs.
+// Sandwich maintenance, and an operator-only mm-tools/tmux control plane.
 
 import uiModule from './ui.js';
 import * as Modals from './modalManager.js';
@@ -35,6 +35,20 @@ let dockerReport = null;
 let runtimeReport = null;
 let userScriptsReport = null;
 let sandwichReport = null;
+let hostServicesReport = null;
+let hostShellReport = null;
+let selectedHostServiceId = '';
+let selectedHostServiceLog = '';
+let selectedShellId = '';
+let hostTerminal = null;
+let hostTerminalExpanded = false;
+const savedHostTerminalFontSize = Number(
+  window.localStorage.getItem('diogenes-host-terminal-font-size') || 14,
+);
+let hostTerminalFontSize = Number.isFinite(savedHostTerminalFontSize)
+  ? Math.max(9, Math.min(24, savedHostTerminalFontSize))
+  : 14;
+const hostTerminalModifiers = new Set();
 let jobs = [];
 let selectedJobId = '';
 let selectedJobLog = '';
@@ -116,6 +130,7 @@ function ensureModal() {
         <button type="button" data-tab="interactive">Interactive</button>
         <button type="button" data-tab="dependencies">Dependencies</button>
         <button type="button" data-tab="sandwich">Sandwich</button>
+        <button type="button" data-tab="venvs">Venvs</button>
       </div>
       <div class="uly-services-body">
         <div class="uly-services-content" aria-live="polite"></div>
@@ -131,7 +146,12 @@ function ensureModal() {
   });
   Modals.register(MODAL_ID, {
     restoreFn: () => { modal.classList.remove('hidden'); render(); },
-    closeFn: () => modal.remove(),
+    closeFn: () => {
+      teardownHostTerminal();
+      hostTerminalExpanded = false;
+      hostTerminalModifiers.clear();
+      modal.remove();
+    },
     railBtnId: 'rail-services',
     sidebarBtnId: 'tool-services-btn',
     label: 'Services',
@@ -143,6 +163,11 @@ function ensureModal() {
   modal.querySelector('.uly-services-tabs')?.addEventListener('click', (event) => {
     const button = event.target.closest('[data-tab]');
     if (!button) return;
+    if (activeTab === 'venvs' && button.dataset.tab !== 'venvs') {
+      teardownHostTerminal();
+      hostTerminalExpanded = false;
+      hostTerminalModifiers.clear();
+    }
     activeTab = button.dataset.tab;
     expanded = '';
     documentPayload = null;
@@ -775,13 +800,316 @@ function renderSandwich() {
     ${renderJobOutput()}`;
 }
 
+function renderHostServiceRow(service) {
+  const conflict = (service.port_conflicts || []).length
+    ? `<span class="dio-host-port-conflict" title="Only one process can bind this port">also used by ${esc(service.port_conflicts.join(', '))}</span>`
+    : '';
+  return `
+    <article class="dio-host-service-row ${service.active ? 'active' : ''}">
+      <div class="dio-host-service-identity">
+        <span class="dio-host-status-dot ${service.active ? 'active' : ''}" title="${esc(service.state)}"></span>
+        <div>
+          <strong>${esc(service.label)}</strong>
+          <small>${esc(service.launcher || '')}</small>
+        </div>
+      </div>
+      <div class="dio-host-service-address">
+        <span>port ${Number(service.port)}</span>
+        ${conflict}
+      </div>
+      <div class="dio-host-service-actions">
+        <button type="button" data-host-service-action="start" data-host-service="${esc(service.id)}"
+          ${service.available && !service.active ? '' : 'disabled'}>Start</button>
+        <button type="button" data-host-service-action="stop" data-host-service="${esc(service.id)}"
+          ${service.managed ? '' : 'disabled'}>Stop</button>
+        <button type="button" data-host-service-action="restart" data-host-service="${esc(service.id)}"
+          ${service.managed ? '' : 'disabled'}>Restart</button>
+        <button type="button" data-host-service-log="${esc(service.id)}">Log</button>
+        <button type="button" data-open-host-port="${Number(service.port)}" ${service.reachable ? '' : 'disabled'}>Open</button>
+      </div>
+    </article>`;
+}
+
+function renderHostServiceBranch(title, description, services) {
+  const active = services.filter((service) => service.active).length;
+  return `
+    <details class="dio-host-service-branch" open>
+      <summary>
+        <span><strong>${esc(title)}</strong><small>${esc(description)}</small></span>
+        <span>${active}/${services.length} active</span>
+      </summary>
+      <div class="dio-host-service-list">
+        ${services.map(renderHostServiceRow).join('')}
+      </div>
+    </details>`;
+}
+
+function renderHostServiceLog() {
+  if (!selectedHostServiceId) return '';
+  const service = (hostServicesReport?.services || [])
+    .find((value) => value.id === selectedHostServiceId);
+  return `
+    <details class="dio-host-service-log" open>
+      <summary>${esc(service?.label || selectedHostServiceId)} output</summary>
+      <pre tabindex="0">${esc(selectedHostServiceLog || 'No output has been recorded for this service.')}</pre>
+    </details>`;
+}
+
+function renderOperatorShell() {
+  const sessions = hostShellReport?.sessions || [];
+  if (!sessions.some((value) => value.id === selectedShellId)) {
+    selectedShellId = sessions[0]?.id || '';
+  }
+  const selected = sessions.find((value) => value.id === selectedShellId);
+  return `
+    <details class="dio-host-shell" open>
+      <summary>
+        <span><strong>shell</strong><small>Independent operator tmux</small></span>
+        <span>${sessions.length} ${sessions.length === 1 ? 'tab' : 'tabs'}</span>
+      </summary>
+      <div class="dio-host-shell-body">
+        <div class="dio-host-shell-create">
+          <input type="text" data-host-shell-cwd placeholder="Working directory (blank uses home)" aria-label="New shell working directory">
+          <button type="button" data-host-shell-new ${hostShellReport?.supported === false ? 'disabled' : ''}>+ Shell</button>
+        </div>
+        ${hostShellReport?.supported === false
+          ? panelMessage('Host shell unavailable', 'This control requires POSIX tmux.')
+          : ''}
+        ${sessions.length ? `
+          <div class="dio-host-shell-tabs" role="tablist" aria-label="Operator shells">
+            ${sessions.map((session) => `
+              <span class="${session.id === selectedShellId ? 'active' : ''}">
+                <button type="button" role="tab" aria-selected="${session.id === selectedShellId}"
+                  data-host-shell-select="${esc(session.id)}" title="${esc(session.cwd)}">${esc(session.title)}</button>
+                <button type="button" data-host-shell-delete="${esc(session.id)}" aria-label="Close ${esc(session.title)}">×</button>
+              </span>`).join('')}
+          </div>
+          <div class="dio-host-terminal-panel" data-host-terminal-panel>
+            <div class="dio-host-terminal-toolbar">
+              <span class="dio-host-terminal-path" title="${esc(selected?.cwd || '')}">${esc(selected?.cwd || '')}</span>
+              <div>
+                <button type="button" data-host-terminal-copy title="Copy selection">Copy</button>
+                <button type="button" data-host-terminal-paste title="Paste from clipboard">Paste</button>
+                <button type="button" data-host-terminal-zoom="-1" aria-label="Zoom out">−</button>
+                <output data-host-terminal-zoom-value>${hostTerminalFontSize}px</output>
+                <button type="button" data-host-terminal-zoom="1" aria-label="Zoom in">+</button>
+                <button type="button" data-host-terminal-expand>${hostTerminalExpanded ? 'Restore' : 'Expand'}</button>
+              </div>
+            </div>
+            <div class="dio-host-terminal-keys" aria-label="Touch terminal keys">
+              ${['Ctrl', 'Win', 'Alt', 'Shift'].map((key) => `<button type="button" data-host-terminal-mod="${key.toLowerCase()}" aria-pressed="${hostTerminalModifiers.has(key.toLowerCase())}" title="Tap to hold ${key}">${key}</button>`).join('')}
+              <button type="button" data-host-terminal-key="escape">Esc</button>
+              <button type="button" data-host-terminal-key="tab">Tab</button>
+              <button type="button" data-host-terminal-key="left" aria-label="Left arrow">←</button>
+              <button type="button" data-host-terminal-key="up" aria-label="Up arrow">↑</button>
+              <button type="button" data-host-terminal-key="down" aria-label="Down arrow">↓</button>
+              <button type="button" data-host-terminal-key="right" aria-label="Right arrow">→</button>
+              <button type="button" data-host-terminal-key="enter">Enter</button>
+              <button type="button" data-host-terminal-key="flag" title="Insert two literal hyphens">--</button>
+            </div>
+            <div class="dio-host-terminal-stage">
+              <div class="dio-host-terminal" data-host-terminal data-shell-id="${esc(selectedShellId)}" tabindex="0"></div>
+              <div class="dio-host-terminal-touch-menu" data-host-terminal-touch-menu>
+                <button type="button" data-host-terminal-copy>Copy</button>
+                <button type="button" data-host-terminal-paste>Paste</button>
+              </div>
+            </div>
+          </div>`
+          : panelMessage('No shell tabs', 'Create one to open a persistent host terminal.')}
+      </div>
+    </details>`;
+}
+
+function renderVenvs() {
+  if (!hostServicesReport) return panelMessage('Venv controls unavailable');
+  const services = hostServicesReport.services || [];
+  const web = services.filter((value) => value.group === 'webui');
+  const http = services.filter((value) => value.group === 'http');
+  return `
+    <div class="dio-host-plane-note">
+      <strong>Operator plane</strong>
+      <span>Explicit mm-tools environments and shells use <code>${esc(hostServicesReport.tmux_socket || 'diogenes-operator')}</code>. They never enter Diogenes' default tmux server or virtual environment.</span>
+    </div>
+    <details class="dio-host-tree" open>
+      <summary>
+        <span><strong>mm-tools</strong><small>${esc(hostServicesReport.root || '~/multimedia')}</small></span>
+        ${statusBadge(hostServicesReport.supported ? 'ready' : 'unavailable')}
+      </summary>
+      <div class="dio-host-tree-body">
+        ${renderHostServiceBranch('Web UIs', 'source .venv · startwithuv', web)}
+        ${renderHostServiceBranch('HTTP-only', 'same project venv · starthttp.sh', http)}
+        ${renderHostServiceLog()}
+      </div>
+    </details>
+    ${renderOperatorShell()}`;
+}
+
+function teardownHostTerminal() {
+  if (!hostTerminal) return;
+  hostTerminal.destroyed = true;
+  try { hostTerminal.resizeObserver?.disconnect(); } catch (_) { /* detached */ }
+  for (const disposable of hostTerminal.disposables || []) {
+    try { disposable.dispose(); } catch (_) { /* detached */ }
+  }
+  try { hostTerminal.socket?.close(); } catch (_) { /* detached */ }
+  try { hostTerminal.terminal?.dispose(); } catch (_) { /* detached */ }
+  hostTerminal = null;
+}
+
+function terminalModifierCode() {
+  return 1
+    + (hostTerminalModifiers.has('shift') ? 1 : 0)
+    + (hostTerminalModifiers.has('alt') ? 2 : 0)
+    + (hostTerminalModifiers.has('ctrl') ? 4 : 0)
+    + (hostTerminalModifiers.has('win') ? 8 : 0);
+}
+
+function applyHeldTerminalModifiers(value) {
+  if (!hostTerminalModifiers.size || Array.from(value).length !== 1) return value;
+  let character = value;
+  if (hostTerminalModifiers.has('shift')) character = character.toUpperCase();
+  if (hostTerminalModifiers.has('ctrl')) {
+    const code = character.toUpperCase().charCodeAt(0);
+    if (code >= 64 && code <= 95) character = String.fromCharCode(code & 31);
+  }
+  if (hostTerminalModifiers.has('alt') || hostTerminalModifiers.has('win')) {
+    character = `\u001b${character}`;
+  }
+  return character;
+}
+
+function sendHostTerminal(value) {
+  if (hostTerminal?.socket?.readyState !== WebSocket.OPEN) return;
+  const text = String(value ?? '');
+  for (let offset = 0; offset < text.length; offset += 16000) {
+    hostTerminal.socket.send(JSON.stringify({
+      type: 'input',
+      data: text.slice(offset, offset + 16000),
+    }));
+  }
+}
+
+function hostTerminalKey(name) {
+  const suffix = { left: 'D', right: 'C', up: 'A', down: 'B' }[name];
+  const modifier = terminalModifierCode();
+  if (suffix) return modifier === 1 ? `\u001b[${suffix}` : `\u001b[1;${modifier}${suffix}`;
+  if (name === 'escape') return '\u001b';
+  if (name === 'tab') return hostTerminalModifiers.has('shift') ? '\u001b[Z' : '\t';
+  if (name === 'enter') return '\r';
+  if (name === 'flag') return '--';
+  return '';
+}
+
+function fitHostTerminal() {
+  if (!hostTerminal || hostTerminal.destroyed) return;
+  try {
+    hostTerminal.fit.fit();
+    if (hostTerminal.socket.readyState === WebSocket.OPEN) {
+      hostTerminal.socket.send(JSON.stringify({
+        type: 'resize',
+        cols: hostTerminal.terminal.cols,
+        rows: hostTerminal.terminal.rows,
+      }));
+    }
+  } catch (_) { /* the modal may be between layouts */ }
+}
+
+async function mountHostTerminal() {
+  const mount = document.querySelector(`#${MODAL_ID} [data-host-terminal]`);
+  if (!mount || activeTab !== 'venvs') return;
+  const shellId = mount.dataset.shellId;
+  const marker = Symbol('host-terminal');
+  teardownHostTerminal();
+  hostTerminal = { marker, destroyed: false, disposables: [] };
+  try {
+    if (!document.querySelector('link[data-diogenes-xterm]')) {
+      const stylesheet = document.createElement('link');
+      stylesheet.rel = 'stylesheet';
+      stylesheet.dataset.diogenesXterm = '1';
+      stylesheet.href = new URL('../vendor/xterm/xterm.css', import.meta.url).href;
+      document.head.appendChild(stylesheet);
+    }
+    const [{ Terminal }, { FitAddon }] = await Promise.all([
+      import('../vendor/xterm/xterm.mjs'),
+      import('../vendor/xterm/addon-fit.mjs'),
+    ]);
+    if (hostTerminal?.marker !== marker || !mount.isConnected) return;
+    const terminal = new Terminal({
+      allowProposedApi: false,
+      convertEol: false,
+      cursorBlink: true,
+      fontFamily: 'JetBrains Mono, Cascadia Code, ui-monospace, monospace',
+      fontSize: hostTerminalFontSize,
+      scrollback: 100000,
+      theme: { background: '#0b0d12', foreground: '#e7eaf0', cursor: '#8fb5ff', selectionBackground: '#4169a766' },
+    });
+    const fit = new FitAddon();
+    terminal.loadAddon(fit);
+    terminal.open(mount);
+    hostTerminal = { marker, terminal, fit, socket: null, disposables: [], destroyed: false };
+    const base = new URL(apiBase, window.location.href);
+    const scheme = base.protocol === 'https:' ? 'wss:' : 'ws:';
+    const socket = new WebSocket(`${scheme}//${base.host}/api/odysseus/host-shell/sessions/${encodeURIComponent(shellId)}/ws?cols=${terminal.cols}&rows=${terminal.rows}`);
+    socket.binaryType = 'arraybuffer';
+    hostTerminal.socket = socket;
+    hostTerminal.disposables.push(terminal.onData((data) => sendHostTerminal(applyHeldTerminalModifiers(data))));
+    socket.addEventListener('open', () => {
+      if (hostTerminal?.marker !== marker) return;
+      fitHostTerminal();
+      terminal.focus();
+    });
+    socket.addEventListener('message', async (event) => {
+      if (hostTerminal?.marker !== marker) return;
+      if (event.data instanceof Blob) terminal.write(new Uint8Array(await event.data.arrayBuffer()));
+      else if (event.data instanceof ArrayBuffer) terminal.write(new Uint8Array(event.data));
+      else terminal.write(String(event.data));
+    });
+    socket.addEventListener('close', (event) => {
+      if (hostTerminal?.marker === marker && !hostTerminal.destroyed) {
+        terminal.writeln(`\r\n\u001b[90m[operator shell disconnected: ${event.code}]\u001b[0m`);
+      }
+    });
+    const resizeObserver = new ResizeObserver(() => window.requestAnimationFrame(fitHostTerminal));
+    resizeObserver.observe(mount);
+    hostTerminal.resizeObserver = resizeObserver;
+    window.requestAnimationFrame(fitHostTerminal);
+
+    let longPress = 0;
+    mount.addEventListener('pointerdown', (event) => {
+      if (event.pointerType !== 'touch') return;
+      longPress = window.setTimeout(() => {
+        mount.closest('.dio-host-terminal-stage')?.querySelector('[data-host-terminal-touch-menu]')?.classList.add('visible');
+      }, 550);
+    }, { passive: true });
+    for (const name of ['pointerup', 'pointercancel', 'pointermove']) {
+      mount.addEventListener(name, () => window.clearTimeout(longPress), { passive: true });
+    }
+    mount.addEventListener('click', (event) => {
+      terminal.focus();
+      if (terminal.hasSelection()) return;
+      const rect = mount.getBoundingClientRect();
+      const cursorRow = terminal.buffer.active.cursorY - terminal.buffer.active.viewportY;
+      const targetRow = Math.floor(((event.clientY - rect.top) / rect.height) * terminal.rows);
+      if (Math.abs(targetRow - cursorRow) > 0) return;
+      const targetColumn = Math.max(0, Math.min(terminal.cols - 1, Math.floor(((event.clientX - rect.left) / rect.width) * terminal.cols)));
+      const delta = Math.max(-200, Math.min(200, targetColumn - terminal.buffer.active.cursorX));
+      if (delta) sendHostTerminal((delta < 0 ? '\u001b[D' : '\u001b[C').repeat(Math.abs(delta)));
+    });
+  } catch (error) {
+    if (hostTerminal?.marker === marker) {
+      mount.textContent = `Terminal failed to load: ${error?.message || String(error)}`;
+      teardownHostTerminal();
+    }
+  }
+}
+
 function render() {
   const modal = ensureModal();
   modal.querySelectorAll('[data-tab]').forEach((button) => {
     button.classList.toggle('active', button.dataset.tab === activeTab);
   });
   const content = modal.querySelector('.uly-services-content');
-  if (loading && !dockerReport && !runtimeReport) {
+  if (loading && !dockerReport && !runtimeReport && !hostServicesReport) {
     content.innerHTML = panelMessage('Observing services…');
     return;
   }
@@ -792,9 +1120,17 @@ function render() {
       ? renderInteractive()
       : activeTab === 'dependencies'
         ? renderDependencies()
-        : renderSandwich();
+        : activeTab === 'sandwich'
+          ? renderSandwich()
+          : renderVenvs();
+  teardownHostTerminal();
   content.innerHTML = `${error}${body}`;
+  modal.querySelector('.uly-services-window')?.classList.toggle(
+    'host-shell-fullscreen',
+    activeTab === 'venvs' && hostTerminalExpanded,
+  );
   restoreCommandOutputPosition();
+  if (activeTab === 'venvs' && selectedShellId) window.requestAnimationFrame(mountHostTerminal);
 }
 
 async function load() {
@@ -802,19 +1138,23 @@ async function load() {
   loading = true;
   loadError = '';
   render();
-  const [docker, runtimes, userScripts, sandwich, jobList] = await Promise.allSettled([
+  const [docker, runtimes, userScripts, sandwich, jobList, hostServices, hostShells] = await Promise.allSettled([
     request('/api/odysseus/docker/projects'),
     request('/api/odysseus/runtimes'),
     request('/api/odysseus/user-scripts'),
     request('/api/odysseus/sandwich'),
     request('/api/odysseus/jobs?limit=25'),
+    request('/api/odysseus/host-services'),
+    request('/api/odysseus/host-shell/sessions'),
   ]);
   dockerReport = docker.status === 'fulfilled' ? docker.value : null;
   runtimeReport = runtimes.status === 'fulfilled' ? runtimes.value : null;
   userScriptsReport = userScripts.status === 'fulfilled' ? userScripts.value : null;
   sandwichReport = sandwich.status === 'fulfilled' ? sandwich.value : null;
   jobs = jobList.status === 'fulfilled' ? (jobList.value.jobs || []) : [];
-  loadError = [docker, runtimes, userScripts, sandwich, jobList]
+  hostServicesReport = hostServices.status === 'fulfilled' ? hostServices.value : null;
+  hostShellReport = hostShells.status === 'fulfilled' ? hostShells.value : null;
+  loadError = [docker, runtimes, userScripts, sandwich, jobList, hostServices, hostShells]
     .filter((value) => value.status === 'rejected')
     .map((value) => value.reason?.message || String(value.reason))
     .join(' · ');
@@ -1164,6 +1504,177 @@ async function shutdownInteractive() {
   }
 }
 
+async function controlHostService(button) {
+  const serviceId = button.dataset.hostService;
+  const action = button.dataset.hostServiceAction;
+  button.disabled = true;
+  try {
+    hostServicesReport = await request(`/api/odysseus/host-services/${encodeURIComponent(serviceId)}`, {
+      method: 'POST',
+      body: JSON.stringify({ action }),
+    });
+    if (selectedHostServiceId === serviceId) {
+      const log = await request(`/api/odysseus/host-services/${encodeURIComponent(serviceId)}/log`);
+      selectedHostServiceLog = log.text || '';
+    }
+    loadError = '';
+  } catch (error) {
+    loadError = error?.message || String(error);
+  }
+  render();
+}
+
+async function loadHostServiceLog(serviceId) {
+  try {
+    const log = await request(`/api/odysseus/host-services/${encodeURIComponent(serviceId)}/log`);
+    selectedHostServiceId = serviceId;
+    selectedHostServiceLog = log.text || '';
+    loadError = '';
+  } catch (error) {
+    loadError = error?.message || String(error);
+  }
+  render();
+}
+
+async function createHostShell() {
+  const input = document.querySelector(`#${MODAL_ID} [data-host-shell-cwd]`);
+  const before = new Set((hostShellReport?.sessions || []).map((value) => value.id));
+  try {
+    hostShellReport = await request('/api/odysseus/host-shell/sessions', {
+      method: 'POST',
+      body: JSON.stringify({ cwd: input?.value?.trim() || '' }),
+    });
+    selectedShellId = hostShellReport.sessions?.find((value) => !before.has(value.id))?.id
+      || hostShellReport.sessions?.at(-1)?.id
+      || '';
+    hostTerminalModifiers.clear();
+    loadError = '';
+  } catch (error) {
+    loadError = error?.message || String(error);
+  }
+  render();
+}
+
+async function deleteHostShell(shellId) {
+  const session = (hostShellReport?.sessions || []).find((value) => value.id === shellId);
+  const confirmed = await uiModule.styledConfirm(
+    `Close ${session?.title || 'this shell'}? Its tmux session and running foreground process will end.`,
+    {
+      title: 'Close operator shell',
+      confirmText: 'Close shell',
+      cancelText: 'Keep it',
+      danger: true,
+    },
+  );
+  if (!confirmed) return;
+  try {
+    hostShellReport = await request(`/api/odysseus/host-shell/sessions/${encodeURIComponent(shellId)}`, {
+      method: 'DELETE',
+    });
+    if (selectedShellId === shellId) selectedShellId = hostShellReport.sessions?.[0]?.id || '';
+    hostTerminalModifiers.clear();
+    loadError = '';
+  } catch (error) {
+    loadError = error?.message || String(error);
+  }
+  render();
+}
+
+async function copyHostTerminal() {
+  const selection = hostTerminal?.terminal?.getSelection() || '';
+  if (!selection) {
+    uiModule.showToast('Select terminal text first.', 3000);
+    return;
+  }
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(selection);
+    } else {
+      const fallback = document.createElement('textarea');
+      fallback.value = selection;
+      fallback.setAttribute('readonly', '');
+      fallback.style.position = 'fixed';
+      fallback.style.opacity = '0';
+      document.body.appendChild(fallback);
+      fallback.select();
+      const copied = document.execCommand('copy');
+      fallback.remove();
+      if (!copied) throw new Error('browser denied clipboard access');
+    }
+    uiModule.showToast('Terminal selection copied.', 2500);
+  } catch (error) {
+    uiModule.showToast(`Clipboard write failed: ${error?.message || String(error)}`, 6000);
+  }
+  document.querySelector(`#${MODAL_ID} [data-host-terminal-touch-menu]`)?.classList.remove('visible');
+}
+
+async function pasteHostTerminal() {
+  try {
+    if (!navigator.clipboard?.readText) throw new Error('interactive paste required');
+    const value = await navigator.clipboard.readText();
+    if (value) sendHostTerminal(value);
+  } catch (error) {
+    const stage = document.querySelector(`#${MODAL_ID} .dio-host-terminal-stage`);
+    const input = document.createElement('textarea');
+    input.className = 'dio-host-terminal-clipboard-input';
+    input.placeholder = 'Paste here, then tap Send';
+    const send = document.createElement('button');
+    send.type = 'button';
+    send.textContent = 'Send';
+    const tray = document.createElement('div');
+    tray.className = 'dio-host-terminal-clipboard-tray';
+    tray.append(input, send);
+    send.addEventListener('click', () => {
+      if (input.value) sendHostTerminal(input.value);
+      tray.remove();
+      hostTerminal?.terminal?.focus();
+    });
+    input.addEventListener('paste', () => window.setTimeout(() => {
+      if (input.value) {
+        sendHostTerminal(input.value);
+        tray.remove();
+        hostTerminal?.terminal?.focus();
+      }
+    }, 0), { once: true });
+    stage?.querySelector('.dio-host-terminal-clipboard-tray')?.remove();
+    stage?.appendChild(tray);
+    input.focus();
+    uiModule.showToast('Paste into the terminal tray.', 4000);
+    document.querySelector(`#${MODAL_ID} [data-host-terminal-touch-menu]`)?.classList.remove('visible');
+    return;
+  }
+  document.querySelector(`#${MODAL_ID} [data-host-terminal-touch-menu]`)?.classList.remove('visible');
+  hostTerminal?.terminal?.focus();
+}
+
+function toggleHostTerminalExpanded() {
+  hostTerminalExpanded = !hostTerminalExpanded;
+  const windowNode = document.querySelector(`#${MODAL_ID} .uly-services-window`);
+  windowNode?.classList.toggle('host-shell-fullscreen', hostTerminalExpanded);
+  const button = document.querySelector(`#${MODAL_ID} [data-host-terminal-expand]`);
+  if (button) button.textContent = hostTerminalExpanded ? 'Restore' : 'Expand';
+  window.requestAnimationFrame(fitHostTerminal);
+}
+
+function zoomHostTerminal(delta) {
+  hostTerminalFontSize = Math.max(9, Math.min(24, hostTerminalFontSize + Number(delta || 0)));
+  window.localStorage.setItem('diogenes-host-terminal-font-size', String(hostTerminalFontSize));
+  if (hostTerminal?.terminal) hostTerminal.terminal.options.fontSize = hostTerminalFontSize;
+  const output = document.querySelector(`#${MODAL_ID} [data-host-terminal-zoom-value]`);
+  if (output) output.textContent = `${hostTerminalFontSize}px`;
+  window.requestAnimationFrame(fitHostTerminal);
+}
+
+function toggleHostTerminalModifier(button) {
+  const modifier = button.dataset.hostTerminalMod;
+  if (hostTerminalModifiers.has(modifier)) hostTerminalModifiers.delete(modifier);
+  else hostTerminalModifiers.add(modifier);
+  const pressed = hostTerminalModifiers.has(modifier);
+  button.setAttribute('aria-pressed', String(pressed));
+  button.classList.toggle('active', pressed);
+  hostTerminal?.terminal?.focus();
+}
+
 function handleServicesClick(event) {
   const dockerViewButton = event.target.closest('[data-docker-view]');
   if (dockerViewButton) {
@@ -1175,6 +1686,38 @@ function handleServicesClick(event) {
   }
   const port = event.target.closest('[data-open-port]');
   if (port) return openLocalPort(port.dataset.openPort);
+  const hostPort = event.target.closest('[data-open-host-port]');
+  if (hostPort) {
+    window.open(`http://${window.location.hostname}:${Number(hostPort.dataset.openHostPort)}`, '_blank', 'noopener,noreferrer');
+    return;
+  }
+  const hostAction = event.target.closest('[data-host-service-action]');
+  if (hostAction) return controlHostService(hostAction);
+  const hostLog = event.target.closest('[data-host-service-log]');
+  if (hostLog) return loadHostServiceLog(hostLog.dataset.hostServiceLog);
+  if (event.target.closest('[data-host-shell-new]')) return createHostShell();
+  const closeShell = event.target.closest('[data-host-shell-delete]');
+  if (closeShell) return deleteHostShell(closeShell.dataset.hostShellDelete);
+  const selectShell = event.target.closest('[data-host-shell-select]');
+  if (selectShell) {
+    selectedShellId = selectShell.dataset.hostShellSelect;
+    hostTerminalModifiers.clear();
+    render();
+    return;
+  }
+  if (event.target.closest('[data-host-terminal-expand]')) return toggleHostTerminalExpanded();
+  const zoom = event.target.closest('[data-host-terminal-zoom]');
+  if (zoom) return zoomHostTerminal(zoom.dataset.hostTerminalZoom);
+  const modifier = event.target.closest('[data-host-terminal-mod]');
+  if (modifier) return toggleHostTerminalModifier(modifier);
+  const terminalKey = event.target.closest('[data-host-terminal-key]');
+  if (terminalKey) {
+    sendHostTerminal(hostTerminalKey(terminalKey.dataset.hostTerminalKey));
+    hostTerminal?.terminal?.focus();
+    return;
+  }
+  if (event.target.closest('[data-host-terminal-copy]')) return copyHostTerminal();
+  if (event.target.closest('[data-host-terminal-paste]')) return pasteHostTerminal();
   if (event.target.closest('[data-user-scripts-toggle]')) {
     userScriptsOpen = !userScriptsOpen;
     render();

@@ -7,7 +7,7 @@
 //   - Other static assets (images/fonts/libs): cache-first with bg refresh.
 //   - API / non-GET: never cached.
 // Bump CACHE_NAME whenever the precache list or SW logic changes.
-const CACHE_NAME = 'odysseus-v381-diogenes-services-shared-config-lazy-assets';
+const CACHE_NAME = 'odysseus-v382-operator-venvs-xterm';
 
 // KaTeX resolves these from its own stylesheet, so caching the CSS without them
 // gives offline math fallback glyphs instead of proper typesetting.
@@ -104,6 +104,10 @@ const PRECACHE = [
 // Lazily-imported panel modules (js/panels.js). Not in index.html by design;
 // precached so the panel still opens with no network.
 const PANEL_PRECACHE = [
+  // Operator shell — loaded only when the Venvs tab opens.
+  '/static/vendor/xterm/xterm.mjs',
+  '/static/vendor/xterm/xterm.css',
+  '/static/vendor/xterm/addon-fit.mjs',
   // Image editor — galleryEditor.js and its js/editor/ graph.
   '/static/js/galleryEditor.js',
   '/static/js/editor/ai-inpaint.js?v=20260708match1',

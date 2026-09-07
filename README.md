@@ -30,7 +30,8 @@
 **Ɗiogenēs** is a `dev`-based extension that keeps Odysseus routes and data
 contracts intact while adding a native, admin-only workstation control plane:
 
-- Docker, Bun/NPX, native, tmux, and Hermes runtimes in the **Services** window;
+- Docker, Bun/NPX, native, tmux, and Hermes runtimes in the **Services** window,
+  plus a separate operator-only mm-tools venv and host-shell tab;
 - a standalone [Sandwich](https://github.com/CommanderTurtle/sandwich) Bun
   compatibility layer—system Node, npm, pnpm, and yarn are not required;
 - separate Colibri GLM, Colibri Hy3, and PrismML native model engines;
@@ -70,7 +71,14 @@ plane built around native Bun. [Sandwich](https://github.com/CommanderTurtle/san
 itself adds no telemetry and keeps the JavaScript ecosystem as low-friction as
 practical. The **Services** window discovers and manages Docker Compose
 projects, interactive tmux services, Git checkouts, configuration files,
-updates, and native integration jobs without conflating their runtimes.
+updates, and native integration jobs without conflating their runtimes. The
+**Venvs** tab starts only a fixed `~/multimedia` service catalog and persistent
+human-admin operator shell tabs on the named `diogenes-operator` tmux socket.
+The internal-agent token cannot enter this plane. It neither
+lists nor mutates the default tmux server, and it removes Diogenes' `.venv`
+from each launch environment before sourcing the selected project's own venv.
+`DIOGENES_MM_TOOLS_ROOT` and `DIOGENES_OPERATOR_TMUX_SOCKET` override the two
+defaults when a workstation uses a different checkout or socket name.
 
 ![aviv2](https://huggingface.co/sHEL1562/shelling/resolve/main/src/2-services.avif)
 
