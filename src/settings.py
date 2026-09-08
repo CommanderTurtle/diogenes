@@ -49,6 +49,15 @@ DEFAULT_SETTINGS = {
     "image_quality": "medium",
     "vision_model": "",
     "vision_enabled": True,
+    # Bypass capability-name guessing and send browser uploads to the selected
+    # OpenAI-compatible chat endpoint as data:image/...;base64 content blocks.
+    # Useful for local vLLM model names that do not advertise their vision
+    # capability in a way Diogenes can infer.
+    "vision_direct_base64": False,
+    # When direct base64 is enabled, retry a rejected image from an in-memory
+    # copy whose longest side is reduced by 128px per attempt. The stored upload
+    # is never rewritten.
+    "vision_auto_resize_retry": False,
     # Ordered fallback chain for the Vision model (image analysis, OCR, tagging).
     "vision_model_fallbacks": [],
     # Public base URL used to build clickable deep-links in outgoing alerts
@@ -105,15 +114,16 @@ DEFAULT_SETTINGS = {
     # the old 30s/60s per-call defaults.
     "research_planning_timeout_seconds": 90,
     "research_query_timeout_seconds": 90,
+    # Heavy synthesis/final-writing requests may legitimately take many minutes
+    # on local reasoning models. 0 leaves the response read timeout open while
+    # preserving bounded connect/write/pool timeouts and manual cancellation.
+    "research_generation_timeout_seconds": 0,
     "research_extraction_concurrency": 3,
-    # Hard wall-clock cap on a single deep-research run. The previous 600s
-    # (10 min) default cut off slow local / edge LLMs mid-synthesis; 1800s
-    # (30 min) is comfortable for most local setups while still bounding
-    # runaway jobs. Set to 0 to disable the cap entirely (unlimited) — only
-    # for very long deep-research runs, since a stalled job then runs an
-    # unbounded model/API bill. Other values are bounded to [60, 86400].
+    # Hard wall-clock cap on a single deep-research run. 0 disables it: active
+    # work continues until the agent decides it is complete or the user presses
+    # Cancel. Non-zero operator overrides remain bounded to [60, 86400].
     # Tune via Settings or by editing data/settings.json.
-    "research_run_timeout_seconds": 1800,
+    "research_run_timeout_seconds": 0,
     "agent_max_tool_calls": 0,
     "agent_max_rounds": 20,  # per-message agent step cap (clamped 1..200)
     # Soft input-token budget for the agent loop. The DEFAULT value (6000) is the
@@ -284,7 +294,8 @@ def is_setting_overridden(key: str) -> bool:
 # model + image-generation model. The owner argument is the authed username
 # resolved by FastAPI deps; an empty/None owner falls through to the global.
 _PER_USER_KEYS = {
-    "vision_model", "vision_enabled", "vision_model_fallbacks",
+    "vision_model", "vision_enabled", "vision_direct_base64",
+    "vision_auto_resize_retry", "vision_model_fallbacks",
     "image_model", "image_gen_enabled", "image_quality",
     # Default chat endpoint / model — without per-user resolution every new
     # account inherited whatever the most-recent admin picked, which then

@@ -177,6 +177,45 @@ Requirements:
 - Write in an engaging, informative style — not dry or robotic
 """
 
+ARXIV_MODE_PROMPT = """\
+DOCUMENT MODE — ARXIV-STYLE PAPER
+- Write source Markdown for a publication-quality scholarly paper, not a magazine article.
+- Use this order where applicable: title, author/affiliation lines only when supplied by the user,
+  Abstract, Keywords, numbered main sections and subsections, limitations, conclusion, and References.
+- Never invent an author, affiliation, experiment, measurement, dataset, citation, or result.
+- Preserve mathematical notation as valid LaTeX using $...$ and $$...$$. Put diagrams in
+  fenced ```mermaid blocks. Give every figure, table, equation, and algorithm a caption or label.
+- Cite evidence numerically in the prose and keep a matching numbered References section with URLs.
+- Sustain a complete 4,000–5,000 word paper when that scope is requested; do not collapse a
+  long-form request into an abstract-length summary or pad beyond what the evidence supports.
+- Treat the Current report as the published draft so far: review the whole draft, preserve sound
+  passages, integrate new evidence in place, repair cross-references, and return the complete paper.
+"""
+
+NOVEL_FICTION_PROMPT = """\
+DOCUMENT MODE — FICTION STORY
+- Write polished continuous narrative, not a research report or outline.
+- Build coherent chapters and scenes with purposeful prose, dialogue, pacing, character arcs,
+  setting, viewpoint, and continuity. Do not invent citations or append a sources section.
+- Sustain a complete 4,000–5,000 word manuscript when that scope is requested; do not replace
+  long-form narrative with a synopsis, outline, or commentary about what remains to be written.
+- Treat supplied drafts and visual references as canon unless the user asks to change them.
+- Treat the Current report as the manuscript so far: review it as a whole, preserve its voice,
+  reconcile continuity, and return the complete revised manuscript after each pass.
+"""
+
+NOVEL_NONFICTION_PROMPT = """\
+DOCUMENT MODE — NONFICTION STORY
+- Write rigorous narrative nonfiction in chapters and scenes, not a generic research report.
+- Use a strong narrative through-line while keeping every factual claim grounded. Never invent
+  dialogue, thoughts, chronology, people, places, or events; label uncertainty honestly.
+- Use unobtrusive inline citations and a Sources / Notes section where verification matters.
+- Sustain a complete 4,000–5,000 word manuscript when that scope is requested; do not replace
+  long-form narrative with a synopsis, outline, or commentary about what remains to be written.
+- Treat supplied drafts and visual references as source material and the Current report as the
+  manuscript so far: preserve its voice, reconcile continuity, and return the complete revision.
+"""
+
 CATEGORY_PROMPTS = {
     "product": """IMPORTANT FORMAT OVERRIDE — this is a PRODUCT research report:
 - Structure as a RANKED LIST of products/options (best first)
@@ -227,7 +266,7 @@ class DeepResearcher:
         llm_model: str,
         llm_headers: Optional[Dict] = None,
         max_rounds: int = 8,
-        max_time: int = 300,
+        max_time: int = 0,
         max_urls_per_round: int = 3,
         max_content_chars: int = 15000,
         max_report_tokens: int = 8192,
@@ -241,14 +280,22 @@ class DeepResearcher:
         progress_callback: Optional[Callable] = None,
         search_provider: Optional[str] = None,
         category: Optional[str] = None,
+        document_mode: str = "research",
+        story_kind: str = "fiction",
+        source_material: str = "",
+        generation_timeout: Optional[float] = None,
     ):
         self.llm_endpoint = llm_endpoint
         self.llm_model = llm_model
         self.llm_headers = llm_headers
         self.search_provider_override = search_provider
-        self.category = category
+        self.document_mode = document_mode if document_mode in {"research", "arxiv", "novel"} else "research"
+        self.story_kind = story_kind if story_kind in {"fiction", "nonfiction"} else "fiction"
+        self.category = category if self.document_mode == "research" else None
+        self.source_material = str(source_material or "").strip()[:60000]
+        self.generation_timeout = generation_timeout if generation_timeout and generation_timeout > 0 else None
         self.max_rounds = max_rounds
-        self.max_time = max_time
+        self.max_time = max(0, int(max_time or 0))
         self.max_urls_per_round = max_urls_per_round
         self.max_content_chars = max_content_chars
         self.max_report_tokens = max_report_tokens
@@ -310,7 +357,7 @@ class DeepResearcher:
             self._emit(phase="planning")
             self.research_plan = await self._create_plan(question)
             logger.info(f"Continuation plan: {self.research_plan[:200]}")
-        if not self.category and not prior_report:
+        if self.document_mode == "research" and not self.category and not prior_report:
             self.category = await self._classify_category(question)
             if self.category:
                 logger.info(f"Auto-detected category: {self.category}")
@@ -410,27 +457,142 @@ class DeepResearcher:
     # ------------------------------------------------------------------
     # LLM helper
     # ------------------------------------------------------------------
-    async def _llm(self, messages: List[Dict], temperature: float = 0.3,
-                   max_tokens: int = 4096, timeout: int = 60) -> str:
-        """Call the LLM asynchronously and strip thinking tags."""
-        from src.llm_core import llm_call_async
-        response = await llm_call_async(
-            url=self.llm_endpoint,
-            model=self.llm_model,
-            messages=messages,
-            temperature=temperature,
-            max_tokens=max_tokens,
-            headers=self.llm_headers,
-            timeout=timeout,
+    def _mode_prompt(self) -> str:
+        document_mode = getattr(self, "document_mode", "research")
+        if document_mode == "arxiv":
+            return ARXIV_MODE_PROMPT
+        if document_mode == "novel" and getattr(self, "story_kind", "fiction") == "nonfiction":
+            return NOVEL_NONFICTION_PROMPT
+        if document_mode == "novel":
+            return NOVEL_FICTION_PROMPT
+        return ""
+
+    def _source_prompt(self) -> str:
+        source_material = getattr(self, "source_material", "")
+        if not source_material:
+            return ""
+        return (
+            "\n\nUSER-SUPPLIED SOURCE MATERIAL\n"
+            "Treat this as authoritative input from the user, while still distinguishing "
+            "a draft/creative reference from externally verified evidence.\n\n"
+            + source_material
         )
-        return strip_thinking(response)
+
+    @staticmethod
+    def _merge_continuation(existing: str, continuation: str) -> str:
+        """Join a continuation without duplicating an echoed suffix/prefix."""
+        left = str(existing or "")
+        right = str(continuation or "")
+        if not left:
+            return right
+        if not right:
+            return left
+        limit = min(len(left), len(right), 4000)
+        for size in range(limit, 31, -1):
+            if left[-size:] == right[:size]:
+                return left + right[size:]
+        return left + right
+
+    async def _llm(self, messages: List[Dict], temperature: float = 0.3,
+                   max_tokens: int = 4096,
+                   timeout: Optional[float] = None) -> str:
+        """Call the LLM and continue responses that end without a terminal stop.
+
+        Deep Research uses non-streaming calls, but OpenAI-compatible responses
+        still expose ``finish_reason``. A length stop, an empty completion, or a
+        missing terminal reason is not success. Continue from the partial text
+        until the provider reports a real terminal stop; cancellation remains
+        cooperative because each request is awaited by the research task.
+        """
+        from src.llm_core import llm_call_async
+
+        request_messages = list(messages)
+        combined = ""
+        missing_terminal_seen = False
+        empty_attempts = 0
+        while True:
+            response, completion = await llm_call_async(
+                url=self.llm_endpoint,
+                model=self.llm_model,
+                messages=request_messages,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                headers=self.llm_headers,
+                timeout=timeout,
+                workload="background",
+                return_completion_metadata=True,
+            )
+            raw_response = str(response or "")
+            segment = strip_thinking(raw_response)
+            # The shared thinking scrubber deliberately trims its result.  On
+            # a continuation request that leading whitespace can be semantic
+            # (", then" / ". Next"), so restore only the boundary whitespace
+            # that the provider actually returned.  The first segment remains
+            # normalized exactly as before.
+            if combined and segment and raw_response[:1].isspace() and not segment[:1].isspace():
+                segment = raw_response[:1] + segment
+            before = combined
+            combined = self._merge_continuation(combined, segment)
+            reason = str((completion or {}).get("finish_reason") or "").strip().lower()
+
+            if segment.strip():
+                empty_attempts = 0
+            else:
+                empty_attempts += 1
+            interrupted = reason in {
+                "length", "max_tokens", "max_output_tokens", "incomplete",
+                "model_length",
+            }
+            missing_terminal = not reason
+
+            if not interrupted and not missing_terminal and segment.strip():
+                return combined
+            if self._cancelled:
+                return combined
+            if empty_attempts >= 2 or (combined == before and combined):
+                logger.warning(
+                    "Research completion could not advance after an interrupted response "
+                    "(finish_reason=%r); retaining partial output",
+                    reason or None,
+                )
+                return combined
+            # Some compatibility endpoints omit finish_reason even for complete
+            # generations. Nudge once so a genuinely severed response gets a
+            # chance to finish, then accept a second substantive metadata-less
+            # segment rather than creating an unbounded duplicate loop.
+            if missing_terminal and missing_terminal_seen and segment.strip():
+                return combined
+            missing_terminal_seen = missing_terminal_seen or missing_terminal
+
+            self._emit(
+                phase="writing",
+                message="Continuing an interrupted model response…",
+                finish_reason=reason or "missing",
+            )
+            request_messages = list(messages)
+            if combined:
+                request_messages.append({"role": "assistant", "content": combined})
+            request_messages.append({
+                "role": "user",
+                "content": (
+                    "Continue exactly where the preceding response ended. Do not repeat "
+                    "completed text, restart the document, summarize it, or add commentary. "
+                    "Finish the requested output in the same format."
+                ),
+            })
 
     # ------------------------------------------------------------------
     # PLAN: create research strategy
     # ------------------------------------------------------------------
     async def _create_plan(self, question: str) -> str:
         """LLM analyzes the question and creates a research plan."""
-        prompt = current_date_context() + RESEARCH_PLAN_PROMPT.format(question=question)
+        prompt = (
+            current_date_context()
+            + RESEARCH_PLAN_PROMPT.format(question=question)
+            + "\n\n"
+            + self._mode_prompt()
+            + self._source_prompt()
+        )
         try:
             response = await self._llm(
                 [{"role": "user", "content": prompt}],
@@ -514,6 +676,7 @@ class DeepResearcher:
             num_queries=num_queries,
             round_instruction=round_instruction,
         )
+        prompt += "\n\n" + self._mode_prompt() + self._source_prompt()
 
         queries: List[str] = []
         try:
@@ -903,6 +1066,7 @@ class DeepResearcher:
             report=current_report or "(First round — no report yet.)",
             new_findings=findings_text,
         )
+        prompt += "\n\n" + self._mode_prompt() + self._source_prompt()
 
         try:
             return await self._llm(
@@ -913,7 +1077,7 @@ class DeepResearcher:
                 # (which gets 180s); a slow local model (e.g. a 20B served from
                 # LM Studio) routinely needs >60s for it. The old 60s cap timed
                 # out mid-stream and discarded the round's findings (#1551).
-                timeout=180,
+                timeout=self.generation_timeout,
             )
         except Exception as e:
             logger.error(f"Synthesis failed: {e}")
@@ -932,6 +1096,7 @@ class DeepResearcher:
             round_num=round_num,
             max_rounds=self.max_rounds,
         )
+        prompt += "\n\n" + self._mode_prompt()
 
         try:
             response = await self._llm(
@@ -957,10 +1122,38 @@ class DeepResearcher:
     # ------------------------------------------------------------------
     async def _final_report(self, question: str, report: str) -> str:
         """LLM writes a polished final report, retrying if too short."""
-        prompt = FINAL_REPORT_PROMPT.format(
-            question=question,
-            report=report,
-        )
+        if self.document_mode == "arxiv":
+            prompt = f"""Write the complete final scholarly paper for this request:
+
+{question}
+
+CURRENT PUBLISHED DRAFT
+{report}
+
+Return only the full paper as Markdown. Preserve sound material, integrate the evidence,
+repair citations and cross-references, and make every claim commensurate with its support.
+Do not describe your process or wrap the paper in a code fence.
+
+{self._mode_prompt()}{self._source_prompt()}"""
+        elif self.document_mode == "novel":
+            prompt = f"""Write the complete final manuscript for this request:
+
+{question}
+
+CURRENT MANUSCRIPT
+{report}
+
+Return only the full manuscript as Markdown. Preserve established voice and continuity,
+integrate useful source material naturally, resolve unfinished transitions, and complete
+the requested narrative. Do not describe your process or wrap the manuscript in a code fence.
+
+{self._mode_prompt()}{self._source_prompt()}"""
+        else:
+            prompt = FINAL_REPORT_PROMPT.format(
+                question=question,
+                report=report,
+            )
+            prompt += "\n\n" + self._mode_prompt() + self._source_prompt()
         cat_extra = CATEGORY_PROMPTS.get(self.category or "", "")
         if cat_extra:
             prompt += "\n\n" + cat_extra
@@ -970,7 +1163,7 @@ class DeepResearcher:
                 [{"role": "user", "content": prompt}],
                 temperature=0.3,
                 max_tokens=self.max_report_tokens,
-                timeout=180,
+                timeout=self.generation_timeout,
             )
             if not str(result or "").strip():
                 logger.warning(
@@ -983,23 +1176,37 @@ class DeepResearcher:
             if len(result.split()) < 400:
                 logger.info(f"Final report too short ({len(result.split())} words), requesting expansion")
                 self._emit(phase="writing", message="Expanding report...")
+                if self.document_mode == "arxiv":
+                    expansion_instruction = (
+                        "The paper is too brief for the material available. Return the complete "
+                        "expanded paper, strengthening the abstract, methods, analysis, limitations, "
+                        "conclusion, mathematical detail, and source-grounded references as applicable."
+                    )
+                elif self.document_mode == "novel":
+                    expansion_instruction = (
+                        "The manuscript is too brief for the requested narrative. Return the complete "
+                        "expanded manuscript with developed scenes or sections, continuity, pacing, "
+                        "specific detail, and a satisfying through-line. Preserve the established voice."
+                    )
+                else:
+                    expansion_instruction = (
+                        "This report is too brief. Please expand it significantly:\n"
+                        "- Add detailed paragraphs for each section (not just bullet points)\n"
+                        "- Include specific data, numbers, and comparisons from the evidence\n"
+                        "- Explain context and significance — don't just list facts\n"
+                        "- Use ## headings and ### subheadings\n"
+                        "- Target at least 1000 words\n"
+                        "Write the full expanded report now."
+                    )
                 expanded = await self._llm(
                     [
                         {"role": "user", "content": prompt},
                         {"role": "assistant", "content": result},
-                        {"role": "user", "content":
-                            "This report is too brief. Please expand it significantly:\n"
-                            "- Add detailed paragraphs for each section (not just bullet points)\n"
-                            "- Include specific data, numbers, and comparisons from the evidence\n"
-                            "- Explain context and significance — don't just list facts\n"
-                            "- Use ## headings and ### subheadings\n"
-                            "- Target at least 1000 words\n"
-                            "Write the full expanded report now."
-                        },
+                        {"role": "user", "content": expansion_instruction},
                     ],
                     temperature=0.4,
                     max_tokens=self.max_report_tokens,
-                    timeout=180,
+                    timeout=self.generation_timeout,
                 )
                 if len(expanded.split()) > len(result.split()):
                     return expanded
@@ -1021,7 +1228,7 @@ class DeepResearcher:
                 pass
 
     def _time_exceeded(self) -> bool:
-        return (time.time() - self._start_time) > self.max_time
+        return self.max_time > 0 and (time.time() - self._start_time) > self.max_time
 
     # _strip_think_tags removed — use research_utils.strip_thinking()
 
@@ -1163,4 +1370,10 @@ class DeepResearcher:
             stats["Search"] = ", ".join(self.providers_used)
         if self.category:
             stats["Category"] = self.category.capitalize()
+        if self.document_mode != "research":
+            stats["Mode"] = (
+                f"Novel · {self.story_kind.capitalize()}"
+                if self.document_mode == "novel"
+                else "arXiv"
+            )
         return stats

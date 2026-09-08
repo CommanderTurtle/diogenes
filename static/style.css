@@ -39789,6 +39789,31 @@ body.research-panel-view #research-divider { display:none; }
   margin-top: 2px;
 }
 .research-query:focus { outline:none; border-color:var(--accent-primary, var(--red)); }
+.research-source-compose {
+  display:flex; align-items:center; gap:6px; flex-wrap:wrap; margin-top:6px;
+}
+.research-source-btn {
+  display:inline-flex; align-items:center; gap:5px; padding:4px 8px;
+  color:var(--muted, var(--fg)); background:transparent;
+  border:1px solid var(--border); border-radius:5px; font:inherit;
+  font-size:10px; cursor:pointer;
+}
+.research-source-btn:hover { color:var(--fg); border-color:var(--accent, var(--red)); }
+.research-source-btn:disabled { opacity:.55; cursor:wait; }
+.research-source-status { font-size:10px; color:var(--muted, var(--fg)); opacity:.75; }
+.research-source-list { display:flex; gap:5px; flex-wrap:wrap; min-width:0; }
+.research-source-chip {
+  display:inline-flex; align-items:center; gap:4px; max-width:180px;
+  padding:3px 5px 3px 7px; border:1px solid var(--border); border-radius:999px;
+  background:color-mix(in srgb, var(--accent, var(--red)) 8%, transparent);
+  font-size:10px;
+}
+.research-source-chip-name { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.research-source-chip button {
+  width:16px; height:16px; padding:0; border:0; border-radius:50%;
+  color:inherit; background:transparent; cursor:pointer; line-height:14px;
+}
+.research-source-chip button:hover { background:color-mix(in srgb, var(--fg) 12%, transparent); }
 .research-settings-row {
   display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap;
   padding: 8px 10px;
@@ -39999,6 +40024,8 @@ body.research-panel-view #research-divider { display:none; }
 /* Uncategorized (default-format) research = "standard", shown in the same
    green as its left border so the green reads as a labelled category. */
 .research-cat-badge.research-cat-standard { color: var(--color-success); opacity: 0.75; }
+.research-cat-badge.research-mode-arxiv { color:#b31b1b; opacity:.9; text-transform:none; }
+.research-cat-badge.research-mode-novel { color:#a78bfa; opacity:.9; }
 .research-cat-badge {
   font-size: 10px;
   font-weight: 500;

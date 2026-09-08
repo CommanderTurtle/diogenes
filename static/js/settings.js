@@ -654,6 +654,9 @@ async function initVisionSettings() {
   const vlSel = el('set-vlModelSelect');
   const msg = el('set-visionSettingsMsg');
   const enabledToggle = el('set-visionEnabledToggle');
+  const directToggle = el('set-visionDirectBase64');
+  const resizeToggle = el('set-visionResizeRetry');
+  const resizeRow = el('set-visionResizeRetryRow');
   const configWrap = vlSel ? vlSel.closest('div[style*="flex-direction"]') : null;
   var _visionEndpoints = [];
   var visionFallbackWidget = null;
@@ -689,6 +692,8 @@ async function initVisionSettings() {
     if (settings.vision_model) vlSel.value = settings.vision_model;
     _syncModelLogo(vlSel);
     if (enabledToggle) enabledToggle.checked = settings.vision_enabled !== false;
+    if (directToggle) directToggle.checked = settings.vision_direct_base64 === true;
+    if (resizeToggle) resizeToggle.checked = settings.vision_auto_resize_retry === true;
     visionFallbackWidget = _bindFallbackWidget({
       containerId: 'set-visionFallbacks',
       addBtnId: 'set-visionAddFallback',
@@ -708,17 +713,27 @@ async function initVisionSettings() {
     var card = enabledToggle ? enabledToggle.closest('.admin-card') : null;
     if (card) card.style.opacity = off ? '0.45' : '';
     if (configWrap) configWrap.style.pointerEvents = off ? 'none' : '';
+    var direct = !!(directToggle && directToggle.checked && !off);
+    if (resizeRow) resizeRow.style.display = direct ? '' : 'none';
+    if (resizeToggle) resizeToggle.disabled = !direct;
   }
   syncVisionDisabled();
 
   async function saveSettings() {
     try {
-      await _postSettings({ vision_enabled: enabledToggle ? enabledToggle.checked : true, vision_model: vlSel.value });
+      await _postSettings({
+        vision_enabled: enabledToggle ? enabledToggle.checked : true,
+        vision_model: vlSel.value,
+        vision_direct_base64: directToggle ? directToggle.checked : false,
+        vision_auto_resize_retry: resizeToggle ? resizeToggle.checked : false,
+      });
       msg.textContent = 'Saved'; msg.style.color = 'var(--fg)'; setTimeout(() => { msg.textContent = ''; }, 2000);
     } catch (e) { msg.textContent = 'Failed to save'; msg.style.color = 'var(--red)'; }
   }
   vlSel.addEventListener('change', saveSettings);
   if (enabledToggle) enabledToggle.addEventListener('change', function() { syncVisionDisabled(); saveSettings(); });
+  if (directToggle) directToggle.addEventListener('change', function() { syncVisionDisabled(); saveSettings(); });
+  if (resizeToggle) resizeToggle.addEventListener('change', saveSettings);
 
   _registerAiEndpointRefresh(function(endpoints) {
     _visionEndpoints = endpoints;
@@ -1359,6 +1374,7 @@ async function initResearchSettings() {
   var extractTimeoutInput = el('set-researchExtractTimeout');
   var extractConcurrencyInput = el('set-researchExtractConcurrency');
   var runTimeoutInput = el('set-researchRunTimeout');
+  var generationTimeoutInput = el('set-researchGenerationTimeout');
   var msg = el('set-researchMsg');
   var endpoints = [];
 
@@ -1384,6 +1400,9 @@ async function initResearchSettings() {
     if (settings.research_run_timeout_seconds !== undefined && settings.research_run_timeout_seconds !== null) {
       runTimeoutInput.value = settings.research_run_timeout_seconds;
     }
+    if (settings.research_generation_timeout_seconds !== undefined && settings.research_generation_timeout_seconds !== null) {
+      generationTimeoutInput.value = settings.research_generation_timeout_seconds;
+    }
   } catch (e) { console.warn('Failed to load research settings', e); }
 
   function showStatus() {
@@ -1407,6 +1426,10 @@ async function initResearchSettings() {
       if (!isNaN(rtv)) {
         parts.push(rtv === 0 ? 'Max time: no limit' : 'Max time: ' + rtv + 's');
       }
+    }
+    if (generationTimeoutInput.value !== '') {
+      var gtv = parseInt(generationTimeoutInput.value, 10);
+      if (!isNaN(gtv)) parts.push(gtv === 0 ? 'Writing: no limit' : 'Writing: ' + gtv + 's');
     }
     if (parts.length) {
       msg.textContent = parts.join(' · ');
@@ -1436,6 +1459,12 @@ async function initResearchSettings() {
         payload.research_run_timeout_seconds = rt;
       }
     }
+    if (generationTimeoutInput.value !== '') {
+      var gt = parseInt(generationTimeoutInput.value, 10);
+      if (!isNaN(gt) && (gt === 0 || (gt >= 60 && gt <= 86400))) {
+        payload.research_generation_timeout_seconds = gt;
+      }
+    }
     try {
       await _postSettings(payload);
       msg.textContent = 'Saved'; msg.style.color = 'var(--fg)';
@@ -1452,6 +1481,7 @@ async function initResearchSettings() {
   extractTimeoutInput.addEventListener('change', saveResearch);
   extractConcurrencyInput.addEventListener('change', saveResearch);
   runTimeoutInput.addEventListener('change', saveResearch);
+  generationTimeoutInput.addEventListener('change', saveResearch);
 
   _registerAiEndpointRefresh(function(nextEndpoints) {
     endpoints = nextEndpoints;

@@ -1783,6 +1783,8 @@ def generate_visual_report(
     category: Optional[str] = None,
     session_id: Optional[str] = None,
     hidden_images: Optional[List[str]] = None,
+    document_mode: str = "research",
+    story_kind: str = "fiction",
 ) -> str:
     sources = sources or []
     stats = stats or {}
@@ -1790,6 +1792,34 @@ def generate_visual_report(
 
     # Strip thinking artifacts
     report_markdown = strip_thinking(report_markdown)
+
+    if document_mode == "arxiv":
+        from src.research_documents import generate_arxiv_report
+        return generate_arxiv_report(
+            question=question,
+            report_markdown=report_markdown,
+            sources=sources,
+            stats=stats,
+            session_id=session_id,
+            md_to_html=_md_to_html,
+            extract_title=_extract_report_title,
+            extract_headings=_extract_headings,
+            apply_heading_ids=_apply_heading_ids,
+        )
+    if document_mode == "novel":
+        from src.research_documents import generate_novel_report
+        return generate_novel_report(
+            question=question,
+            report_markdown=report_markdown,
+            sources=sources,
+            stats=stats,
+            story_kind=story_kind,
+            session_id=session_id,
+            md_to_html=_md_to_html,
+            extract_title=_extract_report_title,
+            extract_headings=_extract_headings,
+            apply_heading_ids=_apply_heading_ids,
+        )
 
     # Use the report's first heading as the title (synthesized by the LLM)
     # rather than the raw user query. Fall back to the query if absent.

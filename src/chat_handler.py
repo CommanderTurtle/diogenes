@@ -202,15 +202,24 @@ class ChatHandler:
         # so guide-only/no-tools turns must not reach it.
         vision_enabled = False
         main_is_vision = False
+        direct_base64 = False
         if effective_att_ids:
-            from src.settings import get_setting
-            vision_enabled = get_setting("vision_enabled", True)
+            from src.settings import get_setting, get_user_setting
+            vision_enabled = get_user_setting("vision_enabled", owner or "", True)
             if vision_enabled:
-                main_is_vision = await asyncio.to_thread(
-                    model_supports_vision,
-                    sess.model or "",
-                    getattr(sess, "endpoint_url", "") or "",
-                )
+                direct_base64 = bool(get_user_setting(
+                    "vision_direct_base64", owner or "", False,
+                ))
+                # Explicit direct mode is authoritative. Local vLLM model IDs
+                # frequently omit recognizable vision markers, so capability
+                # guessing must not divert pixels into the caption fallback.
+                main_is_vision = direct_base64
+                if not main_is_vision:
+                    main_is_vision = await asyncio.to_thread(
+                        model_supports_vision,
+                        sess.model or "",
+                        getattr(sess, "endpoint_url", "") or "",
+                    )
 
         if effective_att_ids and vision_enabled:
             meta_by_id = {m["id"]: m for m in attachment_meta}

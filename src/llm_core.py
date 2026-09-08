@@ -1,7 +1,9 @@
 # src/llm_core.py
 import httpx
 import asyncio
+import base64
 import copy
+import io
 import time
 import json
 import logging
@@ -163,14 +165,157 @@ class _FallbackIneligibleHTTPException(HTTPException):
     fallback_eligible = False
 
 
+def _optional_read_timeout(read_timeout) -> Optional[float]:
+    """Normalize a read timeout; ``None``/0 means no response-read deadline."""
+    if read_timeout is None:
+        return None
+    try:
+        value = float(read_timeout)
+    except (TypeError, ValueError):
+        return None
+    return value if value > 0 else None
+
+
 def _call_timeout(read_timeout) -> httpx.Timeout:
     """Per-request timeout for non-streaming LLM calls (connect from config)."""
-    return httpx.Timeout(connect=LLMConfig.CONNECT_TIMEOUT, read=float(read_timeout), write=10.0, pool=5.0)
+    return httpx.Timeout(
+        connect=LLMConfig.CONNECT_TIMEOUT,
+        read=_optional_read_timeout(read_timeout),
+        write=10.0,
+        pool=5.0,
+    )
 
 
 def _stream_timeout(read_timeout) -> httpx.Timeout:
     """Per-request timeout for streaming LLM calls (connect from config)."""
-    return httpx.Timeout(connect=LLMConfig.CONNECT_TIMEOUT, read=float(read_timeout), write=30.0, pool=5.0)
+    return httpx.Timeout(
+        connect=LLMConfig.CONNECT_TIMEOUT,
+        read=_optional_read_timeout(read_timeout),
+        write=30.0,
+        pool=5.0,
+    )
+
+
+_IMAGE_SIZE_ERROR_TERMS = (
+    "resolution", "dimension", "dimensions", "width", "height",
+    "pixel", "pixels", "image size", "too large", "exceeds", "exceed",
+    "maximum image", "max image", "valueerror",
+)
+
+
+def _stream_error_text(chunk: str) -> str:
+    """Return provider error text from an SSE error chunk, if present."""
+    raw_chunk = str(chunk or "")
+    if "event: error" not in raw_chunk and '"error"' not in raw_chunk:
+        return ""
+    parts = []
+    for line in raw_chunk.splitlines():
+        if not line.startswith("data:"):
+            continue
+        raw = line[5:].strip()
+        if not raw or raw == "[DONE]":
+            continue
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            parts.append(raw)
+            continue
+        for key in ("error", "text", "message", "detail", "raw"):
+            value = data.get(key) if isinstance(data, dict) else None
+            if isinstance(value, dict):
+                value = value.get("message") or value.get("detail") or str(value)
+            if value:
+                parts.append(str(value))
+    return " ".join(parts).strip()
+
+
+def _is_retryable_image_size_error(text: str) -> bool:
+    marker = str(text or "").lower()
+    if not marker:
+        return False
+    mentions_image = any(word in marker for word in ("image", "vision", "multimodal"))
+    mentions_size = any(word in marker for word in _IMAGE_SIZE_ERROR_TERMS)
+    return mentions_image and mentions_size
+
+
+def _chunk_has_substantive_output(chunk: str) -> bool:
+    """True once switching/retrying would risk duplicating visible output."""
+    for line in str(chunk or "").splitlines():
+        if not line.startswith("data:"):
+            continue
+        raw = line[5:].strip()
+        if not raw or raw == "[DONE]":
+            continue
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(data, dict):
+            continue
+        if isinstance(data.get("delta"), str) and data["delta"]:
+            return True
+        if data.get("type") == "tool_calls" and data.get("tool_calls"):
+            return True
+    return False
+
+
+def _resize_data_image_messages(messages: List[Dict], decrement: int = 128):
+    """Shrink inline data-image blocks in a request copy by one deterministic step.
+
+    Returns ``(messages_copy, changed, sizes)``. The caller's message graph and
+    the stored upload remain byte-for-byte untouched.
+    """
+    try:
+        from PIL import Image, ImageOps
+    except ImportError:
+        return messages, False, []
+
+    resized = copy.deepcopy(messages)
+    changed = False
+    sizes = []
+    for message in resized:
+        content = message.get("content") if isinstance(message, dict) else None
+        if not isinstance(content, list):
+            continue
+        for part in content:
+            if not isinstance(part, dict) or part.get("type") != "image_url":
+                continue
+            image_url = part.get("image_url")
+            url = image_url.get("url") if isinstance(image_url, dict) else None
+            match = re.match(r"^data:(image/[^;,]+);base64,(.+)$", str(url or ""), re.I | re.S)
+            if not match:
+                continue
+            try:
+                source = base64.b64decode(match.group(2), validate=True)
+                with Image.open(io.BytesIO(source)) as opened:
+                    image = ImageOps.exif_transpose(opened)
+                    width, height = image.size
+                    longest = max(width, height)
+                    if longest <= 128:
+                        continue
+                    target_longest = max(64, longest - max(1, int(decrement)))
+                    scale = target_longest / longest
+                    new_size = (
+                        max(1, round(width * scale)),
+                        max(1, round(height * scale)),
+                    )
+                    if new_size == (width, height):
+                        continue
+                    frame = image.convert("RGBA") if "A" in image.getbands() else image.convert("RGB")
+                    frame = frame.resize(new_size, Image.Resampling.LANCZOS)
+                    output = io.BytesIO()
+                    if frame.mode == "RGBA":
+                        mime = "image/png"
+                        frame.save(output, format="PNG", optimize=True)
+                    else:
+                        mime = "image/jpeg"
+                        frame.save(output, format="JPEG", quality=92, optimize=True)
+                image_url["url"] = f"data:{mime};base64,{base64.b64encode(output.getvalue()).decode('ascii')}"
+                sizes.append({"from": [width, height], "to": list(new_size)})
+                changed = True
+            except Exception as exc:
+                logger.debug("Could not resize inline image for vLLM retry: %s", exc)
+    return resized, changed, sizes
 
 
 # Cache for LLM responses
@@ -2266,14 +2411,15 @@ async def llm_call_async(
     temperature: float = LLMConfig.DEFAULT_TEMPERATURE,
     max_tokens: int = LLMConfig.DEFAULT_MAX_TOKENS,
     headers: Optional[Dict] = None,
-    timeout: int = LLMConfig.STREAM_TIMEOUT,
+    timeout: Optional[float] = LLMConfig.STREAM_TIMEOUT,
     max_retries: int = LLMConfig.MAX_RETRIES,
     prompt_type: Optional[str] = None,
     session_id: Optional[str] = None,
     workload: str = "foreground",
     availability_only_transport: bool = False,
     return_model_metadata: bool = False,
-) -> str | tuple[str, str]:
+    return_completion_metadata: bool = False,
+) -> str | tuple[str, str] | tuple[str, Dict]:
     """Asynchronous LLM call using httpx with connection pooling, timeout, retry logic, and performance logging."""
     provider = _detect_provider(url)
     messages_copy = _sanitize_llm_messages(messages)
@@ -2294,7 +2440,10 @@ async def llm_call_async(
     cache_key = _get_cache_key(
         url, model, messages_copy, temperature, max_tokens, headers=headers,
     )
-    cached_response = _get_cached_response(cache_key)
+    # A plain cached string cannot prove how the upstream completion ended.
+    # Metadata callers (Deep Research) deliberately go to the provider so a
+    # length cutoff or missing terminal signal is never misclassified as done.
+    cached_response = None if return_completion_metadata else _get_cached_response(cache_key)
     if cached_response:
         logger.debug(f"Returning cached response for key: {cache_key}")
         if return_model_metadata:
@@ -2329,11 +2478,19 @@ async def llm_call_async(
                     continue
                 if raw == "[DONE]":
                     response = "".join(parts)
-                    _set_cached_response(
-                        cache_key,
-                        response,
-                        actual_model=actual_model,
-                    )
+                    if not return_completion_metadata:
+                        _set_cached_response(
+                            cache_key,
+                            response,
+                            actual_model=actual_model,
+                        )
+                    if return_completion_metadata:
+                        return response, {
+                            "model": actual_model,
+                            "finish_reason": "stop",
+                            "done_received": True,
+                            "usage": None,
+                        }
                     return (
                         (response, actual_model)
                         if return_model_metadata
@@ -2360,7 +2517,15 @@ async def llm_call_async(
                 if isinstance(delta, str):
                     parts.append(delta)
         response = "".join(parts)
-        _set_cached_response(cache_key, response, actual_model=actual_model)
+        if not return_completion_metadata:
+            _set_cached_response(cache_key, response, actual_model=actual_model)
+        if return_completion_metadata:
+            return response, {
+                "model": actual_model,
+                "finish_reason": None,
+                "done_received": False,
+                "usage": None,
+            }
         return (response, actual_model) if return_model_metadata else response
 
     if provider == "anthropic":
@@ -2444,10 +2609,14 @@ async def llm_call_async(
                 )
                 if provider == "anthropic":
                     response = _parse_anthropic_response(data)
+                    finish_reason = data.get("stop_reason")
                 elif provider == "ollama":
                     response = _parse_ollama_response(data)
+                    finish_reason = data.get("done_reason") or ("stop" if data.get("done") is True else None)
                 else:
-                    msg = data["choices"][0]["message"]
+                    choice = data["choices"][0]
+                    msg = choice["message"]
+                    finish_reason = choice.get("finish_reason")
                     content = msg.get("content")
                     if isinstance(content, list):
                         # Mistral structured content — extract thinking + text
@@ -2459,11 +2628,19 @@ async def llm_call_async(
                             response = text_part or msg.get("reasoning_content") or ""
                     else:
                         response = content or msg.get("reasoning_content") or ""
-                _set_cached_response(
-                    cache_key,
-                    response,
-                    actual_model=actual_model,
-                )
+                if not return_completion_metadata:
+                    _set_cached_response(
+                        cache_key,
+                        response,
+                        actual_model=actual_model,
+                    )
+                if return_completion_metadata:
+                    return response, {
+                        "model": actual_model,
+                        "finish_reason": finish_reason,
+                        "done_received": finish_reason is not None,
+                        "usage": data.get("usage") if isinstance(data, dict) else None,
+                    }
                 return (
                     (response, actual_model)
                     if return_model_metadata
@@ -2558,30 +2735,82 @@ def _stream_target_url(url: str) -> str:
 
 async def stream_llm(url: str, model: str, messages: List[Dict], temperature: float = LLMConfig.DEFAULT_TEMPERATURE,
                      max_tokens: int = LLMConfig.DEFAULT_MAX_TOKENS, headers: Optional[Dict] = None,
-                     timeout: int = LLMConfig.STREAM_TIMEOUT, prompt_type: Optional[str] = None,
+                     timeout: Optional[float] = LLMConfig.STREAM_TIMEOUT, prompt_type: Optional[str] = None,
                      tools: Optional[List[Dict]] = None, session_id: Optional[str] = None,
-                     tool_choice_none: bool = False, workload: str = "foreground"):
+                     tool_choice_none: bool = False, workload: str = "foreground",
+                     vision_resize_retry: Optional[bool] = None):
     target_url = _stream_target_url(url)
-    async with _local_model_slot(target_url, model, workload):
-        async for chunk in _stream_llm_inner(
-            url,
-            model,
-            messages,
-            temperature=temperature,
-            max_tokens=max_tokens,
-            headers=headers,
-            timeout=timeout,
-            prompt_type=prompt_type,
-            tools=tools,
-            session_id=session_id,
-            tool_choice_none=tool_choice_none,
-        ):
-            yield chunk
+    if vision_resize_retry is not None:
+        resize_enabled = bool(vision_resize_retry)
+    else:
+        try:
+            from src.settings import get_setting
+            resize_enabled = bool(
+                get_setting("vision_direct_base64", False)
+                and get_setting("vision_auto_resize_retry", False)
+            )
+        except Exception:
+            resize_enabled = False
+
+    request_messages = messages
+    while True:
+        pending = []
+        emitted = False
+        retry_with_smaller_images = False
+        async with _local_model_slot(target_url, model, workload):
+            async for chunk in _stream_llm_inner(
+                url,
+                model,
+                request_messages,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                headers=headers,
+                timeout=timeout,
+                prompt_type=prompt_type,
+                tools=tools,
+                session_id=session_id,
+                tool_choice_none=tool_choice_none,
+            ):
+                error_text = _stream_error_text(chunk)
+                if resize_enabled and not emitted and _is_retryable_image_size_error(error_text):
+                    smaller, changed, sizes = await asyncio.to_thread(
+                        _resize_data_image_messages,
+                        request_messages,
+                        128,
+                    )
+                    if changed:
+                        logger.info(
+                            "Vision request rejected for image dimensions; retrying temporary request images: %s",
+                            sizes,
+                        )
+                        request_messages = smaller
+                        retry_with_smaller_images = True
+                        break
+
+                if not emitted and _chunk_has_substantive_output(chunk):
+                    emitted = True
+                    for held in pending:
+                        yield held
+                    pending.clear()
+                    yield chunk
+                elif emitted:
+                    yield chunk
+                else:
+                    # Hold metadata and terminal/error chunks until we know an
+                    # image-size rejection will not be retried. This prevents a
+                    # false error flash and keeps fallback accounting coherent.
+                    pending.append(chunk)
+
+        if retry_with_smaller_images:
+            continue
+        for held in pending:
+            yield held
+        return
 
 
 async def _stream_llm_inner(url: str, model: str, messages: List[Dict], temperature: float = LLMConfig.DEFAULT_TEMPERATURE,
                             max_tokens: int = LLMConfig.DEFAULT_MAX_TOKENS, headers: Optional[Dict] = None,
-                            timeout: int = LLMConfig.STREAM_TIMEOUT, prompt_type: Optional[str] = None,
+                            timeout: Optional[float] = LLMConfig.STREAM_TIMEOUT, prompt_type: Optional[str] = None,
                             tools: Optional[List[Dict]] = None, session_id: Optional[str] = None,
                             tool_choice_none: bool = False):
     """Stream LLM responses with improved error handling.

@@ -29,7 +29,7 @@ from src.context_compactor import (
     apply_compaction_state_for_session,
     maybe_compact,
 )
-from src.settings import get_setting
+from src.settings import get_setting, get_user_setting
 from src.prompt_security import untrusted_context_message
 from src.tool_security import (
     blocked_tools_for_owner,
@@ -3697,6 +3697,10 @@ async def stream_agent_loop(
                 timeout=int(get_setting("agent_stream_timeout_seconds", 300) or 300),
                 session_id=session_id,
                 workload=workload,
+                vision_resize_retry=bool(
+                    get_user_setting("vision_direct_base64", owner or "", False)
+                    and get_user_setting("vision_auto_resize_retry", owner or "", False)
+                ),
                 fallback_statuses=fallback_statuses,
                 fallback_on_empty=fallback_on_empty,
                 candidate_request_factory=_direct_candidate_request,
@@ -4950,6 +4954,10 @@ async def stream_agent_loop(
             timeout=agent_stream_timeout,
             session_id=session_id,
             workload=workload,
+            vision_resize_retry=bool(
+                get_user_setting("vision_direct_base64", owner or "", False)
+                and get_user_setting("vision_auto_resize_retry", owner or "", False)
+            ),
             fallback_statuses=fallback_statuses,
             fallback_on_empty=fallback_on_empty,
             candidate_request_factory=_candidate_request,

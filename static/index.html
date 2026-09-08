@@ -1626,6 +1626,14 @@
                   <button type="button" class="settings-fallback-add" id="set-visionAddFallback" title="Add a vision model to try if the one above fails">+ Add fallback</button>
                 </div>
               </div>
+              <label class="vis-row" style="padding:7px 0 2px;">
+                <span class="vis-label">Direct base64 <span class="vis-hint">Send pixels to the selected chat model</span></span>
+                <input type="checkbox" id="set-visionDirectBase64"><span class="vis-switch"></span>
+              </label>
+              <label id="set-visionResizeRetryRow" class="vis-row" style="padding:5px 0 2px;display:none;">
+                <span class="vis-label">Retry smaller <span class="vis-hint">Reduce longest side 128px after a size rejection</span></span>
+                <input type="checkbox" id="set-visionResizeRetry"><span class="vis-switch"></span>
+              </label>
               <div id="set-visionSettingsMsg" style="font-size:11px;color:color-mix(in srgb, var(--fg) 45%, transparent);"></div>
             </div>
           </div>
@@ -1857,7 +1865,11 @@
               </div>
               <div class="settings-row">
                 <label class="settings-label">Timeout</label>
-                <input id="set-researchRunTimeout" type="text" inputmode="numeric" placeholder="1800 sec (0 = no limit)" class="settings-select" style="width:382.5px;flex:0 0 auto;margin-left:auto;">
+                <input id="set-researchRunTimeout" type="text" inputmode="numeric" placeholder="0 (no limit)" class="settings-select" style="width:382.5px;flex:0 0 auto;margin-left:auto;">
+              </div>
+              <div class="settings-row">
+                <label class="settings-label">Writing Timeout</label>
+                <input id="set-researchGenerationTimeout" type="text" inputmode="numeric" placeholder="0 (no limit)" class="settings-select" style="width:382.5px;flex:0 0 auto;margin-left:auto;">
               </div>
             </div>
           </div>

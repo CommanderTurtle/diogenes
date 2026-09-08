@@ -243,7 +243,7 @@ class ResearchHandler:
         query: str,
         llm_endpoint: str,
         llm_model: str,
-        max_time: int = 300,
+        max_time: int = 0,
         hard_timeout: int = None,
         llm_headers: dict = None,
         on_complete: callable = None,
@@ -256,6 +256,10 @@ class ResearchHandler:
         extraction_timeout: int = None,
         extraction_concurrency: int = None,
         owner: str = "",
+        document_mode: str = "research",
+        story_kind: str = "fiction",
+        attachment_ids: list = None,
+        upload_handler=None,
     ) -> dict:
         """Start research as a background task. Returns task info dict.
 
@@ -274,15 +278,15 @@ class ResearchHandler:
         if hard_timeout is None:
             from src.settings import get_setting
             try:
-                raw_timeout = int(get_setting("research_run_timeout_seconds", 1800))
+                raw_timeout = int(get_setting("research_run_timeout_seconds", 0))
             except (TypeError, ValueError):
-                raw_timeout = 1800
+                raw_timeout = 0
             if raw_timeout <= 0:
                 hard_timeout = None  # 0 = no wall-clock cap (asyncio.wait_for timeout=None)
             else:
                 hard_timeout = _bounded_int(
                     raw_timeout,
-                    default=1800,
+                    default=0,
                     minimum=60,
                     maximum=86400,
                 )
@@ -302,6 +306,9 @@ class ResearchHandler:
             "result": None,
             "started_at": time.time(),
             "category": category,
+            "document_mode": document_mode,
+            "story_kind": story_kind,
+            "attachments": list(attachment_ids or []),
             # SECURITY: track ownership so all reads / saves can filter by user.
             "owner": owner or "",
         }
@@ -339,6 +346,11 @@ class ResearchHandler:
                         category=category,
                         extraction_timeout=extraction_timeout,
                         extraction_concurrency=extraction_concurrency,
+                        document_mode=document_mode,
+                        story_kind=story_kind,
+                        attachment_ids=attachment_ids,
+                        upload_handler=upload_handler,
+                        owner=owner,
                     ),
                     timeout=hard_timeout,
                 )
@@ -625,6 +637,9 @@ class ResearchHandler:
                 "raw_findings": raw_findings,
                 "stats": entry.get("stats"),
                 "category": entry.get("category"),
+                "document_mode": entry.get("document_mode", "research"),
+                "story_kind": entry.get("story_kind", "fiction"),
+                "attachments": entry.get("attachments", []),
                 "started_at": entry["started_at"],
                 "completed_at": time.time(),
                 # SECURITY: stamp owner so route handlers can filter by user.
@@ -672,6 +687,8 @@ class ResearchHandler:
                 sources=data.get("sources"),
                 stats=data.get("stats"),
                 category=data.get("category"),
+                document_mode=data.get("document_mode", "research"),
+                story_kind=data.get("story_kind", "fiction"),
                 session_id=session_id,
                 hidden_images=data.get("hidden_images") or [],
             )
@@ -719,7 +736,141 @@ class ResearchHandler:
             return False
 
     @staticmethod
-    async def _probe_endpoint(endpoint: str, model: str, headers: dict = None):
+    async def _prepare_source_material(
+        attachment_ids: list,
+        upload_handler,
+        owner: str,
+        endpoint: str,
+        model: str,
+        headers: dict,
+        generation_timeout,
+        progress_callback=None,
+    ) -> str:
+        """Extract drafts/documents and describe reference images once per job."""
+        if not attachment_ids or upload_handler is None:
+            return ""
+
+        from src.constants import UPLOAD_DIR
+        from src.document_processor import build_user_content, analyze_image_with_vl_result
+        from src.settings import get_user_setting
+
+        resolved = {}
+        attachment_lines = []
+        image_files = []
+        for attachment_id in attachment_ids:
+            info = upload_handler.resolve_upload(str(attachment_id), owner=owner)
+            if not info:
+                continue
+            resolved[str(attachment_id)] = info
+            name = info.get("name") or info.get("original_name") or str(attachment_id)
+            attachment_lines.append(f"- {name} ({info.get('mime') or 'unknown type'})")
+            if upload_handler.is_image_file(name, info.get("mime", "")):
+                image_files.append(info)
+
+        if not resolved:
+            return ""
+        if progress_callback:
+            progress_callback({"phase": "reading", "message": "Reading supplied drafts and references…"})
+
+        content = await asyncio.to_thread(
+            build_user_content,
+            "",
+            list(resolved),
+            UPLOAD_DIR,
+            upload_handler,
+            owner=owner,
+            resolved_uploads=resolved,
+        )
+        text_parts = []
+        image_parts = []
+        if isinstance(content, list):
+            for part in content:
+                if not isinstance(part, dict):
+                    continue
+                if part.get("type") == "text" and str(part.get("text") or "").strip():
+                    text_parts.append(str(part["text"]).strip())
+                elif part.get("type") == "image_url":
+                    image_parts.append(part)
+        elif str(content or "").strip():
+            text_parts.append(str(content).strip())
+
+        image_notes = ""
+        direct = bool(get_user_setting("vision_direct_base64", owner or "", False))
+        resize_retry = bool(get_user_setting("vision_auto_resize_retry", owner or "", False))
+        if image_parts and direct:
+            from src.llm_core import (
+                llm_call_async,
+                _is_retryable_image_size_error,
+                _resize_data_image_messages,
+            )
+            vision_messages = [{
+                "role": "user",
+                "content": [{
+                    "type": "text",
+                    "text": (
+                        "Create detailed, factual source notes for these user-supplied visual "
+                        "references. Transcribe visible text, identify layout and relationships, "
+                        "and clearly mark uncertainty. Do not invent details."
+                    ),
+                }] + image_parts,
+            }]
+            while True:
+                try:
+                    image_notes = await llm_call_async(
+                        url=endpoint,
+                        model=model,
+                        messages=vision_messages,
+                        temperature=0.1,
+                        max_tokens=4096,
+                        headers=headers,
+                        timeout=generation_timeout,
+                        workload="background",
+                    )
+                    image_notes = strip_thinking(image_notes).strip()
+                    break
+                except Exception as exc:
+                    if not resize_retry or not _is_retryable_image_size_error(str(exc)):
+                        logger.warning("Direct research image ingestion failed: %s", exc)
+                        break
+                    smaller, changed, sizes = await asyncio.to_thread(
+                        _resize_data_image_messages, vision_messages, 128,
+                    )
+                    if not changed:
+                        logger.warning("Direct research image retry reached minimum size")
+                        break
+                    logger.info("Retrying research reference images at %s", sizes)
+                    vision_messages = smaller
+        elif image_files:
+            descriptions = []
+            for info in image_files:
+                try:
+                    result = await asyncio.to_thread(
+                        analyze_image_with_vl_result,
+                        info["path"],
+                        owner=owner,
+                    )
+                    desc = str((result or {}).get("text") or "").strip()
+                    if desc:
+                        name = info.get("name") or info.get("original_name") or "image"
+                        descriptions.append(f"### Visual reference: {name}\n{desc}")
+                except Exception as exc:
+                    logger.warning("Research image description failed: %s", exc)
+            image_notes = "\n\n".join(descriptions)
+
+        sections = ["Attachments:\n" + "\n".join(attachment_lines)]
+        if text_parts:
+            sections.append("\n\n".join(text_parts))
+        if image_notes:
+            sections.append("Visual reference notes:\n" + image_notes)
+        return "\n\n".join(sections)[:60000]
+
+    @staticmethod
+    async def _probe_endpoint(
+        endpoint: str,
+        model: str,
+        headers: dict = None,
+        timeout=None,
+    ):
         """Quick probe to verify the LLM endpoint/model responds before research."""
         from src.llm_core import llm_call_async
         try:
@@ -731,7 +882,7 @@ class ResearchHandler:
                 temperature=0,
                 max_tokens=5,
                 headers=headers,
-                timeout=15,
+                timeout=timeout,
                 max_retries=1,
             )
             logger.info(f"Endpoint probe OK: {model}")
@@ -744,7 +895,7 @@ class ResearchHandler:
         query: str,
         llm_endpoint: str,
         llm_model: str,
-        max_time: int = 300,
+        max_time: int = 0,
         progress_callback=None,
         _task_entry: dict = None,
         llm_headers: dict = None,
@@ -756,6 +907,11 @@ class ResearchHandler:
         category: str = None,
         extraction_timeout: int = None,
         extraction_concurrency: int = None,
+        document_mode: str = "research",
+        story_kind: str = "fiction",
+        attachment_ids: list = None,
+        upload_handler=None,
+        owner: str = "",
     ) -> str:
         """
         Run iterative deep research using the LLM-in-the-loop DeepResearcher.
@@ -764,7 +920,7 @@ class ResearchHandler:
             query: Research question
             llm_endpoint: LLM endpoint URL for chat completions
             llm_model: Model name/ID
-            max_time: Maximum research time in seconds (default 5 minutes)
+            max_time: Maximum research time in seconds (0 means unlimited)
             _task_entry: Internal - registry entry to store researcher ref
             prior_report: Previous report to continue from.
             prior_findings: Previous findings to build on.
@@ -777,14 +933,9 @@ class ResearchHandler:
         logger.info(f"{'Continuing' if is_continuation else 'Starting'} IterResearch Deep Research")
         logger.info(f"Query: {query}")
         logger.info(f"LLM: {llm_endpoint} / {llm_model}")
-        logger.info(f"Max time: {max_time}s")
+        logger.info("Max time: %s", f"{max_time}s" if max_time else "unlimited")
         if is_continuation:
             logger.info(f"Prior: {len(prior_findings or [])} findings, {len(prior_urls or set())} URLs")
-
-        # Probe the endpoint before committing to a long research run
-        if progress_callback:
-            progress_callback({"phase": "probing", "model": llm_model})
-        await self._probe_endpoint(llm_endpoint, llm_model, llm_headers)
 
         try:
             from src.deep_research import DeepResearcher
@@ -815,6 +966,37 @@ class ResearchHandler:
                 minimum=15,
                 maximum=3600,
             )
+            try:
+                _raw_generation_timeout = float(get_setting("research_generation_timeout_seconds", 0) or 0)
+            except (TypeError, ValueError):
+                _raw_generation_timeout = 0
+            _generation_timeout = (
+                min(86400.0, max(60.0, _raw_generation_timeout))
+                if _raw_generation_timeout > 0
+                else None
+            )
+
+            # Probe after timeout resolution. A cold local 27B model can need
+            # far longer than the old 15-second probe even though it is healthy.
+            if progress_callback:
+                progress_callback({"phase": "probing", "model": llm_model})
+            await self._probe_endpoint(
+                llm_endpoint,
+                llm_model,
+                llm_headers,
+                timeout=_generation_timeout,
+            )
+
+            source_material = await self._prepare_source_material(
+                attachment_ids or [],
+                upload_handler,
+                owner,
+                llm_endpoint,
+                llm_model,
+                llm_headers,
+                _generation_timeout,
+                progress_callback,
+            )
 
             researcher = DeepResearcher(
                 llm_endpoint=llm_endpoint,
@@ -831,6 +1013,10 @@ class ResearchHandler:
                 progress_callback=progress_callback,
                 search_provider=search_provider,
                 category=category,
+                document_mode=document_mode,
+                story_kind=story_kind,
+                source_material=source_material,
+                generation_timeout=_generation_timeout,
             )
             if _task_entry is not None:
                 _task_entry["researcher"] = researcher

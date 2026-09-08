@@ -71,7 +71,13 @@ async function _reconnectActive(options = {}) {
           elapsed: task.started_at ? Date.now() - task.started_at * 1000 : 0,
           result: null, sources: null, findings: null,
           errorMsg: null, avgDuration: null, modelName: null,
-          settings: {}, _es: null, _timerInterval: null,
+          documentMode: task.document_mode || 'research',
+          storyKind: task.story_kind || 'fiction',
+          settings: {
+            document_mode: task.document_mode || 'research',
+            story_kind: task.story_kind || 'fiction',
+            _attachments: Array.isArray(task.attachments) ? task.attachments : [],
+          }, _es: null, _timerInterval: null,
         };
         _jobs.push(job);
         _connectStream(job);
@@ -111,6 +117,8 @@ async function _syncLibrary(options = {}) {
             analyzedCount: item.analyzed_count ?? existing.analyzedCount ?? 0,
             thumbnail: item.thumbnail || existing.thumbnail || '',
             category: item.category || existing.category || '',
+            documentMode: item.document_mode || existing.documentMode || 'research',
+            storyKind: item.story_kind || existing.storyKind || 'fiction',
             _fromLibrary: true,
           };
           for (const [key, value] of Object.entries(updates)) {
@@ -130,6 +138,8 @@ async function _syncLibrary(options = {}) {
           analyzedCount: item.analyzed_count ?? 0,
           thumbnail: item.thumbnail || '',
           category: item.category || '',
+          documentMode: item.document_mode || 'research',
+          storyKind: item.story_kind || 'fiction',
           errorMsg: null, avgDuration: null, modelName: null,
           settings: { max_rounds: item.rounds || 8 },
           _es: null, _timerInterval: null, _fromLibrary: true,
@@ -268,6 +278,8 @@ function _makeJob(query, settings) {
     result: null, sources: null, findings: null,
     analyzedCount: 0,
     category: settings?.category || '',
+    documentMode: settings?.document_mode || 'research',
+    storyKind: settings?.story_kind || 'fiction',
     errorMsg: null, avgDuration: null,
     modelName: null, endpointName: null,
     _es: null, _timerInterval: null,
@@ -275,7 +287,10 @@ function _makeJob(query, settings) {
 }
 
 async function _launchJob(job) {
-  const body = { query: job.query, ...job.settings };
+  const body = { query: job.query };
+  for (const [key, value] of Object.entries(job.settings || {})) {
+    if (!key.startsWith('_')) body[key] = value;
+  }
   let data;
   try {
     const res = await fetch(`${_apiBase}/api/research/start`, {
@@ -380,6 +395,8 @@ async function _fetchResult(job) {
     job.sources = d.sources;
     job.findings = d.raw_findings;
     if (d.category && !job.category) job.category = d.category;
+    if (d.document_mode) job.documentMode = d.document_mode;
+    if (d.story_kind) job.storyKind = d.story_kind;
     _notify();
   } catch {}
 }

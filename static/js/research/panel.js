@@ -62,6 +62,8 @@ let _expandedJobId = null;
 let _markdownModule = null;
 let _sessionModule = null;
 let _settingsCollapsed = false;
+let _researchAttachments = [];
+let _attachmentUploadBusy = false;
 const _SETTINGS_KEY = 'odysseus-research-settings';
 const _COLLAPSE_KEY = 'odysseus-research-settings-collapsed';
 
@@ -75,6 +77,8 @@ function _saveSettingsToStorage() {
       endpoint_id: document.getElementById('research-endpoint')?.value || '',
       model: document.getElementById('research-model')?.value || '',
       category: document.getElementById('research-category')?.value || '',
+      document_mode: document.getElementById('research-document-mode')?.value || 'research',
+      story_kind: document.getElementById('research-story-kind')?.value || 'fiction',
     }));
   } catch {}
 }
@@ -374,15 +378,39 @@ function _buildPanelHTML() {
           <span id="research-no-past-hint" style="display:none;font:inherit;opacity:1;position:static;">All past research found in: <button type="button" class="research-library-link" style="background:none;border:none;padding:0;font:inherit;color:var(--accent, var(--red));cursor:pointer;text-decoration:underline;">Library, Research</button></span>
         </p>
         <textarea id="research-query" class="research-query" placeholder="${_pickResearchHint()}" rows="4"></textarea>
+        <div class="research-source-compose">
+          <input id="research-source-input" type="file" multiple hidden>
+          <button id="research-source-btn" class="research-source-btn" type="button" title="Add images, drafts, PDFs, or other source material">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05 12.25 20.24a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+            Add sources
+          </button>
+          <span id="research-source-status" class="research-source-status"></span>
+          <div id="research-source-list" class="research-source-list"></div>
+        </div>
         <button id="research-settings-toggle" class="research-settings-toggle${chevronCls}">
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:4px;opacity:0.85;flex-shrink:0;"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>Settings<span class="research-settings-chevron">${_chevronIcon}</span>
         </button>
         <div id="research-settings-body" class="research-settings-row"${settingsHidden}>
           <label class="research-setting">
+            <span class="research-setting-label">Mode</span>
+            <select id="research-document-mode">
+              <option value="research" selected>Research</option>
+              <option value="arxiv">arXiv paper</option>
+              <option value="novel">Novel</option>
+            </select>
+          </label>
+          <label id="research-story-kind-wrap" class="research-setting" hidden>
+            <span class="research-setting-label">Story</span>
+            <select id="research-story-kind">
+              <option value="fiction" selected>Fiction</option>
+              <option value="nonfiction">Nonfiction</option>
+            </select>
+          </label>
+          <label class="research-setting">
             <span class="research-setting-label">Rounds <span class="hwfit-help-chip hwfit-help-chip-inline" title="How many search → read → reflect rounds the agent runs. More rounds = deeper coverage, longer wait, more tokens.">?</span></span>
             <select id="research-rounds">${roundOpts}</select>
           </label>
-          <label class="research-setting">
+          <label id="research-category-wrap" class="research-setting">
             <span class="research-setting-label">Format <span class="hwfit-help-chip hwfit-help-chip-inline" title="Auto lets the LLM pick the output shape. Override when you specifically want a Compare table, How-to, Product, or Fact-check.">?</span></span>
             <select id="research-category">
               <option value="" selected>Auto</option>
@@ -476,17 +504,101 @@ function _wireEvents(pane) {
   const endpointSelect = pane.querySelector('#research-endpoint');
   endpointSelect.addEventListener('change', () => _populateModels(endpointSelect.value));
 
+  pane.querySelector('#research-document-mode')?.addEventListener('change', _syncModeControls);
+  pane.querySelector('#research-source-btn')?.addEventListener('click', () => {
+    if (!_attachmentUploadBusy) pane.querySelector('#research-source-input')?.click();
+  });
+  pane.querySelector('#research-source-input')?.addEventListener('change', (e) => {
+    const files = Array.from(e.target.files || []);
+    e.target.value = '';
+    if (files.length) _uploadResearchSources(files);
+  });
+
+  _syncModeControls();
+  _renderResearchSources();
   _renderJobs();
+}
+
+function _syncModeControls() {
+  const mode = document.getElementById('research-document-mode')?.value || 'research';
+  const story = document.getElementById('research-story-kind-wrap');
+  const format = document.getElementById('research-category-wrap');
+  if (story) story.hidden = mode !== 'novel';
+  if (format) format.hidden = mode !== 'research';
+}
+
+function _renderResearchSources() {
+  const list = document.getElementById('research-source-list');
+  if (!list) return;
+  list.innerHTML = _researchAttachments.map((item, index) => `
+    <span class="research-source-chip" title="${_escAttr(item.mime || '')}">
+      <span class="research-source-chip-name">${_esc(item.name || item.id)}</span>
+      <button type="button" data-source-index="${index}" aria-label="Remove ${_escAttr(item.name || 'source')}">&#215;</button>
+    </span>`).join('');
+  list.querySelectorAll('[data-source-index]').forEach((button) => {
+    button.addEventListener('click', () => {
+      _researchAttachments.splice(Number(button.dataset.sourceIndex), 1);
+      _renderResearchSources();
+    });
+  });
+}
+
+async function _uploadResearchSources(files) {
+  if (_attachmentUploadBusy || !files.length) return;
+  const button = document.getElementById('research-source-btn');
+  const status = document.getElementById('research-source-status');
+  const form = new FormData();
+  files.forEach(file => form.append('files', file, file.name || 'source'));
+  _attachmentUploadBusy = true;
+  if (button) button.disabled = true;
+  if (status) status.textContent = `Adding ${files.length} source${files.length === 1 ? '' : 's'}…`;
+  try {
+    const response = await fetch(`${_apiBase}/api/upload`, {
+      method: 'POST', body: form, credentials: 'same-origin',
+    });
+    if (!response.ok) {
+      let detail = `HTTP ${response.status}`;
+      try { const body = await response.json(); detail = body.detail || body.error || detail; } catch {}
+      throw new Error(detail);
+    }
+    const data = await response.json();
+    const known = new Set(_researchAttachments.map(item => item.id));
+    for (const item of (data.files || [])) {
+      if (item?.id && !known.has(item.id)) {
+        _researchAttachments.push(item);
+        known.add(item.id);
+      }
+    }
+    _renderResearchSources();
+    if (status) status.textContent = '';
+  } catch (error) {
+    if (status) status.textContent = `Upload failed: ${error?.message || error}`;
+    if (uiModule?.showError) uiModule.showError('Failed to add research source');
+  } finally {
+    _attachmentUploadBusy = false;
+    if (button) button.disabled = false;
+  }
+}
+
+function _clearResearchSources() {
+  _researchAttachments = [];
+  _renderResearchSources();
 }
 
 function _readSettings() {
   const category = document.getElementById('research-category')?.value || undefined;
+  const documentMode = document.getElementById('research-document-mode')?.value || 'research';
   const settings = {
     max_rounds: parseInt(document.getElementById('research-rounds')?.value || '0', 10),
     search_provider: document.getElementById('research-search-provider')?.value || undefined,
     endpoint_id: document.getElementById('research-endpoint')?.value || undefined,
     model: document.getElementById('research-model')?.value || undefined,
-    category: category || undefined,
+    category: documentMode === 'research' ? (category || undefined) : undefined,
+    document_mode: documentMode,
+    story_kind: documentMode === 'novel'
+      ? (document.getElementById('research-story-kind')?.value || 'fiction') : undefined,
+    attachment_ids: _researchAttachments.map(item => item.id),
+    _attachments: _researchAttachments.map(item => ({ id: item.id, name: item.name, mime: item.mime })),
   };
   const epSel = document.getElementById('research-endpoint');
   if (epSel && epSel.value) {
@@ -506,6 +618,7 @@ function _handleAdd() {
   _saveSettingsToStorage();
   jobs.addToQueue(query, _readSettings());
   queryEl.value = '';
+  _clearResearchSources();
   queryEl.focus();
 }
 
@@ -523,6 +636,13 @@ function _editJob(job) {
   if (catSel) catSel.value = cat;
   // Restore settings
   const s = job.settings || {};
+  const modeEl = document.getElementById('research-document-mode');
+  if (modeEl) modeEl.value = s.document_mode || job.documentMode || 'research';
+  const storyEl = document.getElementById('research-story-kind');
+  if (storyEl) storyEl.value = s.story_kind || job.storyKind || 'fiction';
+  _researchAttachments = Array.isArray(s._attachments) ? s._attachments.map(item => ({ ...item })) : [];
+  _syncModeControls();
+  _renderResearchSources();
   const roundsEl = document.getElementById('research-rounds');
   if (roundsEl && s.max_rounds) roundsEl.value = s.max_rounds;
   const spEl = document.getElementById('research-search-provider');
@@ -547,7 +667,7 @@ async function _handleStart() {
   // it joins the batch, then open the picker anchored to this button.
   const queuedCount = jobs.getJobs().filter(j => j.status === 'queued').length;
   if (queuedCount > 1) {
-    if (query) { _saveSettingsToStorage(); jobs.addToQueue(query, _readSettings()); queryEl.value = ''; }
+    if (query) { _saveSettingsToStorage(); jobs.addToQueue(query, _readSettings()); queryEl.value = ''; _clearResearchSources(); }
     _resetCategoryToAuto();
     if (window.innerWidth <= 768) _dismissKeyboard(queryEl);
     const total = jobs.getJobs().filter(j => j.status === 'queued').length;
@@ -594,6 +714,7 @@ async function _handleStart() {
   _saveSettingsToStorage();
   const settings = _readSettings();
   queryEl.value = '';
+  _clearResearchSources();
   // Mobile: drop the keyboard after sending; desktop: keep focus for fast follow-ups.
   if (_mobile) _dismissKeyboard(queryEl); else queryEl.focus();
   _resetCategoryToAuto();
@@ -610,6 +731,11 @@ function _restoreSavedSettings() {
     const catSel = document.getElementById('research-category');
     if (catSel) catSel.value = saved.category;
   }
+  const mode = document.getElementById('research-document-mode');
+  if (mode && saved.document_mode) mode.value = saved.document_mode;
+  const story = document.getElementById('research-story-kind');
+  if (story && saved.story_kind) story.value = saved.story_kind;
+  _syncModeControls();
   // Rounds intentionally defaults to "Auto" on every open — don't restore.
   // Users can pick a specific cap each time if needed.
   const search = document.getElementById('research-search-provider');
@@ -885,6 +1011,17 @@ function _promptParallelOrSequential(count, anchorBtn) {
   });
 }
 
+function _jobModeBadge(job, includeStandard = false) {
+  const mode = job.documentMode || job.settings?.document_mode || 'research';
+  if (mode === 'arxiv') return '<span class="research-cat-badge research-mode-arxiv">arXiv</span>';
+  if (mode === 'novel') {
+    const kind = job.storyKind || job.settings?.story_kind || 'fiction';
+    return `<span class="research-cat-badge research-mode-novel">${_esc(kind === 'nonfiction' ? 'Nonfiction' : 'Fiction')}</span>`;
+  }
+  if (job.category) return `<span class="research-cat-badge">${_esc(job.category)}</span>`;
+  return includeStandard ? '<span class="research-cat-badge research-cat-standard">standard</span>' : '';
+}
+
 function _buildJobCard(job) {
   const card = document.createElement('div');
   card.className = `research-job-card ${job.status}${job._fromLibrary ? ' from-library' : ''}`;
@@ -893,6 +1030,7 @@ function _buildJobCard(job) {
 
   const elapsed = jobs.formatElapsed(job.elapsed || 0);
   const isExpanded = _expandedJobId === job.id;
+  const modeBadge = _jobModeBadge(job);
   const modelTag = (job.modelName || job.settings?._modelName)
     ? `<span class="research-job-model">${_esc(job.modelName || job.settings._modelName)}</span>` : '';
 
@@ -904,7 +1042,7 @@ function _buildJobCard(job) {
     const meta = [mName, epName, roundsLabel].filter(Boolean).join(' -- ');
     card.innerHTML = `
       <div class="research-job-header">
-        <span class="research-job-query">${_esc(job.query)}</span>${job.category ? `<span class="research-cat-badge">${_esc(job.category)}</span>` : ""}
+        <span class="research-job-query">${_esc(job.query)}</span>${modeBadge}
       </div>
       <div class="research-job-queued-meta">${_esc(meta)}</div>
       <div class="research-job-actions">
@@ -934,7 +1072,7 @@ function _buildJobCard(job) {
     const pct = Math.min(100, Math.round((round / barCap) * 100));
     card.innerHTML = `
       <div class="research-job-header">
-        <span class="research-job-query">${_esc(job.query)}</span>${job.category ? `<span class="research-cat-badge">${_esc(job.category)}</span>` : ""}
+        <span class="research-job-query">${_esc(job.query)}</span>${modeBadge}
         ${modelTag}
         <span class="research-job-time">${elapsed}</span>
         <button class="research-synapse-toggle${_synapseMinimized ? ' active' : ''}" title="${_synapseMinimized ? 'Show visualization' : 'Minimize visualization'}">${_synapseMinimized ? _vizExpandIcon : _vizCollapseIcon}</button>
@@ -994,7 +1132,7 @@ function _buildJobCard(job) {
     if (failed) card.classList.add('research-job-failed');
     const doneBadge = failed
       ? `<span class="research-cat-badge research-cat-failed">${_cancelIcon} ${extractionFailed ? 'extraction failed' : 'no results'}</span>`
-      : (job.category ? `<span class="research-cat-badge">${_esc(job.category)}</span>` : `<span class="research-cat-badge research-cat-standard">standard</span>`);
+      : _jobModeBadge(job, true);
     const failNote = failed
       ? `<div class="research-job-failnote">${extractionFailed
           ? `Found and rendered ${analyzedCount} page${analyzedCount === 1 ? '' : 's'}, but the research model returned no usable source extracts. Rerun after changing the research model or extraction settings.`
@@ -1060,7 +1198,7 @@ function _buildJobCard(job) {
     const errMsg = job.errorMsg ? `<div class="research-job-error">${_esc(job.errorMsg)}</div>` : '';
     card.innerHTML = `
       <div class="research-job-header">
-        <span class="research-job-query">${_esc(job.query)}</span>${job.category ? `<span class="research-cat-badge">${_esc(job.category)}</span>` : ""}
+        <span class="research-job-query">${_esc(job.query)}</span>${modeBadge}
         <span class="research-job-status">${job.status}</span>
       </div>
       ${errMsg}
@@ -1254,6 +1392,10 @@ function _esc(s) {
   const d = document.createElement('div');
   d.textContent = s || '';
   return d.innerHTML;
+}
+
+function _escAttr(s) {
+  return _esc(s).replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
 function _safeSourceHref(raw) {

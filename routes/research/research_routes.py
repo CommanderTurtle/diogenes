@@ -7,7 +7,7 @@ import re
 import uuid
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Literal, Optional
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, StreamingResponse
@@ -272,6 +272,8 @@ def setup_research_routes(research_handler, session_manager=None) -> APIRouter:
                     "status": "running",
                     "progress": entry.get("progress", {}),
                     "started_at": entry.get("started_at", 0),
+                    "document_mode": entry.get("document_mode", "research"),
+                    "story_kind": entry.get("story_kind", "fiction"),
                 })
         return {"active": active}
 
@@ -399,6 +401,8 @@ def setup_research_routes(research_handler, session_manager=None) -> APIRouter:
                     "id": p.stem,
                     "query": query,
                     "category": d.get("category") or "",
+                    "document_mode": d.get("document_mode", "research"),
+                    "story_kind": d.get("story_kind", "fiction"),
                     "source_count": len(sources),
                     "analyzed_count": analyzed_count,
                     "status": d.get("status", "done"),
@@ -490,10 +494,15 @@ def setup_research_routes(research_handler, session_manager=None) -> APIRouter:
         search_provider: Optional[str] = None
         endpoint_id: Optional[str] = None
         model: Optional[str] = None
-        max_time: int = Field(default=300, ge=60, le=1800)
+        # 0 means no soft wall-clock deadline. Manual cancellation and the
+        # configured round count remain available.
+        max_time: int = Field(default=0, ge=0, le=86400)
         extraction_timeout: Optional[int] = Field(default=None, ge=15, le=3600)
         extraction_concurrency: Optional[int] = Field(default=None, ge=1, le=12)
         category: Optional[str] = None
+        document_mode: Literal["research", "arxiv", "novel"] = "research"
+        story_kind: Literal["fiction", "nonfiction"] = "fiction"
+        attachment_ids: list[str] = Field(default_factory=list, max_length=20)
 
     @router.post("/api/research/start")
     async def research_start(body: ResearchStartRequest, request: Request):
@@ -579,6 +588,10 @@ def setup_research_routes(research_handler, session_manager=None) -> APIRouter:
             extraction_timeout=body.extraction_timeout,
             extraction_concurrency=body.extraction_concurrency,
             owner=user,
+            document_mode=body.document_mode,
+            story_kind=body.story_kind,
+            attachment_ids=body.attachment_ids,
+            upload_handler=getattr(request.app.state, "upload_handler", None),
         )
         return {"session_id": session_id, "status": "running", "query": body.query}
 
@@ -632,11 +645,21 @@ def setup_research_routes(research_handler, session_manager=None) -> APIRouter:
                     "sources": d.get("sources", []),
                     "raw_findings": d.get("raw_findings", []),
                     "category": d.get("category") or "",
+                    "document_mode": d.get("document_mode", "research"),
+                    "story_kind": d.get("story_kind", "fiction"),
                 }
             raise HTTPException(404, "No research result available")
         sources = research_handler.get_sources(session_id) or []
         raw_findings = research_handler.get_raw_findings(session_id) or []
-        return {"result": result, "sources": sources, "raw_findings": raw_findings, "category": ""}
+        task = research_handler._active_tasks.get(session_id, {})
+        return {
+            "result": result,
+            "sources": sources,
+            "raw_findings": raw_findings,
+            "category": task.get("category") or "",
+            "document_mode": task.get("document_mode", "research"),
+            "story_kind": task.get("story_kind", "fiction"),
+        }
 
     @router.post("/api/research/spinoff/{session_id}")
     async def research_spinoff(session_id: str, request: Request):
