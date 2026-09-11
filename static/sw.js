@@ -7,7 +7,7 @@
 //   - Other static assets (images/fonts/libs): cache-first with bg refresh.
 //   - API / non-GET: never cached.
 // Bump CACHE_NAME whenever the precache list or SW logic changes.
-const CACHE_NAME = 'odysseus-v382-operator-venvs-xterm';
+const CACHE_NAME = 'odysseus-v384-roboomp-workspace';
 
 // KaTeX resolves these from its own stylesheet, so caching the CSS without them
 // gives offline math fallback glyphs instead of proper typesetting.
@@ -68,6 +68,9 @@ const PRECACHE = [
   '/static/js/cookbookRunning.js',
   '/static/js/cookbookServe.js',
   '/static/js/ulyssesServices.js',
+  '/static/js/librarianWorkspace.js',
+  '/static/js/persephoneWorkspace.js',
+  '/static/js/roboompWorkspace.js',
   '/static/js/search-chat.js',
   '/static/js/compare/index.js',
   '/static/js/theme.js',

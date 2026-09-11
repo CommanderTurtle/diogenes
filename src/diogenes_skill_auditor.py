@@ -9,6 +9,7 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
+import threading
 from typing import Any
 
 from src.constants import DATA_DIR
@@ -16,6 +17,9 @@ from src.ulysses_jobs import RuntimeJobError, RuntimeJobStore, native_host_envir
 
 
 SKILL_ID_RE = re.compile(r"^[A-Za-z0-9._-]+:[^\r\n\0]{1,500}$")
+QUERY_RE = re.compile(r"^[^\r\n\0]{1,500}$")
+_CATALOG_LOCK = threading.RLock()
+_CATALOG_CACHE: dict[str, Any] | None = None
 
 
 def _services_root() -> Path:
@@ -138,6 +142,296 @@ def _retrieval_skills() -> list[dict[str, Any]]:
     )
 
 
+def _retrieval_json(arguments: list[str], *, timeout: int = 180) -> Any:
+    result = subprocess.run(
+        [str(_cli()), *arguments],
+        env=native_host_environment(),
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        check=False,
+    )
+    if result.returncode:
+        raise RuntimeJobError(
+            result.stderr.strip()
+            or result.stdout.strip()
+            or f"Retrieval {' '.join(arguments)} failed"
+        )
+    try:
+        return json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        raise RuntimeJobError(
+            f"Retrieval {' '.join(arguments)} returned invalid JSON"
+        ) from exc
+
+
+def _catalog_browse(*, refresh: bool = False) -> dict[str, Any]:
+    """Load Retrieval's graph once per Diogenes process or explicit refresh."""
+
+    global _CATALOG_CACHE
+    with _CATALOG_LOCK:
+        if _CATALOG_CACHE is not None and not refresh:
+            return _CATALOG_CACHE
+        payload = _retrieval_json(["catalog", "browse"], timeout=300)
+        if not isinstance(payload, dict) or not isinstance(payload.get("skills"), list):
+            raise RuntimeJobError("Retrieval returned an invalid catalog graph")
+        _CATALOG_CACHE = payload
+        return payload
+
+
+def _facet_counts(payload: dict[str, Any], name: str) -> list[dict[str, Any]]:
+    facets = payload.get("facets")
+    values = facets.get(name) if isinstance(facets, dict) else {}
+    if not isinstance(values, dict):
+        return []
+    rows = [
+        {"name": str(key), "count": len(value) if isinstance(value, list) else 0}
+        for key, value in values.items()
+    ]
+    return sorted(rows, key=lambda row: (-int(row["count"]), row["name"].casefold()))
+
+
+def _compact_catalog_skill(
+    value: dict[str, Any],
+    admin: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    skill_id = str(value.get("item_id") or "")
+    observed = admin.get(skill_id, {})
+    duplicate_paths = list(dict.fromkeys(
+        str(path) for path in value.get("duplicate_paths") or [] if path
+    ))
+    duplicate_sources = list(dict.fromkeys(
+        str(source) for source in value.get("duplicate_sources") or [] if source
+    ))
+    return {
+        "skill_id": skill_id,
+        "name": str(value.get("title") or observed.get("name") or skill_id),
+        "description": str(value.get("description") or observed.get("description") or ""),
+        "source": str(value.get("source") or observed.get("source") or ""),
+        "state": str(value.get("state") or observed.get("state") or ""),
+        "categories": [str(item) for item in value.get("categories") or []],
+        "tags": [str(item) for item in value.get("tags") or []],
+        "native_harnesses": [
+            str(item) for item in value.get("native_harnesses") or []
+        ],
+        "hidden_harnesses": [
+            str(item) for item in value.get("hidden_harnesses") or []
+        ],
+        "canonical_path": str(value.get("canonical_path") or ""),
+        "relative_path": str(value.get("relative_path") or ""),
+        "package_hash": str(value.get("package_hash") or ""),
+        "graph_key": str(value.get("graph_key") or ""),
+        "modified_at": str(observed.get("modified_at") or ""),
+        "bytes": int(observed.get("bytes") or 0),
+        "duplicate_count": max(len(duplicate_paths), len(duplicate_sources), 1),
+        "duplicate_paths": duplicate_paths,
+        "duplicate_sources": duplicate_sources,
+        # Retrieval refuses edits to native/archived sources. Diogenes is even
+        # narrower: dormant catalog packages stay read-only in this workspace.
+        "editable": observed.get("state") == "active"
+        and not bool(observed.get("symlinked")),
+    }
+
+
+def collect_retrieval_catalog(*, refresh: bool = False) -> dict[str, Any]:
+    """Return a browser-sized view of Retrieval's structured graph."""
+
+    payload = _catalog_browse(refresh=refresh)
+    admin_rows = _retrieval_skills()
+    admin = {
+        str(value.get("skill_id") or ""): value
+        for value in admin_rows
+        if value.get("skill_id")
+    }
+    skills = [
+        _compact_catalog_skill(value, admin)
+        for value in payload.get("skills") or []
+        if isinstance(value, dict) and value.get("item_id")
+    ]
+    skills.sort(key=lambda row: (row["name"].casefold(), row["skill_id"]))
+    node_counts = {
+        str(value.get("id") or ""): int(value.get("count") or 0)
+        for value in payload.get("nodes") or []
+        if isinstance(value, dict)
+    }
+    roots = [
+        {
+            "id": str(value.get("id") or ""),
+            "label": str(value.get("label") or ""),
+            "kind": str(value.get("kind") or "source"),
+            "count": node_counts.get(
+                str(value.get("id") or ""),
+                len(value.get("children") or []),
+            ),
+        }
+        for value in payload.get("roots") or []
+        if isinstance(value, dict)
+    ]
+    return {
+        "schema_version": "diogenes.retrieval-workspace.v1",
+        "generated_at": str(payload.get("generated_at") or ""),
+        "summary": dict(payload.get("summary") or {}),
+        "roots": roots,
+        "facets": {
+            name: _facet_counts(payload, name)
+            for name in ("sources", "categories", "states", "tags")
+        },
+        "skills": skills,
+        "contract": {
+            "catalog_command": "retrieval catalog browse",
+            "search_command": "retrieval search --json",
+            "inspect_command": "retrieval skills inspect",
+            "external_graph_runtime": False,
+            "ranking": "BM25 + fuzzy subsequence + reciprocal-rank fusion",
+        },
+    }
+
+
+def inspect_retrieval_skill(skill_id: str) -> dict[str, Any]:
+    if not SKILL_ID_RE.fullmatch(skill_id):
+        raise RuntimeJobError("invalid exact skill ID")
+    result = subprocess.run(
+        [str(_cli()), "skills", "inspect", skill_id],
+        env=native_host_environment(),
+        capture_output=True,
+        text=True,
+        timeout=180,
+        check=False,
+    )
+    if result.returncode:
+        raise RuntimeJobError(
+            result.stderr.strip() or "Retrieval could not inspect the skill"
+        )
+    marker = "\n--- SKILL.md ---\n"
+    if marker not in result.stdout:
+        raise RuntimeJobError("Retrieval returned an invalid skill inspection")
+    metadata_text, markdown = result.stdout.split(marker, 1)
+    try:
+        metadata = json.loads(metadata_text)
+    except json.JSONDecodeError as exc:
+        raise RuntimeJobError("Retrieval returned invalid skill metadata") from exc
+    if not isinstance(metadata, dict):
+        raise RuntimeJobError("Retrieval returned invalid skill metadata")
+
+    catalog_value: dict[str, Any] = {}
+    with _CATALOG_LOCK:
+        if _CATALOG_CACHE is not None:
+            catalog_value = next(
+                (
+                    value
+                    for value in _CATALOG_CACHE.get("skills") or []
+                    if isinstance(value, dict) and value.get("item_id") == skill_id
+                ),
+                {},
+            )
+    return {
+        "schema_version": "diogenes.retrieval-skill.v1",
+        "metadata": {
+            **metadata,
+            "categories": list(catalog_value.get("categories") or []),
+            "tags": list(catalog_value.get("tags") or []),
+            "package_hash": str(catalog_value.get("package_hash") or ""),
+            "duplicate_paths": list(catalog_value.get("duplicate_paths") or []),
+            "duplicate_sources": list(catalog_value.get("duplicate_sources") or []),
+            "native_harnesses": list(catalog_value.get("native_harnesses") or []),
+            "hidden_harnesses": list(catalog_value.get("hidden_harnesses") or []),
+        },
+        "markdown": markdown,
+    }
+
+
+def search_retrieval_skills(query: str, *, limit: int = 24) -> dict[str, Any]:
+    query = query.strip()
+    if not QUERY_RE.fullmatch(query):
+        raise RuntimeJobError("query must contain 1 to 500 single-line characters")
+    limit = max(1, min(int(limit), 50))
+    payload = _retrieval_json(
+        ["search", query, "--limit", str(limit), "--json"],
+        timeout=180,
+    )
+    if not isinstance(payload, dict) or not isinstance(payload.get("matches"), list):
+        raise RuntimeJobError("Retrieval returned an invalid search result")
+    return payload
+
+
+def collect_retrieval_runtime() -> dict[str, Any]:
+    """Read compact runtime, projection, and profile wiring state via Retrieval."""
+
+    status = _retrieval_json(["status"], timeout=300)
+    doctor = _retrieval_json(["doctor", "--json"], timeout=300)
+    if not isinstance(status, dict) or not isinstance(doctor, dict):
+        raise RuntimeJobError("Retrieval returned invalid runtime state")
+    sources = []
+    for value in status.get("sources") or []:
+        if not isinstance(value, dict):
+            continue
+        checkpoint = value.get("checkpoint")
+        checkpoint = checkpoint if isinstance(checkpoint, dict) else {}
+        health = value.get("index_health")
+        health = health if isinstance(health, dict) else {}
+        sources.append(
+            {
+                "name": str(value.get("name") or ""),
+                "kind": str(value.get("kind") or ""),
+                "state": str(value.get("state") or ""),
+                "enabled": bool(value.get("enabled")),
+                "available": bool(value.get("available")),
+                "stale": bool(value.get("stale")),
+                "document_count": int(checkpoint.get("document_count") or 0),
+                "last_synced_at": str(checkpoint.get("last_synced_at") or ""),
+                "health_current": bool(health.get("current", True)),
+                "reasons": [str(item) for item in health.get("reasons") or []],
+            }
+        )
+    checks_by_scope: dict[str, list[dict[str, Any]]] = {}
+    for value in doctor.get("checks") or []:
+        if not isinstance(value, dict):
+            continue
+        checks_by_scope.setdefault(str(value.get("scope") or "unknown"), []).append(
+            {
+                "name": str(value.get("name") or ""),
+                "passed": bool(value.get("passed")),
+                "detail": str(value.get("detail") or ""),
+            }
+        )
+    profiles = [
+        {
+            "scope": scope,
+            "managed": not any("isolated" in row["name"] for row in checks),
+            "passed": sum(row["passed"] for row in checks),
+            "checks": len(checks),
+            "details": checks,
+        }
+        for scope, checks in sorted(checks_by_scope.items())
+        if scope.startswith(("hermes:", "omp:"))
+    ]
+    watcher = status.get("watcher")
+    watcher = watcher if isinstance(watcher, dict) else {}
+    return {
+        "schema_version": "diogenes.retrieval-runtime.v1",
+        "catalog": dict(status.get("catalog") or {}),
+        "watcher": {
+            key: watcher.get(key)
+            for key in (
+                "backend",
+                "enabled",
+                "healthy",
+                "leader",
+                "sync_in_progress",
+                "last_sync_at",
+                "last_event_at",
+                "last_error",
+                "pending_sources",
+                "stale_sources",
+            )
+        },
+        "projections": dict(status.get("projections") or {}),
+        "sources": sources,
+        "doctor": dict(doctor.get("summary") or {}),
+        "profiles": profiles,
+    }
+
+
 def _skill_directory_name(value: dict[str, Any]) -> str:
     path = str(value.get("path") or value.get("canonical_path") or "")
     return Path(path).parent.name if path else ""
@@ -250,48 +544,119 @@ class SkillAuditorControl:
     def create_plan(
         self,
         *,
-        skill_id: str,
+        skill_id: str = "",
         action: str,
+        query: str = "",
+        harness: str = "",
     ) -> tuple[dict[str, Any], str]:
-        if action != "edit":
-            raise RuntimeJobError("unsupported skill action")
-        if not SKILL_ID_RE.fullmatch(skill_id):
-            raise RuntimeJobError("invalid exact skill ID")
-        inventory = collect_skills()
-        skill = next(
-            (
-                value
-                for value in inventory["skills"]
-                if value.get("skill_id") == skill_id
-            ),
-            None,
-        )
-        if skill is None:
-            raise RuntimeJobError("skill changed after the auditor was opened; refresh it")
-        if not skill.get("editable"):
-            raise RuntimeJobError("this indexed skill does not have an editable source file")
-        state = str(skill.get("state") or "")
-        label = "Open in Zed"
+        cli = str(_cli())
+        state = ""
+        metadata: dict[str, Any] = {}
+        if action == "edit":
+            if not SKILL_ID_RE.fullmatch(skill_id):
+                raise RuntimeJobError("invalid exact skill ID")
+            inventory = collect_skills()
+            skill = next(
+                (
+                    value
+                    for value in inventory["skills"]
+                    if value.get("skill_id") == skill_id
+                ),
+                None,
+            )
+            if skill is None:
+                raise RuntimeJobError(
+                    "skill changed after the workspace was opened; refresh it"
+                )
+            if not skill.get("editable"):
+                raise RuntimeJobError(
+                    "this indexed skill does not have an editable source file"
+                )
+            state = str(skill.get("state") or "")
+            label = "Open in Zed"
+            argv = [cli, "skills", "edit", skill_id]
+            environment = {"VISUAL": "zed", "EDITOR": "zed"}
+            summary = f"{label}: {skill.get('name') or skill_id}"
+            confirmation = f"EDIT SKILL {skill_id}"
+            metadata["skill_name"] = skill.get("name")
+        elif action == "catalog-sync":
+            label = "Synchronize Retrieval catalog"
+            argv = [cli, "catalog", "sync"]
+            environment = {}
+            summary = label
+            confirmation = "SYNC RETRIEVAL CATALOG"
+        elif action == "integrate":
+            label = "Reconcile Retrieval harness integration"
+            argv = [cli, "integrate"]
+            environment = {}
+            summary = label
+            confirmation = "INTEGRATE RETRIEVAL"
+        elif action == "session-close":
+            if harness not in {"hermes", "omp"}:
+                raise RuntimeJobError("session-close requires hermes or omp")
+            label = f"Reconcile {harness.upper()} clean skill baseline"
+            argv = [
+                cli,
+                "session-close",
+                "--harness",
+                harness,
+                "--all-profiles",
+            ]
+            environment = {}
+            summary = label
+            confirmation = f"RECONCILE {harness.upper()} SKILLS"
+        elif action == "retrieve":
+            query = query.strip()
+            if not QUERY_RE.fullmatch(query):
+                raise RuntimeJobError(
+                    "retrieve query must contain 1 to 500 single-line characters"
+                )
+            if harness not in {"hermes", "omp"}:
+                raise RuntimeJobError("retrieve requires hermes or omp")
+            label = f"Run one-turn Retrieval for {harness.upper()}"
+            argv = [cli, "retrieve", query, "--harness", harness]
+            environment = {}
+            summary = f"{label}: {query}"
+            confirmation = (
+                f"RETRIEVE {harness.upper()} "
+                + hashlib.sha256(query.encode("utf-8")).hexdigest()[:12].upper()
+            )
+        elif action == "clear-projection":
+            if not SKILL_ID_RE.fullmatch(skill_id):
+                raise RuntimeJobError("invalid exact skill ID")
+            if harness not in {"hermes", "omp"}:
+                raise RuntimeJobError("projection removal requires hermes or omp")
+            label = f"Remove {harness.upper()} projection"
+            argv = [cli, "projected", "clear", "--harness", harness, skill_id]
+            environment = {}
+            summary = f"{label}: {skill_id}"
+            confirmation = f"CLEAR {harness.upper()} PROJECTION {skill_id}"
+        else:
+            raise RuntimeJobError("unsupported Retrieval action")
+
         step: dict[str, Any] = {
             "label": label,
-            "argv": [str(_cli()), "skills", action, skill_id],
+            "argv": argv,
             "timeout": 900,
         }
-        if action == "edit":
-            step["environment"] = {"VISUAL": "zed", "EDITOR": "zed"}
+        if environment:
+            step["environment"] = environment
+        identity = "\0".join((action, skill_id, query, harness))
         return self.jobs.create_plan(
             runtime_id=(
-                "skills."
-                + hashlib.sha256(skill_id.encode("utf-8")).hexdigest()[:12]
+                "retrieval."
+                + hashlib.sha256(identity.encode("utf-8")).hexdigest()[:12]
             ),
             action=action,
-            summary=f"{label}: {skill.get('name') or skill_id}",
-            confirmation_phrase=f"{action.upper()} SKILL {skill_id}",
+            summary=summary,
+            confirmation_phrase=confirmation,
             steps=[step],
             metadata={
                 "skill_id": skill_id,
-                "skill_name": skill.get("name"),
                 "state": state,
+                "query": query,
+                "harness": harness,
                 "retrieval_watcher_refreshes_change": True,
+                **metadata,
             },
         )

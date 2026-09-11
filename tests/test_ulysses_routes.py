@@ -151,6 +151,137 @@ class _FakeSandwichControl:
         )
 
 
+class _FakeSkillAuditorControl:
+    def create_plan(self, *, skill_id="", action, query="", harness=""):
+        return (
+            {
+                "id": "3" * 32,
+                "runtime_id": "retrieval.test",
+                "action": action,
+                "status": "planned",
+                "metadata": {
+                    "skill_id": skill_id,
+                    "query": query,
+                    "harness": harness,
+                },
+            },
+            "retrieval-confirmation-token",
+        )
+
+
+class _FakeLibrarian:
+    def __init__(self):
+        self.calls = []
+
+    async def overview(self):
+        self.calls.append(("overview",))
+        return {"schema_version": "diogenes.librarian-workspace.v1"}
+
+    async def concept(self, path):
+        self.calls.append(("concept", path))
+        return {"path": path, "body": "# Demo"}
+
+    async def search(self, query, *, concept_type="", tag=""):
+        self.calls.append(("search", query, concept_type, tag))
+        return [{"path": "/demo.md", "score": 1}]
+
+    async def graph(self):
+        self.calls.append(("graph",))
+        return {"nodes": [], "edges": []}
+
+    async def traces(self):
+        self.calls.append(("traces",))
+        return []
+
+    async def trace(self, trace_id):
+        self.calls.append(("trace", trace_id))
+        return {"id": trace_id}
+
+    async def dreams(self):
+        self.calls.append(("dreams",))
+        return {"proposals": [], "status": {}}
+
+    async def dream(self, proposal_id):
+        self.calls.append(("dream", proposal_id))
+        return {"id": proposal_id, "status": "pending"}
+
+    async def chat(self, messages, *, model=""):
+        self.calls.append(("chat", messages, model))
+        return {"answer": "hello", "toolEvents": []}
+
+    async def propose_dream(self):
+        self.calls.append(("propose",))
+        return {"ran": True}
+
+    async def dream_action(self, proposal_id, action):
+        self.calls.append(("action", proposal_id, action))
+        return {"id": proposal_id, "status": "applied"}
+
+
+class _FakePersephoneControl:
+    def __init__(self):
+        self.calls = []
+
+    def observe(self, *, limit=50):
+        self.calls.append(("observe", limit))
+        return {
+            "schemaVersion": "persephone.workspace.v1",
+            "routes": [],
+            "schedules": [],
+        }
+
+    def queue_record(self, *, kind, record_id):
+        self.calls.append(("queue", kind, record_id))
+        return {"kind": kind, "id": record_id, "body": "full body"}
+
+    def create_lifecycle_plan(self, *, action):
+        self.calls.append(("lifecycle", action))
+        return (
+            {"id": "4" * 32, "action": action, "status": "planned"},
+            "persephone-lifecycle-token",
+        )
+
+    def create_mutation_plan(self, mutation):
+        self.calls.append(("mutation", mutation))
+        return (
+            {"id": "5" * 32, "action": mutation["action"], "status": "planned"},
+            "persephone-mutation-token",
+        )
+
+
+class _FakeRoboOMPControl:
+    def __init__(self):
+        self.calls = []
+
+    def observe(self, *, limit=50, state="open"):
+        self.calls.append(("observe", limit, state))
+        return {
+            "schemaVersion": "persephone.robomp.workspace.v1",
+            "runtime": {"issues": {"value": {"issues": []}}},
+        }
+
+    def inspect(self, *, issue, limit=50):
+        self.calls.append(("inspect", issue, limit))
+        return {
+            "schemaVersion": "robomp.issue.workspace.v1",
+            "reference": issue,
+            "workspace": {"exists": True},
+        }
+
+    def create_lifecycle_plan(self, *, action):
+        self.calls.append(("lifecycle", action))
+        return (
+            {"id": "6" * 32, "action": action, "status": "planned"},
+            "roboomp-lifecycle-token",
+        )
+
+    def create_mutation_plan(self, mutation):
+        self.calls.append(("mutation", mutation))
+        return (
+            {"id": "7" * 32, "action": mutation["action"], "status": "planned"},
+            "roboomp-mutation-token",
+        )
+
 class _FakeHostServices:
     def __init__(self):
         self.actions = []
@@ -233,6 +364,10 @@ def _client(
     colibri_report=None,
     prism_report=None,
     host_services_manager=None,
+    skill_auditor_control_factory=_FakeSkillAuditorControl,
+    librarian_client_factory=_FakeLibrarian,
+    persephone_control_factory=_FakePersephoneControl,
+    roboomp_control_factory=_FakeRoboOMPControl,
 ):
     monkeypatch.setattr(routes, "require_admin", gate)
     monkeypatch.setattr(
@@ -279,6 +414,10 @@ def _client(
             colibri_control_factory=_FakeColibriControl,
             prism_control_factory=_FakePrismControl,
             runtime_control_factory=_FakeRuntimeControl,
+            skill_auditor_control_factory=skill_auditor_control_factory,
+            librarian_client_factory=librarian_client_factory,
+            persephone_control_factory=persephone_control_factory,
+            roboomp_control_factory=roboomp_control_factory,
             sandwich_control_factory=_FakeSandwichControl,
             sandwich_collector=lambda: {
                 "schema_version": "ulysses.sandwich-status.v1",
@@ -325,6 +464,196 @@ def test_admin_receives_read_only_topology(monkeypatch):
     assert payload["schema_version"] == "ulysses.topology.v1"
     assert payload["javascript_runtime"]["id"] == "sandwich"
     assert "runtimes" in payload
+
+
+def test_retrieval_workspace_routes_delegate_to_structured_owner_contract(monkeypatch):
+    monkeypatch.setattr(
+        routes,
+        "collect_retrieval_catalog",
+        lambda *, refresh=False: {
+            "schema_version": "diogenes.retrieval-workspace.v1",
+            "refresh": refresh,
+            "skills": [{"skill_id": "test:demo"}],
+        },
+    )
+    monkeypatch.setattr(
+        routes,
+        "inspect_retrieval_skill",
+        lambda skill_id: {"metadata": {"skill_id": skill_id}, "markdown": "# Demo"},
+    )
+    monkeypatch.setattr(
+        routes,
+        "search_retrieval_skills",
+        lambda query, *, limit=24: {"query": query, "limit": limit, "matches": []},
+    )
+    monkeypatch.setattr(
+        routes,
+        "collect_retrieval_runtime",
+        lambda: {"schema_version": "diogenes.retrieval-runtime.v1"},
+    )
+    client = _client(monkeypatch, lambda _request: None)
+
+    catalog = client.get("/api/odysseus/skills/catalog?refresh=true")
+    inspected = client.get(
+        "/api/odysseus/skills/inspect",
+        params={"skill_id": "test:demo"},
+    )
+    searched = client.get(
+        "/api/odysseus/skills/search",
+        params={"query": "python packaging", "limit": 7},
+    )
+    runtime = client.get("/api/odysseus/skills/runtime")
+    planned = client.post(
+        "/api/odysseus/skills/jobs/plan",
+        json={
+            "action": "retrieve",
+            "harness": "hermes",
+            "query": "python packaging",
+        },
+    )
+
+    assert catalog.status_code == 200
+    assert catalog.json()["refresh"] is True
+    assert inspected.json()["metadata"]["skill_id"] == "test:demo"
+    assert searched.json() == {
+        "query": "python packaging",
+        "limit": 7,
+        "matches": [],
+    }
+    assert runtime.json()["schema_version"] == "diogenes.retrieval-runtime.v1"
+    assert planned.status_code == 200
+    assert planned.json()["job"]["metadata"] == {
+        "skill_id": "",
+        "query": "python packaging",
+        "harness": "hermes",
+    }
+
+
+def test_librarian_workspace_routes_delegate_to_named_owner_contract(monkeypatch):
+    owner = _FakeLibrarian()
+    monkeypatch.setattr(routes, "auth_disabled", lambda: True)
+    client = _client(
+        monkeypatch,
+        lambda _request: None,
+        librarian_client_factory=lambda: owner,
+    )
+
+    assert client.get("/api/odysseus/library/overview").status_code == 200
+    assert client.get(
+        "/api/odysseus/library/concept", params={"path": "/demo.md"}
+    ).json()["body"] == "# Demo"
+    assert client.get(
+        "/api/odysseus/library/search",
+        params={"query": "demo", "concept_type": "note", "tag": "python"},
+    ).json()[0]["path"] == "/demo.md"
+    assert client.get("/api/odysseus/library/graph").json() == {
+        "nodes": [],
+        "edges": [],
+    }
+    assert client.get("/api/odysseus/library/traces").json() == []
+    assert client.get(
+        "/api/odysseus/library/trace", params={"trace_id": "trace-1"}
+    ).json()["id"] == "trace-1"
+    assert client.get("/api/odysseus/library/dreams").json()["proposals"] == []
+    assert client.get("/api/odysseus/library/dreams/proposal-1").json()["id"] == "proposal-1"
+    assert client.post(
+        "/api/odysseus/library/chat",
+        json={"messages": [{"role": "user", "content": "hello"}], "model": "local"},
+    ).json()["answer"] == "hello"
+    assert client.post("/api/odysseus/library/dreams/propose").json()["ran"] is True
+    assert client.post(
+        "/api/odysseus/library/dreams/proposal-1/approve"
+    ).json()["status"] == "applied"
+
+    assert ("concept", "/demo.md") in owner.calls
+    assert ("search", "demo", "note", "python") in owner.calls
+    assert ("chat", [{"role": "user", "content": "hello"}], "local") in owner.calls
+    assert ("action", "proposal-1", "approve") in owner.calls
+
+
+def test_persephone_workspace_routes_delegate_to_owner_cli_contract(monkeypatch):
+    owner = _FakePersephoneControl()
+    monkeypatch.setattr(routes, "auth_disabled", lambda: True)
+    client = _client(
+        monkeypatch,
+        lambda _request: None,
+        persephone_control_factory=lambda: owner,
+    )
+
+    report = client.get("/api/odysseus/persephone/workspace", params={"limit": 17})
+    record = client.get("/api/odysseus/persephone/queue/inbox/9")
+    lifecycle = client.post(
+        "/api/odysseus/persephone/lifecycle/jobs/plan",
+        json={"action": "restart"},
+    )
+    mutation = client.post(
+        "/api/odysseus/persephone/mutations/jobs/plan",
+        json={
+            "mutation": {
+                "version": 1,
+                "action": "queue.retry",
+                "kind": "inbox",
+                "id": 9,
+            }
+        },
+    )
+
+    assert report.status_code == 200
+    assert report.json()["schemaVersion"] == "persephone.workspace.v1"
+    assert record.json()["body"] == "full body"
+    assert lifecycle.json()["confirmation_token"] == "persephone-lifecycle-token"
+    assert mutation.json()["job"]["action"] == "queue.retry"
+    assert owner.calls == [
+        ("observe", 17),
+        ("queue", "inbox", 9),
+        ("lifecycle", "restart"),
+        ("mutation", {"version": 1, "action": "queue.retry", "kind": "inbox", "id": 9}),
+    ]
+
+
+def test_roboomp_workspace_routes_delegate_to_persephone_owner_contract(monkeypatch):
+    owner = _FakeRoboOMPControl()
+    monkeypatch.setattr(routes, "auth_disabled", lambda: True)
+    client = _client(
+        monkeypatch,
+        lambda _request: None,
+        roboomp_control_factory=lambda: owner,
+    )
+
+    report = client.get(
+        "/api/odysseus/roboomp/workspace",
+        params={"limit": 17, "state": "closed"},
+    )
+    inspected = client.get(
+        "/api/odysseus/roboomp/issues/inspect",
+        params={"issue": "owner/repo#12", "limit": 9},
+    )
+    lifecycle = client.post(
+        "/api/odysseus/roboomp/lifecycle/jobs/plan",
+        json={"action": "restart"},
+    )
+    mutation = client.post(
+        "/api/odysseus/roboomp/mutations/jobs/plan",
+        json={
+            "mutation": {
+                "version": 1,
+                "action": "trigger.triage",
+                "issue": "owner/repo#12",
+            }
+        },
+    )
+
+    assert report.status_code == 200
+    assert report.json()["schemaVersion"] == "persephone.robomp.workspace.v1"
+    assert inspected.json()["reference"] == "owner/repo#12"
+    assert lifecycle.json()["confirmation_token"] == "roboomp-lifecycle-token"
+    assert mutation.json()["job"]["action"] == "trigger.triage"
+    assert owner.calls == [
+        ("observe", 17, "closed"),
+        ("inspect", "owner/repo#12", 9),
+        ("lifecycle", "restart"),
+        ("mutation", {"version": 1, "action": "trigger.triage", "issue": "owner/repo#12"}),
+    ]
 
 
 def test_admin_receives_sandwich_status_and_can_plan_doctor(monkeypatch):

@@ -72,7 +72,52 @@ def test_services_window_has_five_bounded_host_management_views() -> None:
     assert 'id="tool-hermes-workspace-link"' in index
     assert 'id="tool-n8n-link"' in index
     assert 'id="tool-skills-auditor-btn"' in index
-    assert "/api/odysseus/skills/audit" in services
+    assert "aria-label=\"Retrieval workspace\"" in services
+    assert "import markdownModule from './markdown.js';" in services
+    for endpoint in (
+        "/api/odysseus/skills/catalog",
+        "/api/odysseus/skills/inspect",
+        "/api/odysseus/skills/search",
+        "/api/odysseus/skills/runtime",
+    ):
+        assert endpoint in services
+    for view in ("catalog", "graph", "runtime"):
+        assert f"['{view}'," in services
+    assert "dio-retrieval-workspace" in services
+    assert "data-retrieval-reset" in services
+    assert "data-retrieval-native-search" in services
+    assert "data-retrieval-detail-view" in services
+    assert "data-retrieval-action=\"session-close\"" in services
+
+
+def test_librarian_workspace_uses_the_owner_api_and_server_side_credentials() -> None:
+    index = _read("static/index.html")
+    app = _read("static/app.js")
+    workspace = _read("static/js/librarianWorkspace.js")
+    styles = _read("static/style.css")
+    service_worker = _read("static/sw.js")
+
+    assert 'id="tool-librarian-workspace-btn"' in index
+    assert "import librarianWorkspaceModule from './js/librarianWorkspace.js';" in app
+    assert "librarianWorkspaceModule.init(API_BASE);" in app
+    assert "'/librarian': () =>" in app
+    for view in ("browse", "graph", "traces", "dreams", "chat", "health"):
+        assert f"['{view}'," in workspace
+    for endpoint in (
+        "/api/odysseus/library/overview",
+        "/api/odysseus/library/concept",
+        "/api/odysseus/library/search",
+        "/api/odysseus/library/graph",
+        "/api/odysseus/library/traces",
+        "/api/odysseus/library/dreams",
+        "/api/odysseus/library/chat",
+    ):
+        assert endpoint in workspace
+    assert "DIOGENES_LIBRARIAN_TOKEN" not in workspace
+    assert "AUTH_TOKEN" not in workspace
+    assert "browser token" in workspace
+    assert "dio-library-window" in styles
+    assert "/static/js/librarianWorkspace.js" in service_worker
 
 
 def test_services_window_uses_planned_confirmed_runtime_jobs() -> None:
@@ -193,6 +238,68 @@ def test_services_exposes_native_sandwich_lifecycle() -> None:
     assert "Bun compatibility for native project commands." in services
     assert "sandwich hermes update" in services
     assert "data-hermes-update" not in services
+
+
+def test_persephone_workspace_uses_the_owner_control_contract() -> None:
+    app = _read("static/app.js")
+    index = _read("static/index.html")
+    workspace = _read("static/js/persephoneWorkspace.js")
+    styles = _read("static/style.css")
+    service_worker = _read("static/sw.js")
+
+    assert "import persephoneWorkspaceModule from './js/persephoneWorkspace.js';" in app
+    assert "persephoneWorkspaceModule.init(API_BASE);" in app
+    assert "'/persephone'" in app
+    assert 'id="tool-persephone-workspace-btn"' in index
+    assert "Persephone gateway workspace" in workspace
+    for tab in ("Overview", "Connectors", "Routes", "Queues", "Schedules", "Settings", "Setup"):
+        assert tab in workspace
+    assert "/api/odysseus/persephone/workspace?limit=80" in workspace
+    assert "/api/odysseus/persephone/queue/" in workspace
+    assert "/api/odysseus/persephone/lifecycle/jobs/plan" in workspace
+    assert "/api/odysseus/persephone/mutations/jobs/plan" in workspace
+    assert "configuration.replace" in workspace
+    assert "prompt.enqueue" in workspace
+    assert "schedule.put" in workspace
+    assert "queue.retry" in workspace
+    assert "dio-persephone-window" in styles
+    assert "/static/js/persephoneWorkspace.js" in service_worker
+
+
+def test_roboomp_workspace_uses_the_persephone_owner_contract() -> None:
+    app = _read("static/app.js")
+    index = _read("static/index.html")
+    workspace = _read("static/js/roboompWorkspace.js")
+    styles = _read("static/style.css")
+    service_worker = _read("static/sw.js")
+
+    assert "import roboompWorkspaceModule from './js/roboompWorkspace.js';" in app
+    assert "roboompWorkspaceModule.init(API_BASE);" in app
+    assert "'/roboomp': () =>" in app
+    assert 'id="tool-roboomp-workspace-btn"' in index
+    for tab in ("Overview", "Issues", "Worktree", "Activity", "Releases", "Settings", "Setup"):
+        assert tab in workspace
+    for endpoint in (
+        "/api/odysseus/roboomp/workspace",
+        "/api/odysseus/roboomp/issues/inspect",
+        "/api/odysseus/roboomp/lifecycle/jobs/plan",
+        "/api/odysseus/roboomp/mutations/jobs/plan",
+    ):
+        assert endpoint in workspace
+    for action in (
+        "configuration.patch",
+        "trigger.triage",
+        "trigger.retry",
+        "trigger.cancel",
+        "issue.cleanup",
+        "audit.dream",
+        "timer.enable",
+        "timer.disable",
+        "version.sync",
+    ):
+        assert action in workspace
+    assert "dio-roboomp-window" in styles
+    assert "/static/js/roboompWorkspace.js" in service_worker
 
 
 def test_native_engine_source_failures_are_specific() -> None:

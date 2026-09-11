@@ -46,6 +46,9 @@ import themeModule from './js/theme.js';
 // unversioned so this can't recur.
 import cookbookModule from './js/cookbook.js';
 import ulyssesServicesModule from './js/ulyssesServices.js';
+import librarianWorkspaceModule from './js/librarianWorkspace.js';
+import persephoneWorkspaceModule from './js/persephoneWorkspace.js';
+import roboompWorkspaceModule from './js/roboompWorkspace.js';
 import groupModule from './js/group.js';
 import * as researchPanelModule from './js/research/panel.js?v=20260630researchthumb';
 import ttsModule from './js/tts-ai.js';
@@ -62,6 +65,9 @@ window.uiModule = uiModule;
 window.adminModule = adminModule;
 window.cookbookModule = cookbookModule;
 window.ulyssesServicesModule = ulyssesServicesModule;
+window.librarianWorkspaceModule = librarianWorkspaceModule;
+window.persephoneWorkspaceModule = persephoneWorkspaceModule;
+window.roboompWorkspaceModule = roboompWorkspaceModule;
 
 function _isMobileChatInput() {
   return window.innerWidth <= 768;
@@ -1190,6 +1196,9 @@ function initializeEventListeners() {
     '/calendar': () => calendarModule && calendarModule.openCalendar(),
     '/cookbook': () => document.getElementById('tool-cookbook-btn')?.click(),
     '/services': () => document.getElementById('tool-services-btn')?.click(),
+    '/librarian': () => document.getElementById('tool-librarian-workspace-btn')?.click(),
+    '/persephone': () => document.getElementById('tool-persephone-workspace-btn')?.click(),
+    '/roboomp': () => document.getElementById('tool-roboomp-workspace-btn')?.click(),
     '/email':    () => {
       // Collapse the wide sidebar → icon rail (48px) so the user keeps
       // navigation visible alongside the fullscreen email view.
@@ -3731,6 +3740,9 @@ function startOdysseusApp() {
     searchChatModule.init(API_BASE);
   }
   ulyssesServicesModule.init(API_BASE);
+  librarianWorkspaceModule.init(API_BASE);
+  persephoneWorkspaceModule.init(API_BASE);
+  roboompWorkspaceModule.init(API_BASE);
 
   // Search buttons — icon rail + sidebar
   const railSearchBtn = el('rail-search-btn');

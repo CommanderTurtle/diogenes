@@ -4,6 +4,7 @@
 import uiModule from './ui.js';
 import * as Modals from './modalManager.js';
 import { makeWindowDraggable } from './windowDrag.js';
+import markdownModule from './markdown.js';
 
 const MODAL_ID = 'diogenes-services-modal';
 const SKILLS_MODAL_ID = 'diogenes-skills-auditor-modal';
@@ -70,7 +71,20 @@ let skillsLoading = false;
 let skillsError = '';
 let skillsReport = null;
 let skillsQuery = '';
-let skillsState = 'active';
+let skillsState = 'all';
+let skillsSource = '';
+let skillsCategory = '';
+let skillsTag = '';
+let skillsExact = false;
+let skillsView = 'catalog';
+let skillsDetailView = 'preview';
+let selectedSkillId = '';
+let skillDetail = null;
+let skillDetailLoading = false;
+let skillSearchReport = null;
+let skillSearchLoading = false;
+let retrievalRuntime = null;
+let retrievalRuntimeLoading = false;
 
 const esc = (value) => uiModule.esc(String(value ?? ''));
 
@@ -1247,7 +1261,8 @@ async function monitorJob(jobId, after = null) {
               : `Skills action ${job.status}. Open the job log for details.`,
             job.status === 'succeeded' ? 4000 : 8000,
           );
-          loadSkills();
+          if (job.status === 'succeeded') retrievalRuntime = null;
+          loadSkills(job.status === 'succeeded');
         }
         await load();
         break;
@@ -1788,11 +1803,12 @@ function ensureSkillsModal() {
   modal.id = SKILLS_MODAL_ID;
   modal.className = 'modal hidden';
   modal.innerHTML = `
-    <div class="modal-content dio-skills-window" role="dialog" aria-label="Skills auditor">
+    <div class="modal-content dio-skills-window" role="dialog" aria-label="Retrieval workspace">
       <div class="modal-header dio-skills-header">
-        <h4>${SKILLS_ICON}<span>Skills auditor</span></h4>
-        <button type="button" data-skills-refresh>Refresh</button>
-        <button class="close-btn" type="button" aria-label="Close skills auditor">✖</button>
+        <h4>${SKILLS_ICON}<span>Retrieval</span><small>catalog workspace</small></h4>
+        <button type="button" data-retrieval-action="catalog-sync">Sync</button>
+        <button type="button" data-skills-refresh title="Reload Retrieval's graph">Refresh</button>
+        <button class="close-btn" type="button" aria-label="Close Retrieval workspace">✖</button>
       </div>
       <div class="dio-skills-body" aria-live="polite"></div>
     </div>`;
@@ -1800,24 +1816,28 @@ function ensureSkillsModal() {
   makeWindowDraggable(modal, {
     content: modal.querySelector('.dio-skills-window'),
     header: modal.querySelector('.dio-skills-header'),
-    minWidth: 520,
-    minHeight: 400,
-    resizeStorageKey: 'winsize-diogenes-skills-auditor',
+    minWidth: 680,
+    minHeight: 460,
+    resizeStorageKey: 'winsize-diogenes-retrieval-workspace-v1',
   });
   Modals.register(SKILLS_MODAL_ID, {
     restoreFn: () => { modal.classList.remove('hidden'); renderSkills(); },
     closeFn: () => modal.remove(),
     railBtnId: null,
     sidebarBtnId: 'tool-skills-auditor-btn',
-    label: 'Skills auditor',
+    label: 'Retrieval',
     icon: SKILLS_ICON,
   });
   Modals.injectMinimizeButton(modal, SKILLS_MODAL_ID);
   modal.querySelector('.close-btn')?.addEventListener('click', () => Modals.close(SKILLS_MODAL_ID));
-  modal.querySelector('[data-skills-refresh]')?.addEventListener('click', loadSkills);
+  modal.querySelector('[data-skills-refresh]')?.addEventListener('click', () => loadSkills(true));
+  modal.querySelector('[data-retrieval-action]')?.addEventListener('click', (event) => {
+    planRetrievalAction(event.currentTarget.dataset.retrievalAction);
+  });
   modal.querySelector('.dio-skills-body')?.addEventListener('input', (event) => {
     if (event.target.matches('[data-skills-search]')) {
       skillsQuery = event.target.value || '';
+      skillSearchReport = null;
       renderSkills();
     }
   });
@@ -1826,8 +1846,94 @@ function ensureSkillsModal() {
       skillsState = event.target.value;
       renderSkills();
     }
+    if (event.target.matches('[data-skills-source]')) {
+      skillsSource = event.target.value;
+      renderSkills();
+    }
+    if (event.target.matches('[data-skills-category]')) {
+      skillsCategory = event.target.value;
+      renderSkills();
+    }
+    if (event.target.matches('[data-skills-tag]')) {
+      skillsTag = event.target.value;
+      renderSkills();
+    }
+    if (event.target.matches('[data-skills-exact]')) {
+      skillsExact = event.target.checked;
+      skillSearchReport = null;
+      renderSkills();
+    }
   });
   modal.querySelector('.dio-skills-body')?.addEventListener('click', (event) => {
+    if (event.target.closest('[data-retrieval-reset]')) {
+      skillsQuery = '';
+      skillsState = 'all';
+      skillsSource = '';
+      skillsCategory = '';
+      skillsTag = '';
+      skillSearchReport = null;
+      skillsView = 'catalog';
+      renderSkills();
+      return;
+    }
+    const view = event.target.closest('[data-retrieval-view]');
+    if (view) {
+      skillsView = view.dataset.retrievalView;
+      if (skillsView === 'runtime' && !retrievalRuntime) loadRetrievalRuntime();
+      else renderSkills();
+      return;
+    }
+    const detailView = event.target.closest('[data-retrieval-detail-view]');
+    if (detailView) {
+      skillsDetailView = detailView.dataset.retrievalDetailView;
+      renderSkills();
+      return;
+    }
+    const facet = event.target.closest('[data-retrieval-facet]');
+    if (facet) {
+      const name = facet.dataset.retrievalFacet;
+      const value = facet.dataset.retrievalFacetValue || '';
+      if (name === 'source') skillsSource = value;
+      if (name === 'category') skillsCategory = value;
+      if (name === 'tag') skillsTag = value;
+      if (name === 'state') skillsState = value || 'all';
+      skillsView = 'catalog';
+      renderSkills();
+      return;
+    }
+    const skillNode = event.target.closest('[data-retrieval-skill]');
+    if (skillNode) {
+      loadSkillDetail(skillNode.dataset.retrievalSkill);
+      return;
+    }
+    if (event.target.closest('[data-retrieval-native-search]')) {
+      runRetrievalSearch();
+      return;
+    }
+    if (event.target.closest('[data-retrieval-clear-search]')) {
+      skillsQuery = '';
+      skillSearchReport = null;
+      renderSkills();
+      return;
+    }
+    if (event.target.closest('[data-retrieval-runtime-load]')) {
+      loadRetrievalRuntime();
+      return;
+    }
+    const copy = event.target.closest('[data-retrieval-copy]');
+    if (copy) {
+      copyRetrievalValue(copy.dataset.retrievalCopy);
+      return;
+    }
+    const retrievalAction = event.target.closest('[data-retrieval-action]');
+    if (retrievalAction) {
+      planRetrievalAction(
+        retrievalAction.dataset.retrievalAction,
+        retrievalAction.dataset.retrievalHarness || '',
+        retrievalAction.dataset.retrievalSkillId || '',
+      );
+      return;
+    }
     const action = event.target.closest('[data-skill-action]');
     if (!action) return;
     executePlan(
@@ -1839,6 +1945,209 @@ function ensureSkillsModal() {
   return modal;
 }
 
+function retrievalOptionRows(values, selected, label) {
+  return `<option value="">${esc(label)}</option>${(values || []).map((value) => `
+    <option value="${esc(value.name)}" ${selected === value.name ? 'selected' : ''}>
+      ${esc(value.name)} (${Number(value.count || 0)})
+    </option>`).join('')}`;
+}
+
+function fuzzySubsequenceScore(needle, haystack) {
+  if (!needle) return 1;
+  const exact = haystack.indexOf(needle);
+  if (exact >= 0) return 10000 - exact;
+  let cursor = 0;
+  let gap = 0;
+  let previous = -1;
+  for (const char of needle) {
+    const found = haystack.indexOf(char, cursor);
+    if (found < 0) return 0;
+    if (previous >= 0) gap += found - previous - 1;
+    previous = found;
+    cursor = found + 1;
+  }
+  return Math.max(1, 1000 - gap);
+}
+
+function visibleRetrievalSkills() {
+  const query = skillsQuery.trim().toLowerCase();
+  const serverRanks = new Map(
+    (skillSearchReport?.matches || []).map((value, index) => [value.skill_id, {
+      index,
+      score: Number(value.score || 0),
+    }]),
+  );
+  const useServerRanks = serverRanks.size > 0;
+  const result = [];
+  for (const skill of skillsReport?.skills || []) {
+    if (skillsState !== 'all' && skill.state !== skillsState) continue;
+    if (skillsSource && skill.source !== skillsSource) continue;
+    if (skillsCategory && !(skill.categories || []).includes(skillsCategory)) continue;
+    if (skillsTag && !(skill.tags || []).includes(skillsTag)) continue;
+    if (useServerRanks && !serverRanks.has(skill.skill_id)) continue;
+    const text = `${skill.name} ${skill.description} ${skill.source} ${(skill.categories || []).join(' ')} ${(skill.tags || []).join(' ')} ${skill.skill_id}`.toLowerCase();
+    const score = !query
+      ? 1
+      : skillsExact
+        ? (text.includes(query) ? 10000 - text.indexOf(query) : 0)
+        : query.split(/\s+/).reduce((total, term) => {
+          const part = fuzzySubsequenceScore(term, text);
+          return part ? total + part : -100000;
+        }, 0);
+    if (query && score <= 0) continue;
+    result.push({
+      skill,
+      score: useServerRanks ? 100000 - serverRanks.get(skill.skill_id).index : score,
+      nativeScore: serverRanks.get(skill.skill_id)?.score,
+    });
+  }
+  result.sort((left, right) => right.score - left.score
+    || left.skill.name.localeCompare(right.skill.name));
+  return result;
+}
+
+function retrievalFacetButtons(name, values, selected, limit = 14) {
+  return (values || []).slice(0, limit).map((value) => `
+    <button type="button" class="${selected === value.name ? 'active' : ''}"
+      data-retrieval-facet="${esc(name)}" data-retrieval-facet-value="${esc(value.name)}">
+      <span>${esc(value.name)}</span><em>${Number(value.count || 0)}</em>
+    </button>`).join('');
+}
+
+function retrievalSkillCard(row) {
+  const skill = row.skill;
+  return `
+    <button type="button" class="dio-retrieval-card ${selectedSkillId === skill.skill_id ? 'active' : ''}"
+      data-retrieval-skill="${esc(skill.skill_id)}">
+      <span class="dio-retrieval-card-title">
+        <strong>${esc(skill.name)}</strong>${statusBadge(skill.state)}
+      </span>
+      <span>${esc(skill.description || 'No catalog description.')}</span>
+      <code>${esc(skill.source)} · ${(skill.categories || []).slice(0, 3).map(esc).join(' · ') || 'uncategorized'}</code>
+      <small>${skill.duplicate_count > 1 ? `${skill.duplicate_count} identical sources` : esc(skill.skill_id)}${row.nativeScore != null ? ` · ${Math.round(row.nativeScore * 100)}%` : ''}</small>
+    </button>`;
+}
+
+function selectedCatalogSkill() {
+  return (skillsReport?.skills || []).find((value) => value.skill_id === selectedSkillId) || null;
+}
+
+function renderRetrievalRelations(skill) {
+  if (!skill) return panelMessage('Select a skill', 'Its graph relationships will appear here.');
+  const groups = [
+    ['source', [skill.source]],
+    ['state', [skill.state]],
+    ['categories', skill.categories || []],
+    ['tags', skill.tags || []],
+    ['native', skill.native_harnesses || []],
+  ];
+  return `
+    <div class="dio-retrieval-graph" aria-label="Selected skill relationship graph">
+      <div class="dio-retrieval-graph-center"><small>skill</small><strong>${esc(skill.name)}</strong></div>
+      ${groups.filter(([, values]) => values.length).map(([name, values]) => `
+        <section><h5>${esc(name)}</h5><div>${values.map((value) => `
+          ${name === 'native'
+            ? `<span>${esc(value)}</span>`
+            : `<button type="button" data-retrieval-facet="${name === 'categories' ? 'category' : name === 'tags' ? 'tag' : name}"
+                data-retrieval-facet-value="${esc(value)}">${esc(value)}</button>`}`.trim()).join('')}</div></section>`).join('')}
+    </div>`;
+}
+
+function renderRetrievalDetail(skill) {
+  if (!skill) {
+    return `<div class="dio-retrieval-empty">
+      ${SKILLS_ICON}<strong>Select a catalog entry</strong>
+      <span>Metadata, source relationships, duplicate provenance, Markdown, and exact actions appear here.</span>
+    </div>`;
+  }
+  if (skillDetailLoading && selectedSkillId === skill.skill_id) {
+    return panelMessage('Reading canonical SKILL.md…');
+  }
+  const detail = skillDetail?.metadata?.skill_id === skill.skill_id ? skillDetail : null;
+  const metadata = detail?.metadata || skill;
+  const tabs = `
+    <nav class="dio-retrieval-detail-tabs">
+      ${['preview', 'relations', 'json'].map((value) => `
+        <button type="button" class="${skillsDetailView === value ? 'active' : ''}"
+          data-retrieval-detail-view="${value}">${value}</button>`).join('')}
+    </nav>`;
+  let content = '';
+  if (skillsDetailView === 'preview') {
+    content = detail
+      ? `<article class="dio-retrieval-markdown">${markdownModule.mdToHtml(detail.markdown || '')}</article>`
+      : `<button type="button" data-retrieval-skill="${esc(skill.skill_id)}">Load SKILL.md</button>`;
+  } else if (skillsDetailView === 'relations') {
+    content = `${renderRetrievalRelations({ ...skill, ...metadata })}
+      ${(metadata.duplicate_paths || skill.duplicate_paths || []).length > 1 ? `
+        <details open><summary>Byte-identical package locations</summary><ul>
+          ${(metadata.duplicate_paths || skill.duplicate_paths).map((value) => `<li><code>${esc(value)}</code></li>`).join('')}
+        </ul></details>` : ''}`;
+  } else {
+    content = `<pre>${esc(JSON.stringify({ ...skill, inspection: detail || null }, null, 2))}</pre>`;
+  }
+  return `
+    <header class="dio-retrieval-detail-heading">
+      <div><small>${esc(skill.source)}</small><h4>${esc(skill.name)}</h4></div>
+      <button type="button" title="Copy exact skill ID" data-retrieval-copy="skill-id">Copy ID</button>
+    </header>
+    <div class="dio-retrieval-detail-meta">
+      ${statusBadge(skill.state)}
+      <code title="Package SHA-256">${esc((skill.package_hash || '').slice(0, 16) || 'no digest')}</code>
+      <span>${Number(skill.bytes || 0).toLocaleString()} bytes</span>
+    </div>
+    <p>${esc(skill.description || '')}</p>
+    <div class="dio-retrieval-actions">
+      ${skill.editable ? `<button type="button" data-skill-action="edit" data-skill="${esc(skill.skill_id)}">Open in Zed</button>` : ''}
+      <button type="button" data-retrieval-action="retrieve" data-retrieval-harness="hermes">Retrieve for Hermes</button>
+      <button type="button" data-retrieval-action="retrieve" data-retrieval-harness="omp">Retrieve for OMP</button>
+    </div>
+    ${tabs}
+    <div class="dio-retrieval-detail-content">${content}</div>`;
+}
+
+function renderRetrievalRuntime() {
+  if (retrievalRuntimeLoading) return panelMessage('Reading Retrieval runtime and profile wiring…');
+  if (!retrievalRuntime) {
+    return `<div class="dio-retrieval-empty"><strong>Runtime state is loaded on request</strong>
+      <span>This keeps the catalog window inexpensive until profile and watcher diagnostics are needed.</span>
+      <button type="button" data-retrieval-runtime-load>Load runtime</button></div>`;
+  }
+  const watcher = retrievalRuntime.watcher || {};
+  const projections = retrievalRuntime.projections || {};
+  return `
+    <div class="dio-retrieval-runtime">
+      <section class="dio-retrieval-runtime-summary">
+        <article><small>Doctor</small><strong>${Number(retrievalRuntime.doctor?.passed || 0)}/${Number(retrievalRuntime.doctor?.checks || 0)}</strong></article>
+        <article><small>Watcher</small><strong>${watcher.healthy ? 'healthy' : 'attention'}</strong></article>
+        <article><small>Hermes projections</small><strong>${Number(projections.hermes?.skills?.length || 0)}</strong></article>
+        <article><small>OMP projections</small><strong>${Number(projections.omp?.skills?.length || 0)}</strong></article>
+      </section>
+      <div class="dio-retrieval-actions">
+        <button type="button" data-retrieval-action="integrate">Reconcile integration</button>
+        <button type="button" data-retrieval-action="session-close" data-retrieval-harness="hermes">Clean Hermes baseline</button>
+        <button type="button" data-retrieval-action="session-close" data-retrieval-harness="omp">Clean OMP baseline</button>
+        <button type="button" data-retrieval-runtime-load>Refresh runtime</button>
+      </div>
+      <details open><summary>Profiles</summary><div class="dio-retrieval-profile-grid">
+        ${(retrievalRuntime.profiles || []).map((profile) => `<article>
+          <header><strong>${esc(profile.scope)}</strong>${statusBadge(profile.passed === profile.checks ? (profile.managed ? 'managed' : 'isolated') : 'failed')}</header>
+          <span>${Number(profile.passed)}/${Number(profile.checks)} contracts</span>
+          <details><summary>Checks</summary><ul>${(profile.details || []).map((row) => `
+            <li class="${row.passed ? 'ok' : 'bad'}"><strong>${esc(row.name)}</strong><code>${esc(row.detail)}</code></li>`).join('')}</ul></details>
+        </article>`).join('')}
+      </div></details>
+      <details><summary>Indexed sources</summary><div class="dio-retrieval-source-grid">
+        ${(retrievalRuntime.sources || []).map((source) => `<article>
+          <header><strong>${esc(source.name)}</strong>${statusBadge(source.stale ? 'stale' : source.state)}</header>
+          <span>${Number(source.document_count).toLocaleString()} documents · ${esc(source.kind)}</span>
+          <small>${esc(source.last_synced_at || 'not synchronized')}</small>
+          ${(source.reasons || []).length ? `<code>${esc(source.reasons.join(' · '))}</code>` : ''}
+        </article>`).join('')}
+      </div></details>
+      <details><summary>Runtime JSON</summary><pre>${esc(JSON.stringify(retrievalRuntime, null, 2))}</pre></details>
+    </div>`;
+}
+
 function renderSkills() {
   const modal = ensureSkillsModal();
   const body = modal.querySelector('.dio-skills-body');
@@ -1847,60 +2156,77 @@ function renderSkills() {
     return;
   }
   if (skillsError) {
-    body.innerHTML = panelMessage('Skills auditor unavailable', skillsError);
+    body.innerHTML = panelMessage('Retrieval workspace unavailable', skillsError);
     return;
   }
-  const query = skillsQuery.trim().toLowerCase();
-  let skills = (skillsReport?.skills || []).filter((value) => {
-    const matchesState = skillsState === 'active'
-      ? value.state === 'active'
-      : value.state === 'library';
-    const text = `${value.name} ${value.description} ${value.source} ${value.path}`.toLowerCase();
-    return matchesState && (!query || text.includes(query));
-  });
-  if (skillsState === 'recent') skills = skills.slice(0, 40);
-  const activeCount = Number(skillsReport?.active || 0);
-  const libraryCount = Number(skillsReport?.library || 0);
-  const context = skillsState === 'active'
-    ? 'Enabled by Hermes and available to agent sessions.'
-    : skillsState === 'recent'
-      ? 'Newest indexed references. Retrieved when needed; never prompt-loaded as a group.'
-      : 'The complete indexed Retrieval library. Search it without adding it to the prompt.';
+  if (!skillsReport) {
+    body.innerHTML = panelMessage('Open the Retrieval catalog to browse indexed skills.');
+    return;
+  }
+  const rows = visibleRetrievalSkills();
+  const selected = selectedCatalogSkill();
+  const facets = skillsReport.facets || {};
+  const summary = skillsReport.summary || {};
   body.innerHTML = `
-    <div class="dio-skills-toolbar">
-      <input type="search" data-skills-search value="${esc(skillsQuery)}" placeholder="Find a skill…">
-      <select data-skills-state>
-        <option value="active" ${skillsState === 'active' ? 'selected' : ''}>Hermes active (${activeCount})</option>
-        <option value="recent" ${skillsState === 'recent' ? 'selected' : ''}>Recent library</option>
-        <option value="library" ${skillsState === 'library' ? 'selected' : ''}>Indexed library (${libraryCount})</option>
-      </select>
-      <span>${skills.length} shown · ${activeCount} active · ${libraryCount} indexed</span>
+    <div class="dio-retrieval-shell">
+      <div class="dio-skills-toolbar">
+        <input type="search" data-skills-search value="${esc(skillsQuery)}" placeholder="Fuzzy search title, purpose, tag, path…">
+        <label><input type="checkbox" data-skills-exact ${skillsExact ? 'checked' : ''}> exact</label>
+        <button type="button" data-retrieval-native-search ${skillsQuery.trim() ? '' : 'disabled'}>
+          ${skillSearchLoading ? 'Ranking…' : 'Retrieval rank'}
+        </button>
+        ${skillSearchReport ? '<button type="button" data-retrieval-clear-search>Local search</button>' : ''}
+        <select data-skills-source>${retrievalOptionRows(facets.sources, skillsSource, 'All sources')}</select>
+        <select data-skills-category>${retrievalOptionRows(facets.categories, skillsCategory, 'All categories')}</select>
+        <select data-skills-state>${retrievalOptionRows(facets.states, skillsState === 'all' ? '' : skillsState, 'All states')}</select>
+        <select data-skills-tag>${retrievalOptionRows(facets.tags, skillsTag, 'All tags')}</select>
+      </div>
+      <nav class="dio-retrieval-view-tabs" aria-label="Retrieval workspace view">
+        ${[['catalog', 'Catalog'], ['graph', 'Graph'], ['runtime', 'Runtime']].map(([value, label]) => `
+          <button type="button" class="${skillsView === value ? 'active' : ''}" data-retrieval-view="${value}">${label}</button>`).join('')}
+        <span>${rows.length.toLocaleString()} shown · ${Number(summary.skills || 0).toLocaleString()} skills · ${Number(summary.sources || 0)} sources · ${Number(summary.categories || 0)} categories</span>
+      </nav>
+      ${skillsView === 'runtime' ? renderRetrievalRuntime() : `
+        <div class="dio-retrieval-workspace">
+          <aside class="dio-retrieval-facets">
+            <button type="button" class="${!skillsSource && !skillsCategory && skillsState === 'all' ? 'active' : ''}"
+              data-retrieval-reset>All skills <em>${Number(summary.skills || 0)}</em></button>
+            <h5>Sources</h5>${retrievalFacetButtons('source', facets.sources, skillsSource)}
+            <h5>Categories</h5>${retrievalFacetButtons('category', facets.categories, skillsCategory)}
+            <h5>States</h5>${retrievalFacetButtons('state', facets.states, skillsState === 'all' ? '' : skillsState, 8)}
+            <details><summary>Popular tags</summary>${retrievalFacetButtons('tag', facets.tags, skillsTag, 24)}</details>
+          </aside>
+          <main class="dio-retrieval-results">
+            ${skillsView === 'graph'
+              ? renderRetrievalRelations(selected)
+              : rows.length
+                ? rows.slice(0, 250).map(retrievalSkillCard).join('')
+                : panelMessage('No matching skills', 'Clear a facet or broaden the query.')}
+            ${skillsView === 'catalog' && rows.length > 250 ? `<p class="dio-skills-note">Showing the first 250 matches. Narrow the query or a facet to inspect the rest.</p>` : ''}
+          </main>
+          <aside class="dio-retrieval-detail">${renderRetrievalDetail(selected)}</aside>
+        </div>`}
     </div>
-    <p class="dio-skills-context">${esc(context)}</p>
-    <p class="dio-skills-note">${esc(skillsReport?.watcher_contract || '')}</p>
-    <div class="dio-skills-list">
-      ${skills.map((skill) => `
-        <article>
-          <div>
-            <strong>${esc(skill.name)}</strong>${statusBadge(skill.state === 'active' ? 'enabled' : 'indexed')}
-            <p>${esc(skill.description || '')}</p>
-            <code>${esc(skill.modified_at || '')} · ${esc(skill.source || '')}</code>
-          </div>
-          <div>
-            ${skill.editable
-              ? `<button type="button" data-skill-action="edit" data-skill="${esc(skill.skill_id)}">Zed</button>`
-              : ''}
-          </div>
-        </article>`).join('')}
-    </div>`;
+    `;
+  const renderedMarkdown = body.querySelector('.dio-retrieval-markdown');
+  if (renderedMarkdown) {
+    window.requestAnimationFrame(() => {
+      markdownModule.renderMermaid?.(renderedMarkdown);
+      markdownModule.renderMath?.(renderedMarkdown);
+    });
+  }
 }
 
-async function loadSkills() {
+async function loadSkills(refresh = false) {
   skillsLoading = true;
   skillsError = '';
   renderSkills();
   try {
-    skillsReport = await request('/api/odysseus/skills/audit');
+    skillsReport = await request(`/api/odysseus/skills/catalog${refresh ? '?refresh=true' : ''}`);
+    if (selectedSkillId && !selectedCatalogSkill()) {
+      selectedSkillId = '';
+      skillDetail = null;
+    }
   } catch (error) {
     skillsError = error?.message || String(error);
     skillsReport = null;
@@ -1909,11 +2235,82 @@ async function loadSkills() {
   renderSkills();
 }
 
+async function loadSkillDetail(skillId) {
+  selectedSkillId = skillId;
+  skillDetailLoading = true;
+  skillDetail = null;
+  renderSkills();
+  try {
+    skillDetail = await request(`/api/odysseus/skills/inspect?skill_id=${encodeURIComponent(skillId)}`);
+    skillsError = '';
+  } catch (error) {
+    skillsError = error?.message || String(error);
+  }
+  skillDetailLoading = false;
+  renderSkills();
+}
+
+async function runRetrievalSearch() {
+  const query = skillsQuery.trim();
+  if (!query || skillSearchLoading) return;
+  skillSearchLoading = true;
+  renderSkills();
+  try {
+    skillSearchReport = await request(`/api/odysseus/skills/search?query=${encodeURIComponent(query)}&limit=50`);
+    skillsError = '';
+  } catch (error) {
+    skillsError = error?.message || String(error);
+  }
+  skillSearchLoading = false;
+  renderSkills();
+}
+
+async function loadRetrievalRuntime() {
+  retrievalRuntimeLoading = true;
+  skillsError = '';
+  renderSkills();
+  try {
+    retrievalRuntime = await request('/api/odysseus/skills/runtime');
+  } catch (error) {
+    skillsError = error?.message || String(error);
+  }
+  retrievalRuntimeLoading = false;
+  renderSkills();
+}
+
+async function planRetrievalAction(action, harness = '', skillId = '') {
+  let query = '';
+  if (action === 'retrieve') {
+    query = await uiModule.styledPrompt(
+      'Describe the specialist instructions to find. Retrieval will run its isolated read-only scout and project at most one selected package.',
+      { title: `Retrieve for ${harness.toUpperCase()}`, placeholder: skillsQuery || 'What should the agent know how to do?' },
+    );
+    if (!query) return;
+  }
+  const danger = ['clear-projection', 'session-close'].includes(action);
+  executePlan(
+    '/api/odysseus/skills/jobs/plan',
+    { action, harness, skill_id: skillId || selectedSkillId || '', query },
+    { danger, after: 'skills' },
+  );
+}
+
+async function copyRetrievalValue(name) {
+  const value = name === 'skill-id' ? selectedSkillId : '';
+  if (!value) return;
+  try {
+    await navigator.clipboard.writeText(value);
+    uiModule.showToast('Exact skill ID copied.', 2500);
+  } catch (error) {
+    uiModule.showToast(`Clipboard write failed: ${error?.message || String(error)}`, 6000);
+  }
+}
+
 function openSkillsAuditor() {
   const modal = ensureSkillsModal();
   modal.classList.remove('hidden', 'modal-minimized');
   renderSkills();
-  loadSkills();
+  if (!skillsReport && !skillsLoading) loadSkills();
 }
 
 export function open() {

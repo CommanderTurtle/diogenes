@@ -15,6 +15,18 @@ from starlette.concurrency import run_in_threadpool
 from core.middleware import INTERNAL_TOOL_HEADER, require_admin
 from routes.auth_routes import SESSION_COOKIE
 from src.diogenes_host_services import HostServiceError, HostServicesManager
+from src.diogenes_librarian_workspace import (
+    LibrarianWorkspaceClient,
+    LibrarianWorkspaceError,
+)
+from src.diogenes_persephone_workspace import (
+    PersephoneWorkspaceControl,
+    PersephoneWorkspaceError,
+)
+from src.diogenes_roboomp_workspace import (
+    RoboOMPWorkspaceControl,
+    RoboOMPWorkspaceError,
+)
 from src.diogenes_docker_projects import (
     DockerProjectControl,
     DockerResourceControl,
@@ -24,7 +36,14 @@ from src.diogenes_docker_projects import (
     read_docker_log,
     save_docker_document,
 )
-from src.diogenes_skill_auditor import SkillAuditorControl, collect_skills
+from src.diogenes_skill_auditor import (
+    SkillAuditorControl,
+    collect_retrieval_catalog,
+    collect_retrieval_runtime,
+    collect_skills,
+    inspect_retrieval_skill,
+    search_retrieval_skills,
+)
 from src.diogenes_user_scripts import UserScriptControl
 from src.sandwich_runtime import (
     collect_sandwich_status,
@@ -145,8 +164,31 @@ class SandwichLifecyclePlanRequest(BaseModel):
 
 
 class SkillAuditorPlanRequest(BaseModel):
-    skill_id: str
+    skill_id: str = ""
     action: str
+    query: str = ""
+    harness: str = ""
+
+
+class LibrarianChatRequest(BaseModel):
+    messages: list[dict[str, object]]
+    model: str = ""
+
+
+class PersephoneLifecyclePlanRequest(BaseModel):
+    action: str
+
+
+class PersephoneMutationPlanRequest(BaseModel):
+    mutation: dict[str, object]
+
+
+class RoboOMPLifecyclePlanRequest(BaseModel):
+    action: str
+
+
+class RoboOMPMutationPlanRequest(BaseModel):
+    mutation: dict[str, object]
 
 
 class RuntimeDocumentSaveRequest(BaseModel):
@@ -184,6 +226,10 @@ def _job_http_error(exc: RuntimeJobError) -> HTTPException:
     if isinstance(exc, RuntimeJobConfirmationError):
         return HTTPException(400, str(exc))
     return HTTPException(400, str(exc))
+
+
+def _librarian_http_error(exc: LibrarianWorkspaceError) -> HTTPException:
+    return HTTPException(exc.status_code, str(exc))
 
 
 def _require_operator_admin(request: Request) -> None:
@@ -232,6 +278,15 @@ def setup_ulysses_routes(
     skill_auditor_control_factory: Callable[
         [], SkillAuditorControl
     ] = SkillAuditorControl,
+    librarian_client_factory: Callable[
+        [], LibrarianWorkspaceClient
+    ] = LibrarianWorkspaceClient,
+    persephone_control_factory: Callable[
+        [], PersephoneWorkspaceControl
+    ] = PersephoneWorkspaceControl,
+    roboomp_control_factory: Callable[
+        [], RoboOMPWorkspaceControl
+    ] = RoboOMPWorkspaceControl,
     sandwich_collector: Callable[[], dict] = collect_sandwich_status,
     managed_runtime_collector: Callable[[], dict] = collect_managed_runtimes,
     docker_project_collector: Callable[[], dict] = collect_docker_projects,
@@ -396,6 +451,287 @@ def setup_ulysses_routes(
             return await run_in_threadpool(collect_skills)
         except RuntimeJobError as exc:
             raise HTTPException(400, str(exc)) from exc
+
+    @router.get("/skills/catalog")
+    async def get_retrieval_catalog(
+        request: Request,
+        refresh: bool = False,
+    ) -> dict:
+        require_admin(request)
+        try:
+            return await run_in_threadpool(
+                collect_retrieval_catalog,
+                refresh=refresh,
+            )
+        except RuntimeJobError as exc:
+            raise HTTPException(400, str(exc)) from exc
+
+    @router.get("/skills/inspect")
+    async def get_retrieval_skill(
+        request: Request,
+        skill_id: str,
+    ) -> dict:
+        require_admin(request)
+        try:
+            return await run_in_threadpool(inspect_retrieval_skill, skill_id)
+        except RuntimeJobError as exc:
+            raise HTTPException(400, str(exc)) from exc
+
+    @router.get("/skills/search")
+    async def search_retrieval_catalog(
+        request: Request,
+        query: str,
+        limit: int = 24,
+    ) -> dict:
+        require_admin(request)
+        try:
+            return await run_in_threadpool(
+                search_retrieval_skills,
+                query,
+                limit=limit,
+            )
+        except RuntimeJobError as exc:
+            raise HTTPException(400, str(exc)) from exc
+
+    @router.get("/skills/runtime")
+    async def get_retrieval_runtime(request: Request) -> dict:
+        require_admin(request)
+        try:
+            return await run_in_threadpool(collect_retrieval_runtime)
+        except RuntimeJobError as exc:
+            raise HTTPException(400, str(exc)) from exc
+
+    @router.get("/library/overview")
+    async def get_librarian_overview(request: Request) -> dict:
+        require_admin(request)
+        try:
+            return await librarian_client_factory().overview()
+        except LibrarianWorkspaceError as exc:
+            raise _librarian_http_error(exc) from exc
+
+    @router.get("/library/concept")
+    async def get_librarian_concept(request: Request, path: str) -> dict:
+        require_admin(request)
+        try:
+            return await librarian_client_factory().concept(path)
+        except LibrarianWorkspaceError as exc:
+            raise _librarian_http_error(exc) from exc
+
+    @router.get("/library/search")
+    async def search_librarian(
+        request: Request,
+        query: str,
+        concept_type: str = "",
+        tag: str = "",
+    ) -> list:
+        require_admin(request)
+        try:
+            return await librarian_client_factory().search(
+                query,
+                concept_type=concept_type,
+                tag=tag,
+            )
+        except LibrarianWorkspaceError as exc:
+            raise _librarian_http_error(exc) from exc
+
+    @router.get("/library/graph")
+    async def get_librarian_graph(request: Request) -> dict:
+        require_admin(request)
+        try:
+            return await librarian_client_factory().graph()
+        except LibrarianWorkspaceError as exc:
+            raise _librarian_http_error(exc) from exc
+
+    @router.get("/library/traces")
+    async def get_librarian_traces(request: Request) -> list:
+        require_admin(request)
+        try:
+            return await librarian_client_factory().traces()
+        except LibrarianWorkspaceError as exc:
+            raise _librarian_http_error(exc) from exc
+
+    @router.get("/library/trace")
+    async def get_librarian_trace(request: Request, trace_id: str) -> dict:
+        require_admin(request)
+        try:
+            return await librarian_client_factory().trace(trace_id)
+        except LibrarianWorkspaceError as exc:
+            raise _librarian_http_error(exc) from exc
+
+    @router.get("/library/dreams")
+    async def get_librarian_dreams(request: Request) -> dict:
+        require_admin(request)
+        try:
+            return await librarian_client_factory().dreams()
+        except LibrarianWorkspaceError as exc:
+            raise _librarian_http_error(exc) from exc
+
+    @router.get("/library/dreams/{proposal_id}")
+    async def get_librarian_dream(request: Request, proposal_id: str) -> dict:
+        require_admin(request)
+        try:
+            return await librarian_client_factory().dream(proposal_id)
+        except LibrarianWorkspaceError as exc:
+            raise _librarian_http_error(exc) from exc
+
+    @router.post("/library/chat")
+    async def chat_with_librarian(
+        request: Request,
+        body: LibrarianChatRequest,
+    ) -> dict:
+        _require_operator_admin(request)
+        try:
+            return await librarian_client_factory().chat(
+                body.messages,
+                model=body.model,
+            )
+        except LibrarianWorkspaceError as exc:
+            raise _librarian_http_error(exc) from exc
+
+    @router.post("/library/dreams/propose")
+    async def propose_librarian_dream(request: Request) -> dict:
+        _require_operator_admin(request)
+        try:
+            return await librarian_client_factory().propose_dream()
+        except LibrarianWorkspaceError as exc:
+            raise _librarian_http_error(exc) from exc
+
+    @router.post("/library/dreams/{proposal_id}/{action}")
+    async def act_on_librarian_dream(
+        request: Request,
+        proposal_id: str,
+        action: str,
+    ) -> dict:
+        _require_operator_admin(request)
+        try:
+            return await librarian_client_factory().dream_action(
+                proposal_id,
+                action,
+            )
+        except LibrarianWorkspaceError as exc:
+            raise _librarian_http_error(exc) from exc
+
+    @router.get("/persephone/workspace")
+    async def get_persephone_workspace(
+        request: Request,
+        limit: int = 50,
+    ) -> dict:
+        require_admin(request)
+        try:
+            return await run_in_threadpool(
+                persephone_control_factory().observe,
+                limit=limit,
+            )
+        except PersephoneWorkspaceError as exc:
+            raise HTTPException(503, str(exc)) from exc
+
+    @router.get("/persephone/queue/{kind}/{record_id}")
+    async def get_persephone_queue_record(
+        request: Request,
+        kind: str,
+        record_id: int,
+    ) -> dict:
+        require_admin(request)
+        try:
+            return await run_in_threadpool(
+                persephone_control_factory().queue_record,
+                kind=kind,
+                record_id=record_id,
+            )
+        except PersephoneWorkspaceError as exc:
+            raise HTTPException(400, str(exc)) from exc
+
+    @router.post("/persephone/lifecycle/jobs/plan")
+    async def plan_persephone_lifecycle(
+        request: Request,
+        body: PersephoneLifecyclePlanRequest,
+    ) -> dict:
+        _require_operator_admin(request)
+        try:
+            plan, token = await run_in_threadpool(
+                persephone_control_factory().create_lifecycle_plan,
+                action=body.action,
+            )
+            return {"job": plan, "confirmation_token": token}
+        except RuntimeJobError as exc:
+            raise _job_http_error(exc) from exc
+
+    @router.post("/persephone/mutations/jobs/plan")
+    async def plan_persephone_mutation(
+        request: Request,
+        body: PersephoneMutationPlanRequest,
+    ) -> dict:
+        _require_operator_admin(request)
+        try:
+            plan, token = await run_in_threadpool(
+                persephone_control_factory().create_mutation_plan,
+                body.mutation,
+            )
+            return {"job": plan, "confirmation_token": token}
+        except RuntimeJobError as exc:
+            raise _job_http_error(exc) from exc
+
+    @router.get("/roboomp/workspace")
+    async def get_roboomp_workspace(
+        request: Request,
+        limit: int = 50,
+        state: str = "open",
+    ) -> dict:
+        require_admin(request)
+        try:
+            return await run_in_threadpool(
+                roboomp_control_factory().observe,
+                limit=limit,
+                state=state,
+            )
+        except RoboOMPWorkspaceError as exc:
+            raise HTTPException(503, str(exc)) from exc
+
+    @router.get("/roboomp/issues/inspect")
+    async def inspect_roboomp_issue(
+        request: Request,
+        issue: str,
+        limit: int = 50,
+    ) -> dict:
+        require_admin(request)
+        try:
+            return await run_in_threadpool(
+                roboomp_control_factory().inspect,
+                issue=issue,
+                limit=limit,
+            )
+        except RoboOMPWorkspaceError as exc:
+            raise HTTPException(400, str(exc)) from exc
+
+    @router.post("/roboomp/lifecycle/jobs/plan")
+    async def plan_roboomp_lifecycle(
+        request: Request,
+        body: RoboOMPLifecyclePlanRequest,
+    ) -> dict:
+        _require_operator_admin(request)
+        try:
+            plan, token = await run_in_threadpool(
+                roboomp_control_factory().create_lifecycle_plan,
+                action=body.action,
+            )
+            return {"job": plan, "confirmation_token": token}
+        except RuntimeJobError as exc:
+            raise _job_http_error(exc) from exc
+
+    @router.post("/roboomp/mutations/jobs/plan")
+    async def plan_roboomp_mutation(
+        request: Request,
+        body: RoboOMPMutationPlanRequest,
+    ) -> dict:
+        _require_operator_admin(request)
+        try:
+            plan, token = await run_in_threadpool(
+                roboomp_control_factory().create_mutation_plan,
+                body.mutation,
+            )
+            return {"job": plan, "confirmation_token": token}
+        except RuntimeJobError as exc:
+            raise _job_http_error(exc) from exc
 
     @router.get("/docker/projects/{project_id}/documents")
     async def get_docker_project_documents(
@@ -586,6 +922,8 @@ def setup_ulysses_routes(
                 skill_auditor_control_factory().create_plan,
                 skill_id=body.skill_id,
                 action=body.action,
+                query=body.query,
+                harness=body.harness,
             )
             return {"job": plan, "confirmation_token": token}
         except RuntimeJobError as exc:
