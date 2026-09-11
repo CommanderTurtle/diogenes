@@ -107,17 +107,38 @@ def test_named_contract_validates_reads_chat_and_dream_actions() -> None:
     _run(client.concept("/notes/one.md"))
     _run(client.search("needle", concept_type="note", tag="python"))
     _run(client.trace("trace-1"))
+    _run(client.export_bundle())
     _run(client.chat([{"role": "user", "content": "hello"}], model="local"))
+    _run(
+        client.guided_proposal(
+            "add",
+            content="remember this",
+            suggested_path="/facts/this.md",
+        )
+    )
+    _run(
+        client.guided_proposal(
+            "import",
+            bundle={"schemaVersion": "librarian.bundle.v1", "concepts": []},
+            strategy="replace",
+        )
+    )
     _run(client.dream_action("proposal-1", "approve"))
 
     assert calls[0][1:] == ("/concept", {"params": {"path": "/notes/one.md"}})
     assert calls[1][2]["params"] == {"q": "needle", "type": "note", "tag": "python"}
-    assert calls[3][2]["payload"] == {
+    assert calls[4][2]["payload"] == {
         "messages": [{"role": "user", "content": "hello"}],
         "model": "local",
     }
-    assert calls[3][2]["long_running"] is True
-    assert calls[4][1] == "/dreams/proposal-1/approve"
+    assert calls[4][2]["long_running"] is True
+    assert calls[5][2]["payload"] == {
+        "mode": "add",
+        "content": "remember this",
+        "suggestedPath": "/facts/this.md",
+    }
+    assert calls[6][2]["payload"]["strategy"] == "replace"
+    assert calls[7][1] == "/dreams/proposal-1/approve"
 
     with pytest.raises(workspace.LibrarianWorkspaceError):
         _run(client.concept("../outside.md"))
@@ -125,3 +146,7 @@ def test_named_contract_validates_reads_chat_and_dream_actions() -> None:
         _run(client.chat([{"role": "system", "content": "no"}]))
     with pytest.raises(workspace.LibrarianWorkspaceError):
         _run(client.dream_action("proposal-1", "erase"))
+    with pytest.raises(workspace.LibrarianWorkspaceError):
+        _run(client.guided_proposal("erase"))
+    with pytest.raises(workspace.LibrarianWorkspaceError):
+        _run(client.guided_proposal("import", bundle=None))

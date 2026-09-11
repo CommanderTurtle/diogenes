@@ -205,6 +205,10 @@ class _FakeLibrarian:
         self.calls.append(("dream", proposal_id))
         return {"id": proposal_id, "status": "pending"}
 
+    async def export_bundle(self):
+        self.calls.append(("export",))
+        return {"schemaVersion": "librarian.bundle.v1", "concepts": []}
+
     async def chat(self, messages, *, model=""):
         self.calls.append(("chat", messages, model))
         return {"answer": "hello", "toolEvents": []}
@@ -212,6 +216,10 @@ class _FakeLibrarian:
     async def propose_dream(self):
         self.calls.append(("propose",))
         return {"ran": True}
+
+    async def guided_proposal(self, mode, **kwargs):
+        self.calls.append(("guided", mode, kwargs))
+        return {"ran": True, "proposal": {"id": "proposal-2"}}
 
     async def dream_action(self, proposal_id, action):
         self.calls.append(("action", proposal_id, action))
@@ -556,11 +564,16 @@ def test_librarian_workspace_routes_delegate_to_named_owner_contract(monkeypatch
     ).json()["id"] == "trace-1"
     assert client.get("/api/odysseus/library/dreams").json()["proposals"] == []
     assert client.get("/api/odysseus/library/dreams/proposal-1").json()["id"] == "proposal-1"
+    assert client.get("/api/odysseus/library/export").json()["schemaVersion"] == "librarian.bundle.v1"
     assert client.post(
         "/api/odysseus/library/chat",
         json={"messages": [{"role": "user", "content": "hello"}], "model": "local"},
     ).json()["answer"] == "hello"
     assert client.post("/api/odysseus/library/dreams/propose").json()["ran"] is True
+    assert client.post(
+        "/api/odysseus/library/operations/propose",
+        json={"mode": "add", "content": "remember this", "suggested_path": "/facts/this.md"},
+    ).json()["proposal"]["id"] == "proposal-2"
     assert client.post(
         "/api/odysseus/library/dreams/proposal-1/approve"
     ).json()["status"] == "applied"
@@ -568,6 +581,19 @@ def test_librarian_workspace_routes_delegate_to_named_owner_contract(monkeypatch
     assert ("concept", "/demo.md") in owner.calls
     assert ("search", "demo", "note", "python") in owner.calls
     assert ("chat", [{"role": "user", "content": "hello"}], "local") in owner.calls
+    assert ("export",) in owner.calls
+    assert (
+        "guided",
+        "add",
+        {
+            "content": "remember this",
+            "suggested_path": "/facts/this.md",
+            "instruction": "",
+            "focus": "",
+            "bundle": None,
+            "strategy": "merge",
+        },
+    ) in owner.calls
     assert ("action", "proposal-1", "approve") in owner.calls
 
 

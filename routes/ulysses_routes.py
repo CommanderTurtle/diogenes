@@ -175,6 +175,16 @@ class LibrarianChatRequest(BaseModel):
     model: str = ""
 
 
+class LibrarianOperationRequest(BaseModel):
+    mode: str
+    content: str = ""
+    suggested_path: str = ""
+    instruction: str = ""
+    focus: str = ""
+    bundle: dict[str, object] | None = None
+    strategy: str = "merge"
+
+
 class PersephoneLifecyclePlanRequest(BaseModel):
     action: str
 
@@ -574,6 +584,14 @@ def setup_ulysses_routes(
         except LibrarianWorkspaceError as exc:
             raise _librarian_http_error(exc) from exc
 
+    @router.get("/library/export")
+    async def export_librarian_bundle(request: Request) -> dict:
+        require_admin(request)
+        try:
+            return await librarian_client_factory().export_bundle()
+        except LibrarianWorkspaceError as exc:
+            raise _librarian_http_error(exc) from exc
+
     @router.post("/library/chat")
     async def chat_with_librarian(
         request: Request,
@@ -593,6 +611,25 @@ def setup_ulysses_routes(
         _require_operator_admin(request)
         try:
             return await librarian_client_factory().propose_dream()
+        except LibrarianWorkspaceError as exc:
+            raise _librarian_http_error(exc) from exc
+
+    @router.post("/library/operations/propose")
+    async def propose_librarian_operation(
+        request: Request,
+        body: LibrarianOperationRequest,
+    ) -> dict:
+        _require_operator_admin(request)
+        try:
+            return await librarian_client_factory().guided_proposal(
+                body.mode,
+                content=body.content,
+                suggested_path=body.suggested_path,
+                instruction=body.instruction,
+                focus=body.focus,
+                bundle=body.bundle,
+                strategy=body.strategy,
+            )
         except LibrarianWorkspaceError as exc:
             raise _librarian_http_error(exc) from exc
 

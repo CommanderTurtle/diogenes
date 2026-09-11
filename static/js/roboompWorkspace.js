@@ -98,6 +98,8 @@ let secretChanges = {};
 let busy = '';
 let error = '';
 let notice = '';
+let reviewRepositoryPath = '';
+let reviewPullRequest = '';
 
 const esc = (value) => uiModule.esc(String(value ?? ''));
 
@@ -165,6 +167,8 @@ function onInput(event) {
     if (target.value) secretChanges[name] = target.value;
     else if (secretChanges[name] !== null) delete secretChanges[name];
   }
+  if (target.matches('[data-robo-review-path]')) reviewRepositoryPath = target.value || '';
+  if (target.matches('[data-robo-review-pr]')) reviewPullRequest = target.value || '';
 }
 
 function onChange(event) {
@@ -212,6 +216,7 @@ function onClick(event) {
   if (event.target.closest('[data-robo-audit]')) { createAudit(); return; }
   if (event.target.closest('[data-robo-timer-enable]')) { configureTimer(true); return; }
   if (event.target.closest('[data-robo-timer-disable]')) { configureTimer(false); return; }
+  if (event.target.closest('[data-robo-review-open]')) { openReview(); return; }
   const copy = event.target.closest('[data-robo-copy]');
   if (copy) {
     const source = copy.dataset.roboCopy;
@@ -368,6 +373,7 @@ function renderActivity() {
   const status = runtimeValue('status');
   const events = status.recent_events || runtimeValue('events').events || [];
   const tools = inspection?.database?.toolCalls || [];
+  const reviewComments = inspection?.database?.reviewComments || [];
   const logs = runtimeValue('logs').entries || [];
   return `
     ${sectionHeading('Activity', 'Event transitions, current tool calls, and bounded native logs.')}
@@ -375,6 +381,8 @@ function renderActivity() {
       <section class="dio-roboomp-card"><header><div><small>EVENTS</small><h3>Queue timeline</h3></div></header><div class="dio-roboomp-timeline">${events.map(eventRow).join('') || panelMessage('No events', 'Recent native event rows will appear here.')}</div></section>
       <section class="dio-roboomp-card"><header><div><small>TOOLS</small><h3>${selectedIssue ? esc(selectedIssue) : 'Select an issue'}</h3></div></header><div class="dio-roboomp-tool-list">${tools.map(toolRow).join('') || panelMessage('No selected tool history', 'Open a worktree to load its bounded tool-call record.')}</div></section>
     </div>
+    <section class="dio-roboomp-card dio-roboomp-reviews"><header><div><small>REVIEW</small><h3>${selectedIssue ? esc(selectedIssue) : 'Pull-request comments'}</h3></div><strong>${reviewComments.length}</strong></header>
+      <div>${reviewComments.map(reviewCommentRow).join('') || panelMessage('No review comments', 'Open a pull-request worktree to inspect its bounded review history.')}</div></section>
     <section class="dio-roboomp-card dio-roboomp-log"><header><div><small>JSONL</small><h3>RoboOMP log</h3></div><button type="button" data-robo-copy="logs">Copy</button></header><pre>${logs.map((entry) => `<span>${esc(logText(entry))}</span>`).join('') || 'No log entries returned.'}</pre></section>`;
 }
 
@@ -405,6 +413,7 @@ function renderSetup() {
       <article class="dio-roboomp-card"><header><div><small>2</small><h3>Required values</h3></div>${badge(missing.length ? 'incomplete' : 'ready')}</header>${missing.length ? `<ul>${missing.map((item) => `<li>${esc(item)}</li>`).join('')}</ul>` : `<p>${repositories.length} allowlisted repositor${repositories.length === 1 ? 'y' : 'ies'} configured.</p>`}<button type="button" data-robo-view="settings">Open settings</button></article>
       <article class="dio-roboomp-card"><header><div><small>3</small><h3>Build and start</h3></div>${badge(runtimeOnline() ? 'running' : 'stopped')}</header><p>The build verifies that the pinned source commit declares the matching OMP version.</p><div><button type="button" data-robo-lifecycle="doctor">Doctor</button><button type="button" data-robo-lifecycle="build">Build</button><button type="button" data-robo-lifecycle="start">Start</button></div></article>
     </div>
+    <section class="dio-roboomp-card dio-roboomp-review-controls"><header><div><small>HOST REVIEW</small><h3>Orca / GitCito handoff</h3></div></header><p>Use an existing host clone. An optional pull-request number is fetched to a review ref without checking it out or touching the isolated RoboOMP worktree.</p><div class="dio-roboomp-form-grid"><label class="wide"><span>Host Git worktree</span><input data-robo-review-path value="${esc(reviewRepositoryPath)}" placeholder="~/Hermes/repository"></label><label><span>Pull request <small>optional</small></span><input type="number" min="1" step="1" data-robo-review-pr value="${esc(reviewPullRequest)}" placeholder="123"></label></div><div class="dio-roboomp-row-actions"><button type="button" data-robo-review-open ${busy ? 'disabled' : ''}>Review handoff</button></div></section>
     <section class="dio-roboomp-card dio-roboomp-audit-controls"><header><div><small>PROPOSALS</small><h3>Bounded audit issue</h3></div></header><div class="dio-roboomp-form-grid"><label><span>Repository</span><input data-robo-audit-repo placeholder="owner/repository"></label><label class="wide"><span>Focus</span><input data-robo-audit-focus placeholder="Optional bounded area"></label><label><span>Schedule</span><input data-robo-timer-calendar value="Sun *-*-* 05:00:00"></label></div><div class="dio-roboomp-row-actions"><button type="button" data-robo-audit>Review audit</button><button type="button" data-robo-timer-enable>Enable timer</button><button type="button" data-robo-timer-disable>Disable timer</button></div></section>`;
 }
 
@@ -459,12 +468,14 @@ function repositoryNames() {
 }
 
 function issueCard(issue) {
-  return `<button type="button" class="dio-roboomp-issue-card ${selectedIssue === issue.key ? 'active' : ''}" data-robo-issue="${esc(issue.key)}"><header><span>${esc(issue.repo || '')}</span>${badge(issue.state || issue.latest_event?.state || 'indexed')}</header><strong>#${esc(issue.number)} ${esc(issue.title || issue.key)}</strong><small>${esc(issue.branch || issue.classification || 'No worktree yet')}</small></button>`;
+  const kind = issue.pull_request || issue.is_pr || issue.isPr ? 'pull request' : issue.state || issue.latest_event?.state || 'indexed';
+  return `<button type="button" class="dio-roboomp-issue-card ${selectedIssue === issue.key ? 'active' : ''}" data-robo-issue="${esc(issue.key)}"><header><span>${esc(issue.repo || '')}</span>${badge(kind)}</header><strong>#${esc(issue.number)} ${esc(issue.title || issue.key)}</strong><small>${esc(issue.branch || issue.classification || 'No worktree yet')}</small></button>`;
 }
 
 function issueRow(issue) {
   const latest = issue.latest_event || {};
-  return `<article class="dio-roboomp-issue-row ${selectedIssue === issue.key ? 'active' : ''}"><button type="button" data-robo-issue="${esc(issue.key)}"><span class="dio-roboomp-issue-number">#${esc(issue.number)}</span><span><strong>${esc(issue.title || issue.key)}</strong><small>${esc(issue.repo)} · ${esc(issue.classification || 'unclassified')} · ${formatTime(issue.updated_at || issue.updatedAt)}</small></span>${badge(issue.state || latest.state || 'indexed')}</button>${latest.state === 'failed' && latest.delivery_id ? `<button type="button" data-robo-retry="${esc(latest.delivery_id)}">Retry</button>` : ''}${latest.state === 'running' && latest.delivery_id ? `<button type="button" class="danger" data-robo-cancel="${esc(latest.delivery_id)}">Stop</button>` : ''}</article>`;
+  const kind = issue.pull_request || issue.is_pr || issue.isPr ? 'pull request' : issue.state || latest.state || 'indexed';
+  return `<article class="dio-roboomp-issue-row ${selectedIssue === issue.key ? 'active' : ''}"><button type="button" data-robo-issue="${esc(issue.key)}"><span class="dio-roboomp-issue-number">#${esc(issue.number)}</span><span><strong>${esc(issue.title || issue.key)}</strong><small>${esc(issue.repo)} · ${esc(issue.classification || 'unclassified')} · ${formatTime(issue.updated_at || issue.updatedAt)}</small></span>${badge(kind)}</button>${latest.state === 'failed' && latest.delivery_id ? `<button type="button" data-robo-retry="${esc(latest.delivery_id)}">Retry</button>` : ''}${latest.state === 'running' && latest.delivery_id ? `<button type="button" class="danger" data-robo-cancel="${esc(latest.delivery_id)}">Stop</button>` : ''}</article>`;
 }
 
 function pipelineRow(entry) {
@@ -478,6 +489,11 @@ function eventRow(entry) {
 function toolRow(entry) {
   const failed = Boolean(entry.error);
   return `<details class="${failed ? 'failed' : ''}"><summary><span><strong>${esc(entry.tool)}</strong><small>${formatTime(entry.ts)}</small></span>${badge(failed ? 'failed' : 'completed')}</summary><div><small>ARGUMENTS</small><pre>${esc(formatJson(entry.arguments))}</pre>${entry.result !== null && entry.result !== undefined ? `<small>RESULT</small><pre>${esc(formatJson(entry.result))}</pre>` : ''}${entry.error ? `<small>ERROR</small><pre>${esc(entry.error)}</pre>` : ''}</div></details>`;
+}
+
+function reviewCommentRow(entry) {
+  const location = [entry.path, entry.line ? `line ${entry.line}` : ''].filter(Boolean).join(' · ');
+  return `<article><header><code>${esc(location || entry.issue_key || 'review')}</code><time>${formatTime(entry.created_at)}</time></header><p>${esc(entry.body || '')}</p></article>`;
 }
 
 function releaseCard(entry) {
@@ -648,6 +664,24 @@ async function configureTimer(enable) {
   if (!repository) { error = 'Enter an allowlisted owner/repository.'; render(); return; }
   const action = enable ? 'timer.enable' : 'timer.disable';
   await runMutation({ version: 1, action, repository, ...(enable && calendar ? { calendar } : {}) }, 'timer', `${enable ? 'Enabled' : 'Disabled'} the audit timer for ${repository}.`, !enable);
+}
+
+async function openReview() {
+  const repositoryPath = reviewRepositoryPath.trim();
+  const rawPullRequest = reviewPullRequest.trim();
+  if (!repositoryPath) { error = 'Enter an existing host Git worktree.'; render(); return; }
+  const pullRequest = rawPullRequest ? Number(rawPullRequest) : null;
+  if (rawPullRequest && (!Number.isSafeInteger(pullRequest) || pullRequest < 1)) {
+    error = 'Pull request must be a positive integer.';
+    render();
+    return;
+  }
+  await runMutation({
+    version: 1,
+    action: 'review.open',
+    repositoryPath,
+    ...(pullRequest === null ? {} : { pullRequest }),
+  }, 'review', 'Host review workspace opened.');
 }
 
 async function selectIssue(issue) {

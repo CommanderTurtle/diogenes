@@ -22,6 +22,7 @@ _LOOPBACK_HOSTS = {"127.0.0.1", "localhost"}
 _PATH_RE = re.compile(r"^/[^\r\n\0]{1,1000}$")
 _ID_RE = re.compile(r"^[A-Za-z0-9._:-]{1,240}$")
 _QUERY_RE = re.compile(r"^[^\r\n\0]{1,1000}$")
+_GUIDED_MODES = {"add", "update", "maintain", "import"}
 
 
 class LibrarianWorkspaceError(RuntimeError):
@@ -232,6 +233,9 @@ class LibrarianWorkspaceClient:
             raise LibrarianWorkspaceError("invalid proposal ID", status_code=400)
         return await self._request("GET", f"/dreams/{proposal_id}")
 
+    async def export_bundle(self) -> Any:
+        return await self._request("GET", "/bundle/export")
+
     async def chat(self, messages: list[dict[str, Any]], *, model: str = "") -> Any:
         if not messages or len(messages) > 200:
             raise LibrarianWorkspaceError(
@@ -264,6 +268,50 @@ class LibrarianWorkspaceClient:
             long_running=True,
         )
 
+    async def guided_proposal(
+        self,
+        mode: str,
+        *,
+        content: str = "",
+        suggested_path: str = "",
+        instruction: str = "",
+        focus: str = "",
+        bundle: dict[str, Any] | None = None,
+        strategy: str = "merge",
+    ) -> Any:
+        if mode not in _GUIDED_MODES:
+            raise LibrarianWorkspaceError("invalid guided operation", status_code=400)
+        payload: dict[str, Any] = {"mode": mode}
+        if mode == "add":
+            payload["content"] = _guided_text(content, "knowledge", required=True)
+            if suggested_path:
+                if not _PATH_RE.fullmatch(suggested_path):
+                    raise LibrarianWorkspaceError("invalid suggested path", status_code=400)
+                payload["suggestedPath"] = suggested_path
+        elif mode == "update":
+            payload["instruction"] = _guided_text(
+                instruction,
+                "update instruction",
+                required=True,
+            )
+        elif mode == "maintain":
+            payload["focus"] = _guided_text(focus, "maintenance focus")
+        else:
+            if not isinstance(bundle, dict):
+                raise LibrarianWorkspaceError(
+                    "import requires a Librarian JSON bundle",
+                    status_code=400,
+                )
+            if strategy not in {"merge", "replace"}:
+                raise LibrarianWorkspaceError("invalid import strategy", status_code=400)
+            payload.update(bundle=bundle, strategy=strategy)
+        return await self._request(
+            "POST",
+            "/dreams/guided",
+            payload=payload,
+            long_running=True,
+        )
+
     async def dream_action(self, proposal_id: str, action: str) -> Any:
         if not _ID_RE.fullmatch(proposal_id):
             raise LibrarianWorkspaceError("invalid proposal ID", status_code=400)
@@ -274,3 +322,12 @@ class LibrarianWorkspaceClient:
             f"/dreams/{proposal_id}/{action}",
             long_running=True,
         )
+
+
+def _guided_text(value: str, label: str, *, required: bool = False) -> str:
+    if not isinstance(value, str) or len(value) > 250_000 or "\0" in value:
+        raise LibrarianWorkspaceError(f"invalid {label}", status_code=400)
+    cleaned = value.strip()
+    if required and not cleaned:
+        raise LibrarianWorkspaceError(f"{label} is required", status_code=400)
+    return cleaned

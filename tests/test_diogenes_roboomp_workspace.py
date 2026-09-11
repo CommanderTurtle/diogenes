@@ -106,3 +106,20 @@ def test_rejects_unknown_mutation_actions_before_writing_payload(tmp_path) -> No
     with pytest.raises(RoboOMPWorkspaceError, match="Unsupported"):
         control.create_mutation_plan({"version": 1, "action": "docker.exec"})
     assert not control.payload_root.exists()
+
+
+def test_review_handoff_is_a_typed_confirmed_owner_action(tmp_path) -> None:
+    control = RoboOMPWorkspaceControl(tmp_path / "control", cli=_cli(tmp_path))
+    mutation = {
+        "version": 1,
+        "action": "review.open",
+        "repositoryPath": "~/Hermes/repository",
+        "pullRequest": 27,
+    }
+    plan, token = control.create_mutation_plan(mutation)
+
+    assert token
+    assert plan["action"] == "review.open"
+    assert plan["metadata"]["repository_path"] == "~/Hermes/repository"
+    assert plan["metadata"]["pull_request"] == 27
+    assert plan["steps"][0]["argv"][1:4] == ["git-agent", "workspace", "mutate"]

@@ -101,7 +101,7 @@ def test_librarian_workspace_uses_the_owner_api_and_server_side_credentials() ->
     assert "import librarianWorkspaceModule from './js/librarianWorkspace.js';" in app
     assert "librarianWorkspaceModule.init(API_BASE);" in app
     assert "'/librarian': () =>" in app
-    for view in ("browse", "graph", "traces", "dreams", "chat", "health"):
+    for view in ("browse", "graph", "traces", "dreams", "operations", "chat", "health"):
         assert f"['{view}'," in workspace
     for endpoint in (
         "/api/odysseus/library/overview",
@@ -110,12 +110,16 @@ def test_librarian_workspace_uses_the_owner_api_and_server_side_credentials() ->
         "/api/odysseus/library/graph",
         "/api/odysseus/library/traces",
         "/api/odysseus/library/dreams",
+        "/api/odysseus/library/export",
+        "/api/odysseus/library/operations/propose",
         "/api/odysseus/library/chat",
     ):
         assert endpoint in workspace
     assert "DIOGENES_LIBRARIAN_TOKEN" not in workspace
     assert "AUTH_TOKEN" not in workspace
     assert "browser token" in workspace
+    assert "librarian.bundle.v1" in workspace
+    assert "Prepare proposal" in workspace
     assert "dio-library-window" in styles
     assert "/static/js/librarianWorkspace.js" in service_worker
 
@@ -296,8 +300,11 @@ def test_roboomp_workspace_uses_the_persephone_owner_contract() -> None:
         "timer.enable",
         "timer.disable",
         "version.sync",
+        "review.open",
     ):
         assert action in workspace
+    assert "reviewComments" in workspace
+    assert "Orca / GitCito handoff" in workspace
     assert "dio-roboomp-window" in styles
     assert "/static/js/roboompWorkspace.js" in service_worker
 

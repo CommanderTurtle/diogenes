@@ -35,6 +35,7 @@ MUTATION_ACTIONS = {
     "timer.enable",
     "timer.disable",
     "version.sync",
+    "review.open",
 }
 LIFECYCLE_ACTIONS = {
     "initialize",
@@ -348,6 +349,22 @@ class RoboOMPWorkspaceControl:
                 f"Clean the isolated RoboOMP workspace for {issue}",
                 f"CLEAN ROBOMP WORKSPACE {short}",
                 {"issue": issue},
+            )
+        if action == "review.open":
+            repository_path = str(mutation.get("repositoryPath") or "host worktree")[:4000]
+            pull_request = mutation.get("pullRequest")
+            target = (
+                f"{repository_path} pull request #{pull_request}"
+                if pull_request not in {None, ""}
+                else repository_path
+            )
+            return (
+                f"Open the host worktree for review: {target}",
+                f"OPEN ROBOMP REVIEW {short}",
+                {
+                    "repository_path": repository_path,
+                    "pull_request": pull_request,
+                },
             )
         repository = str(mutation.get("repository") or "repository")[:400]
         return (

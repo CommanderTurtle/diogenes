@@ -40,6 +40,15 @@ let chatInput = '';
 let chatModel = '';
 let chatBusy = false;
 let ownerJobBusy = false;
+let operationMode = 'add';
+let operationBusy = false;
+let operationContent = '';
+let operationPath = '';
+let operationInstruction = '';
+let operationFocus = '';
+let importStrategy = 'merge';
+let importBundle = null;
+let importName = '';
 
 const esc = (value) => uiModule.esc(String(value ?? ''));
 
@@ -122,12 +131,30 @@ function onInput(event) {
   if (event.target.matches('[data-library-chat-model]')) {
     chatModel = event.target.value || '';
   }
+  if (event.target.matches('[data-library-operation-content]')) {
+    operationContent = event.target.value || '';
+  }
+  if (event.target.matches('[data-library-operation-path]')) {
+    operationPath = event.target.value || '';
+  }
+  if (event.target.matches('[data-library-operation-instruction]')) {
+    operationInstruction = event.target.value || '';
+  }
+  if (event.target.matches('[data-library-operation-focus]')) {
+    operationFocus = event.target.value || '';
+  }
 }
 
 function onChange(event) {
   if (event.target.matches('[data-library-search-type]')) {
     searchType = event.target.value || '';
     if (searchQuery.trim()) runSearch();
+  }
+  if (event.target.matches('[data-library-import-strategy]')) {
+    importStrategy = event.target.value === 'replace' ? 'replace' : 'merge';
+  }
+  if (event.target.matches('[data-library-import-file]')) {
+    readImportFile(event.target.files?.[0]);
   }
 }
 
@@ -145,6 +172,12 @@ function onClick(event) {
   if (path) {
     view = 'browse';
     openConcept(path.dataset.libraryConcept);
+    return;
+  }
+  const operation = event.target.closest('[data-library-operation-mode]');
+  if (operation) {
+    operationMode = operation.dataset.libraryOperationMode;
+    render();
     return;
   }
   const traceButton = event.target.closest('[data-library-trace]');
@@ -174,6 +207,14 @@ function onClick(event) {
     chatMessages = [];
     chatTools = [];
     render();
+    return;
+  }
+  if (event.target.closest('[data-library-operation-submit]')) {
+    stageOperation();
+    return;
+  }
+  if (event.target.closest('[data-library-export]')) {
+    exportBundle();
     return;
   }
   if (event.target.closest('[data-library-start]')) {
@@ -424,6 +465,53 @@ function renderDreams() {
   </div>`;
 }
 
+function renderOperations() {
+  const modeButtons = [
+    ['add', 'Add knowledge'],
+    ['update', 'Update'],
+    ['maintain', 'Maintain'],
+    ['import', 'Import'],
+  ].map(([mode, label]) => `<button type="button" class="${operationMode === mode ? 'active' : ''}"
+    data-library-operation-mode="${mode}">${label}</button>`).join('');
+  let form = '';
+  if (operationMode === 'add') {
+    form = `<label><span>Knowledge to record</span><textarea rows="12" data-library-operation-content
+      placeholder="Facts, documentation, decisions, or a runbook…">${esc(operationContent)}</textarea></label>
+      <label><span>Suggested concept path <small>optional</small></span><input data-library-operation-path
+        value="${esc(operationPath)}" placeholder="/apis/example.md"></label>`;
+  } else if (operationMode === 'update') {
+    form = `<label><span>Targeted change</span><textarea rows="12" data-library-operation-instruction
+      placeholder="Describe what to correct, reorganize, or deprecate…">${esc(operationInstruction)}</textarea></label>`;
+  } else if (operationMode === 'maintain') {
+    form = `<label><span>Maintenance focus <small>optional</small></span><textarea rows="10"
+      data-library-operation-focus placeholder="Leave blank for a complete graph-health pass…">${esc(operationFocus)}</textarea></label>`;
+  } else {
+    const count = Array.isArray(importBundle?.concepts) ? importBundle.concepts.length : 0;
+    form = `<label class="dio-library-import-drop"><span>Librarian JSON export</span>
+        <input type="file" accept="application/json,.json" data-library-import-file>
+        <strong>${importName ? esc(importName) : 'Choose .json file'}</strong>
+        <small>${importName ? `${count.toLocaleString()} concepts ready to stage` : 'The file is parsed locally before it is sent to the owner service.'}</small>
+      </label>
+      <label><span>Import strategy</span><select data-library-import-strategy>
+        <option value="merge" ${importStrategy === 'merge' ? 'selected' : ''}>Merge · preserve concepts not in the file</option>
+        <option value="replace" ${importStrategy === 'replace' ? 'selected' : ''}>Replace · propose deletion of concepts not in the file</option>
+      </select></label>`;
+  }
+  const ready = operationMode === 'add' ? operationContent.trim()
+    : operationMode === 'update' ? operationInstruction.trim()
+      : operationMode === 'import' ? importBundle : true;
+  return `<div class="dio-library-operations">
+    <header><div><h3>Reviewed operations</h3><p>Every change is prepared against an isolated bundle and opens as an exact diff before apply.</p></div>
+      <button type="button" data-library-export ${operationBusy ? 'disabled' : ''}>Export JSON</button></header>
+    <nav>${modeButtons}</nav>
+    <section>${form}
+      <div class="dio-library-operation-submit"><span>${operationMode === 'import' && importStrategy === 'replace' ? 'Replace can propose deletions; nothing changes until the diff is applied.' : 'The live bundle is unchanged while the proposal is prepared.'}</span>
+        <button type="button" data-library-operation-submit ${operationBusy || !ready ? 'disabled' : ''}>
+          ${operationBusy ? 'Preparing…' : 'Prepare proposal'}</button></div>
+    </section>
+  </div>`;
+}
+
 function renderChat() {
   const config = overview?.config || {};
   return `<div class="dio-library-chat">
@@ -492,12 +580,13 @@ function render() {
     graph: renderGraph,
     traces: renderTraces,
     dreams: renderDreams,
+    operations: renderOperations,
     chat: renderChat,
     health: renderHealth,
   }[view]?.() || renderBrowse();
   body.innerHTML = `<div class="dio-library-shell">
     <nav class="dio-library-tabs">
-      ${[['browse', 'Browse'], ['graph', 'Graph'], ['traces', 'Traces'], ['dreams', 'Dreams'], ['chat', 'Chat'], ['health', 'Health']].map(([value, label]) => `
+      ${[['browse', 'Browse'], ['graph', 'Graph'], ['traces', 'Traces'], ['dreams', 'Dreams'], ['operations', 'Operations'], ['chat', 'Chat'], ['health', 'Health']].map(([value, label]) => `
         <button type="button" class="${view === value ? 'active' : ''}" data-library-view="${value}">${label}</button>`).join('')}
       <span>${esc(overview.config?.format || '')} · ${Number(overview.validation?.conceptCount || 0)} concepts</span>
     </nav>
@@ -669,6 +758,101 @@ async function actOnDream(action) {
     error = caught?.message || String(caught);
   }
   dreamBusy = '';
+  render();
+}
+
+async function readImportFile(file) {
+  importBundle = null;
+  importName = '';
+  if (!file) {
+    render();
+    return;
+  }
+  try {
+    const parsed = JSON.parse(await file.text());
+    if (parsed?.schemaVersion !== 'librarian.bundle.v1' || !Array.isArray(parsed?.concepts)) {
+      throw new Error('Choose a librarian.bundle.v1 JSON export.');
+    }
+    importBundle = parsed;
+    importName = file.name;
+    error = '';
+  } catch (caught) {
+    error = caught?.message || String(caught);
+  }
+  render();
+}
+
+async function exportBundle() {
+  if (operationBusy) return;
+  operationBusy = true;
+  render();
+  try {
+    const payload = await request('/api/odysseus/library/export');
+    const blob = new Blob([`${JSON.stringify(payload, null, 2)}\n`], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `librarian-${new Date().toISOString().replaceAll(':', '-')}.json`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+    uiModule.showToast(`Exported ${(payload.concepts || []).length} concepts.`, 3000);
+    error = '';
+  } catch (caught) {
+    error = caught?.message || String(caught);
+  }
+  operationBusy = false;
+  render();
+}
+
+async function stageOperation() {
+  if (operationBusy) return;
+  const payload = { mode: operationMode };
+  if (operationMode === 'add') {
+    payload.content = operationContent.trim();
+    payload.suggested_path = operationPath.trim();
+  } else if (operationMode === 'update') {
+    payload.instruction = operationInstruction.trim();
+  } else if (operationMode === 'maintain') {
+    payload.focus = operationFocus.trim();
+  } else {
+    payload.bundle = importBundle;
+    payload.strategy = importStrategy;
+  }
+  const labels = {
+    add: 'Prepare a reviewed proposal for this knowledge?',
+    update: 'Prepare a reviewed proposal for this targeted update?',
+    maintain: 'Run this maintenance pass against an isolated bundle copy?',
+    import: `Prepare a ${importStrategy} import proposal from ${importName}?`,
+  };
+  const confirmed = await uiModule.styledConfirm(labels[operationMode], {
+    title: 'Prepare Librarian proposal',
+    confirmText: 'Prepare',
+    cancelText: 'Cancel',
+    danger: operationMode === 'import' && importStrategy === 'replace',
+  });
+  if (!confirmed) return;
+  operationBusy = true;
+  render();
+  try {
+    const report = await request('/api/odysseus/library/operations/propose', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+    if (!report.ran || !report.proposal?.id) {
+      uiModule.showToast(report.reason || 'No proposal was needed.', 4000);
+    } else {
+      view = 'dreams';
+      await loadDreams();
+      await loadDream(report.proposal.id);
+      uiModule.showToast('Proposal ready for review.', 3000);
+    }
+    error = '';
+  } catch (caught) {
+    error = caught?.message || String(caught);
+  }
+  operationBusy = false;
   render();
 }
 
