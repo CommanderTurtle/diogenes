@@ -408,6 +408,8 @@ II. Files changed — commit diff: [`fa510e5`](https://github.com/CommanderTurtl
 
 ## Demo
 
+Diogenes integrates a Three-JS implementation of Zensical (Mkdocs) documentation. Expanding from a developer-oriented point of view at the [Diogenes landing page](https://dio.shel.sh/). Its source lives in the wrapping framework under [`orc/tree/main/dio`](https://github.com/CommanderTurtle/orc/tree/main/dio)
+
 A full hover-to-play tour lives on the [Odysseus landing page](https://odysseus-dev.github.io/odysseus/). Its source lives under [`website/`](website/).
 
 ## Contributing
