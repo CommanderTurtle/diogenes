@@ -58,10 +58,10 @@ web application on `0.0.0.0:7000`. In-place update and runtime-state instruction
 [`docs/DIOGENES_DEPLOYMENT.md`](docs/DIOGENES_DEPLOYMENT.md).
 
 After the optional OMP, Persephone, and local backend dependencies are installed,
-`./ompsettings.sh` can apply the workstation's optimized OMP preference baseline
-once. It is deliberately never run by **Integrate**, preserves MCP/model/auth/session
-configuration, and asks for confirmation before writing; open `omp`, then run
-`/settings` to review the result.
+`./ompsettings.sh` remains as a compatibility command and delegates directly to
+`persephone reconcile`. Diogenes contains no copy of the OMP web-search, browser,
+or image-capability repair policy. Persephone reads current state and changes only
+owned drift after an OMP update.
 
 ### Native services without system Node
 
@@ -295,7 +295,7 @@ II. Files changed — commit diffs, oldest first: [`80d23e0`](https://github.com
 - [`config/ulysses/hermes-stack.json`](config/ulysses/hermes-stack.json), [`config/ulysses/runtime-management.json`](config/ulysses/runtime-management.json), and [`src/diogenes_dependency_integration.py`](src/diogenes_dependency_integration.py) — register Context Mode, Persephone, OMP, and their dependency/status contracts.
 - [`src/diogenes_dependency_action.py`](src/diogenes_dependency_action.py), [`src/ulysses_runtime_management.py`](src/ulysses_runtime_management.py), and [`static/js/ulyssesServices.js`](static/js/ulyssesServices.js) — expose explicit install, integrate, status, and lifecycle actions.
 - [`src/diogenes_user_scripts.py`](src/diogenes_user_scripts.py) — stores user-authored native scripts outside generated runtime definitions.
-- [`ompsettings.sh`](ompsettings.sh) — applies only the reviewed optional OMP preference baseline and preserves unrelated user configuration.
+- [`ompsettings.sh`](ompsettings.sh) — compatibility launcher for Persephone's repository-owned OMP reconciler; it contains no OMP settings.
 
 ---
 
@@ -348,7 +348,7 @@ I. Updated OMP integration to its current configuration schema and made Compose 
 
 II. Files changed — commit diffs, oldest first: [`3e0f503`](https://github.com/CommanderTurtle/diogenes/commit/3e0f503), [`1e17dbc`](https://github.com/CommanderTurtle/diogenes/commit/1e17dbc).
 
-- [`ompsettings.sh`](ompsettings.sh) and [`src/diogenes_dependency_integration.py`](src/diogenes_dependency_integration.py) — keep the optional OMP baseline and integration detector aligned with the supported schema.
+- [`ompsettings.sh`](ompsettings.sh) and [`src/diogenes_dependency_integration.py`](src/diogenes_dependency_integration.py) — retain the historical entrypoint and integration detector; current OMP repair is delegated to Persephone.
 - [`src/diogenes_docker_projects.py`](src/diogenes_docker_projects.py) and [`config/ulysses/runtime-management.json`](config/ulysses/runtime-management.json) — enforce health-aware Compose replacement and prior-state restoration.
 - [`tests/test_diogenes_docker_projects.py`](tests/test_diogenes_docker_projects.py) and [`tests/test_ulysses_runtime_management.py`](tests/test_ulysses_runtime_management.py) — verify the readiness and lifecycle rules.
 
