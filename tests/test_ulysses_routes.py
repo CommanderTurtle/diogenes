@@ -242,6 +242,15 @@ class _FakePersephoneControl:
         self.calls.append(("queue", kind, record_id))
         return {"kind": kind, "id": record_id, "body": "full body"}
 
+    def logs(self, *, lines=200):
+        self.calls.append(("logs", lines))
+        return {
+            "schemaVersion": "persephone.workspace-logs.v1",
+            "available": True,
+            "lines": lines,
+            "text": "owner log\n",
+        }
+
     def create_lifecycle_plan(self, *, action):
         self.calls.append(("lifecycle", action))
         return (
@@ -608,6 +617,7 @@ def test_persephone_workspace_routes_delegate_to_owner_cli_contract(monkeypatch)
 
     report = client.get("/api/odysseus/persephone/workspace", params={"limit": 17})
     record = client.get("/api/odysseus/persephone/queue/inbox/9")
+    logs = client.get("/api/odysseus/persephone/logs", params={"lines": 33})
     lifecycle = client.post(
         "/api/odysseus/persephone/lifecycle/jobs/plan",
         json={"action": "restart"},
@@ -627,11 +637,13 @@ def test_persephone_workspace_routes_delegate_to_owner_cli_contract(monkeypatch)
     assert report.status_code == 200
     assert report.json()["schemaVersion"] == "persephone.workspace.v1"
     assert record.json()["body"] == "full body"
+    assert logs.json()["text"] == "owner log\n"
     assert lifecycle.json()["confirmation_token"] == "persephone-lifecycle-token"
     assert mutation.json()["job"]["action"] == "queue.retry"
     assert owner.calls == [
         ("observe", 17),
         ("queue", "inbox", 9),
+        ("logs", 33),
         ("lifecycle", "restart"),
         ("mutation", {"version": 1, "action": "queue.retry", "kind": "inbox", "id": 9}),
     ]

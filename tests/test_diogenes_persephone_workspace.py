@@ -27,6 +27,13 @@ def test_workspace_reads_only_the_versioned_owner_cli_contract(tmp_path) -> None
         calls.append((argv, kwargs))
         if argv[2:4] == ["queue", "inbox"]:
             value = {"kind": "inbox", "id": 7, "body": "hello"}
+        elif argv[1:3] == ["workspace", "logs"]:
+            value = {
+                "schemaVersion": "persephone.workspace-logs.v1",
+                "available": True,
+                "lines": 25,
+                "text": "owner log\n",
+            }
         else:
             value = {
                 "schemaVersion": "persephone.workspace.v1",
@@ -38,12 +45,18 @@ def test_workspace_reads_only_the_versioned_owner_cli_contract(tmp_path) -> None
     control = PersephoneWorkspaceControl(tmp_path / "control", cli=_cli(tmp_path), run=run)
     report = control.observe(limit=12)
     record = control.queue_record(kind="inbox", record_id=7)
+    logs = control.logs(lines=25)
 
     assert report["schemaVersion"] == "persephone.workspace.v1"
     assert record == {"kind": "inbox", "id": 7, "body": "hello"}
+    assert logs["text"] == "owner log\n"
     assert calls[0][0][1:] == ["workspace", "show", "--limit", "12"]
     assert calls[1][0][1:] == ["workspace", "queue", "inbox", "7"]
+    assert calls[2][0][1:] == ["workspace", "logs", "--lines", "25"]
     assert "VIRTUAL_ENV" not in calls[0][1]["env"]
+
+    with pytest.raises(PersephoneWorkspaceError):
+        control.logs(lines=0)
 
 
 def test_secret_mutation_is_0600_and_never_copied_into_job_metadata(tmp_path) -> None:

@@ -17,6 +17,7 @@ from src.ulysses_jobs import RuntimeJobError, RuntimeJobStore, native_host_envir
 
 
 WORKSPACE_SCHEMA = "persephone.workspace.v1"
+WORKSPACE_LOG_SCHEMA = "persephone.workspace-logs.v1"
 MUTATION_ACTIONS = {
     "configuration.replace",
     "schedule.put",
@@ -81,6 +82,17 @@ class PersephoneWorkspaceControl:
         result = self._owner_json(["workspace", "queue", kind, str(record_id)], timeout=15)
         if result.get("kind") != kind or result.get("id") != record_id:
             raise PersephoneWorkspaceError("Persephone returned a mismatched queue record")
+        return result
+
+    def logs(self, *, lines: int = 200) -> dict[str, Any]:
+        if not 1 <= int(lines) <= 1000:
+            raise PersephoneWorkspaceError("Persephone log line count must be 1-1000")
+        result = self._owner_json(
+            ["workspace", "logs", "--lines", str(int(lines))],
+            timeout=20,
+        )
+        if result.get("schemaVersion") != WORKSPACE_LOG_SCHEMA:
+            raise PersephoneWorkspaceError("Persephone returned an unsupported log schema")
         return result
 
     def create_lifecycle_plan(self, *, action: str) -> tuple[dict[str, Any], str]:

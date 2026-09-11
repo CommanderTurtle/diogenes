@@ -678,6 +678,22 @@ def setup_ulysses_routes(
         except PersephoneWorkspaceError as exc:
             raise HTTPException(400, str(exc)) from exc
 
+    @router.get("/persephone/logs")
+    async def get_persephone_logs(
+        request: Request,
+        lines: int = 200,
+    ) -> dict:
+        require_admin(request)
+        if not 1 <= lines <= 1000:
+            raise HTTPException(400, "Persephone log line count must be 1-1000")
+        try:
+            return await run_in_threadpool(
+                persephone_control_factory().logs,
+                lines=lines,
+            )
+        except PersephoneWorkspaceError as exc:
+            raise HTTPException(503, str(exc)) from exc
+
     @router.post("/persephone/lifecycle/jobs/plan")
     async def plan_persephone_lifecycle(
         request: Request,

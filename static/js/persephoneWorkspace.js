@@ -4,7 +4,7 @@ import { makeWindowDraggable } from './windowDrag.js';
 
 const MODAL_ID = 'diogenes-persephone-workspace-modal';
 const TERMINAL = new Set(['succeeded', 'failed', 'cancelled']);
-const VIEWS = ['overview', 'connectors', 'routes', 'queues', 'schedules', 'settings', 'setup'];
+const VIEWS = ['overview', 'connectors', 'routes', 'runtime', 'queues', 'schedules', 'settings', 'setup'];
 const ICON = `<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor"
   stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
   <path d="M12 3a4 4 0 0 0-4 4v2H6a2 2 0 0 0-2 2v8h16v-8a2 2 0 0 0-2-2h-2V7a4 4 0 0 0-4-4z"/>
@@ -22,6 +22,9 @@ let queueKind = 'inbox';
 let selectedQueue = null;
 let scheduleDraft = null;
 let dispatchDraft = { channel: 'api', peerId: 'owner', message: '' };
+let runtimeLogs = null;
+let runtimeLogsLoading = false;
+let approvalValues = {};
 let busy = '';
 let error = '';
 let notice = '';
@@ -92,6 +95,7 @@ function onInput(event) {
   }
   if (target.matches('[data-pers-schedule]')) updateScheduleValue(target);
   if (target.matches('[data-pers-dispatch]')) dispatchDraft[target.dataset.persDispatch] = target.value;
+  if (target.matches('[data-pers-approval-value]')) approvalValues[target.dataset.persApprovalValue] = target.value;
 }
 
 function onChange(event) {
@@ -129,6 +133,13 @@ function onClick(event) {
   if (copy) { copyText(copy.dataset.persCopy || ''); return; }
   if (event.target.closest('[data-pers-copy-queue]')) {
     copyText(selectedQueue?.body || '');
+    return;
+  }
+  if (event.target.closest('[data-pers-logs-load]')) { loadRuntimeLogs(); return; }
+  if (event.target.closest('[data-pers-copy-logs]')) { copyText(runtimeLogs?.text || ''); return; }
+  const approvalAction = event.target.closest('[data-pers-approval-action]');
+  if (approvalAction) {
+    resolveApproval(Number(approvalAction.dataset.persApprovalId), approvalAction.dataset.persApprovalAction);
     return;
   }
   const kind = event.target.closest('[data-pers-queue-kind]');
@@ -203,6 +214,7 @@ function render() {
 function renderView() {
   if (view === 'connectors') return renderConnectors();
   if (view === 'routes') return renderRoutes();
+  if (view === 'runtime') return renderRuntime();
   if (view === 'queues') return renderQueues();
   if (view === 'schedules') return renderSchedules();
   if (view === 'settings') return renderSettings();
@@ -338,6 +350,69 @@ function renderRoutes() {
     </div>`;
 }
 
+function renderRuntime() {
+  const runtime = workspace.runtime || {};
+  const loops = Object.entries(runtime.loops || {});
+  const liveWorkers = Array.isArray(runtime.workerState) ? runtime.workerState : [];
+  const workers = workspace.workers || [];
+  const approvals = workspace.approvals || [];
+  return `${sectionHeading('Runtime', 'Inspect daemon loops, OMP workers, pending approvals, and an on-demand service log snapshot.')}
+    <div class="dio-persephone-runtime-grid">
+      <article class="dio-persephone-card dio-persephone-runtime-card">
+        <header><div><small>DAEMON</small><h3>Loops</h3><p>${runtime.ok ? `${formatDuration(runtime.uptimeSeconds)} · PID ${esc(runtime.pid || '—')}` : 'Service status is unavailable.'}</p></div>${badge(runtime.ok ? 'running' : 'stopped')}</header>
+        <div class="dio-persephone-loop-grid">
+          ${loops.length ? loops.map(([name, state]) => `<div>
+            <header><strong>${esc(titleCase(name))}</strong>${badge(state.running ? 'running' : 'stopped')}</header>
+            <span>${Number(state.starts) || 0} start${Number(state.starts) === 1 ? '' : 's'} · ${Number(state.failures) || 0} failure${Number(state.failures) === 1 ? '' : 's'}</span>
+            <small>${state.lastError ? esc(state.lastError) : `started ${formatTime(state.lastStartedAt)}`}</small>
+          </div>`).join('') : panelMessage('No loop status', 'Start Persephone to populate daemon loop state.')}
+        </div>
+        <dl class="dio-persephone-runtime-stats">
+          <div><dt>Active routes</dt><dd>${Number(runtime.routing?.activeRoutes) || 0}</dd></div>
+          <div><dt>Queued messages</dt><dd>${Number(runtime.routing?.inFlightAndQueuedMessages) || 0}</dd></div>
+          <div><dt>Queued behind active</dt><dd>${Number(runtime.routing?.queuedBehindActive) || 0}</dd></div>
+        </dl>
+      </article>
+      <article class="dio-persephone-card dio-persephone-runtime-card">
+        <header><div><small>WORKERS</small><h3>Processes and sessions</h3><p>${liveWorkers.length} live · ${workers.length} persisted</p></div></header>
+        <div class="dio-persephone-worker-list">
+          ${liveWorkers.length ? liveWorkers.map((worker) => `<div><header><strong>${esc(worker.key || 'worker')}</strong>${badge(worker.occupied ? 'busy' : (worker.alive ? 'ready' : 'stopped'))}</header><code>PID ${esc(worker.pid || '—')} · ${esc(worker.sessionPath || 'session pending')}</code>${worker.nativeSwarm ? `<small>${esc(typeof worker.nativeSwarm === 'string' ? worker.nativeSwarm : JSON.stringify(worker.nativeSwarm))}</small>` : ''}</div>`).join('') : '<small class="dio-persephone-muted">No live worker processes.</small>'}
+          ${workers.map((worker) => `<div class="persisted"><header><strong>${esc(worker.workerKey)}</strong>${badge(worker.status)}</header><span>${esc(worker.profile)} · PID ${esc(worker.pid || '—')}</span><code>${esc(worker.sessionPath || 'session pending')}</code><small>${esc(worker.cwd)} · seen ${formatTime(worker.lastSeen)}</small></div>`).join('')}
+        </div>
+      </article>
+    </div>
+    <div class="dio-persephone-runtime-grid lower">
+      <article class="dio-persephone-card dio-persephone-runtime-card approvals">
+        <header><div><small>APPROVALS</small><h3>OMP requests</h3><p>Responses travel through the same conversation route that received the request.</p></div><span>${approvals.filter((entry) => entry.status === 'pending').length} pending</span></header>
+        <div class="dio-persephone-approval-list">
+          ${approvals.length ? approvals.map((approval) => renderApproval(approval)).join('') : panelMessage('No approvals', 'OMP approval requests will appear here.')}
+        </div>
+      </article>
+      <article class="dio-persephone-card dio-persephone-runtime-card logs">
+        <header><div><small>SERVICE</small><h3>Journal</h3><p>Loaded only when requested; output is bounded by Persephone.</p></div><div class="dio-persephone-row-actions"><button type="button" data-pers-logs-load ${runtimeLogsLoading ? 'disabled' : ''}>${runtimeLogsLoading ? 'Loading…' : (runtimeLogs ? 'Reload' : 'Load logs')}</button>${runtimeLogs?.text ? '<button type="button" data-pers-copy-logs>Copy</button>' : ''}</div></header>
+        ${renderRuntimeLogs()}
+      </article>
+    </div>`;
+}
+
+function renderApproval(approval) {
+  const pending = approval.status === 'pending';
+  const needsValue = pending && approval.method !== 'confirm';
+  return `<div class="dio-persephone-approval">
+    <header><strong>#${esc(approval.id)} · ${esc(approval.title || approval.method)}</strong>${badge(approval.status)}</header>
+    <p>${esc(approval.message || '')}</p>
+    <small>${esc(approval.channel)}:${esc(approval.peerId)} · ${esc(approval.method)} · expires ${formatTime(approval.expiresAt)}</small>
+    ${pending ? `<div class="dio-persephone-approval-actions">${needsValue ? `<input data-pers-approval-value="${esc(approval.id)}" value="${esc(approvalValues[approval.id] || '')}" placeholder="Approval value">` : ''}<button type="button" data-pers-approval-action="approve" data-pers-approval-id="${esc(approval.id)}" ${busy ? 'disabled' : ''}>Approve</button><button type="button" class="danger" data-pers-approval-action="deny" data-pers-approval-id="${esc(approval.id)}" ${busy ? 'disabled' : ''}>Deny</button></div>` : ''}
+  </div>`;
+}
+
+function renderRuntimeLogs() {
+  if (runtimeLogsLoading) return panelMessage('Reading service journal…', 'Persephone is requesting a bounded user-unit snapshot.');
+  if (!runtimeLogs) return panelMessage('Logs are not loaded', 'Use Load logs when diagnostics are needed. No polling occurs.');
+  if (!runtimeLogs.available && !runtimeLogs.text) return panelMessage('Journal unavailable', runtimeLogs.error || 'The owner could not read its user service journal.');
+  return `${runtimeLogs.error ? `<div class="dio-persephone-inline-error">${esc(runtimeLogs.error)}</div>` : ''}<div class="dio-persephone-log-meta"><span>${esc(runtimeLogs.lines)} requested lines</span><span>${runtimeLogs.truncated ? 'character limit applied' : 'complete snapshot'}</span><span>${formatTime(runtimeLogs.generatedAt)}</span></div><pre class="dio-persephone-service-log">${esc(runtimeLogs.text || '')}</pre>`;
+}
+
 function renderQueues() {
   const records = workspace[queueKind] || [];
   return `${sectionHeading('Queues', 'Inspect bounded previews, open a complete record, or retry a failed delivery.')}
@@ -445,7 +520,9 @@ function renderSetup() {
         return `<article class="dio-persephone-card setup">
           <header><div class="dio-persephone-brand ${name}">${name === 'slack' ? '#' : name[0].toUpperCase()}</div><div><h3>${esc(guide.title || titleCase(name))}</h3><p>${esc(guide.summary || '')}</p></div></header>
           <ol>${(guide.steps || []).map((step) => `<li>${esc(step)}</li>`).join('')}</ol>
+          <div class="dio-persephone-validation">${(guide.validation || []).map((item) => `<div class="${item.ok ? 'ok' : ''}"><i></i><span>${esc(item.label)}</span><strong>${item.ok ? 'ready' : 'needed'}</strong></div>`).join('')}</div>
           <div class="dio-persephone-copy-list">${(guide.copy || []).map((item) => `<div><span>${esc(item.label)}</span><code>${esc(item.value)}</code><button type="button" data-pers-copy="${esc(item.value)}">Copy</button></div>`).join('')}</div>
+          ${(guide.resources || []).length ? `<div class="dio-persephone-resources">${guide.resources.map((item) => `<a href="${esc(item.url)}" target="_blank" rel="noopener noreferrer">${esc(item.label)}</a>`).join('')}</div>` : ''}
         </article>`;
       }).join('')}
     </div>`;
@@ -537,6 +614,22 @@ async function loadQueue(kind, id) {
   }
 }
 
+async function loadRuntimeLogs() {
+  if (runtimeLogsLoading) return;
+  runtimeLogsLoading = true;
+  error = '';
+  render();
+  try {
+    runtimeLogs = await request('/api/odysseus/persephone/logs?lines=300');
+  } catch (caught) {
+    runtimeLogs = null;
+    error = caught?.message || String(caught);
+  } finally {
+    runtimeLogsLoading = false;
+    render();
+  }
+}
+
 async function saveConfiguration() {
   if (busy || !configDraft) return;
   await runMutation({
@@ -587,6 +680,26 @@ async function dispatchPrompt() {
   if (!payload.message) { error = 'Enter a prompt before dispatching.'; render(); return; }
   const completed = await runMutation(payload, 'dispatch', `Queued a prompt for ${payload.channel}:${payload.peerId}.`);
   if (completed) dispatchDraft.message = '';
+}
+
+async function resolveApproval(id, decision) {
+  const approval = (workspace?.approvals || []).find((entry) => Number(entry.id) === id);
+  if (!approval || approval.status !== 'pending' || !['approve', 'deny'].includes(decision)) return;
+  const value = String(approvalValues[id] || '').trim();
+  if (decision === 'approve' && approval.method !== 'confirm' && !value) {
+    error = `Approval #${id} needs a value.`;
+    render();
+    return;
+  }
+  const suffix = decision === 'approve' && value ? ` ${value}` : '';
+  const completed = await runMutation({
+    version: 1,
+    action: 'prompt.enqueue',
+    channel: approval.channel,
+    peerId: approval.peerId,
+    message: `/${decision} ${id}${suffix}`,
+  }, `approval:${id}`, `Queued /${decision} for approval #${id}.`, decision === 'deny');
+  if (completed) delete approvalValues[id];
 }
 
 async function runMutation(mutation, busyKey, successMessage, danger = false) {
@@ -711,11 +824,12 @@ function panelMessage(title, detail = '') {
 }
 
 function navLabel(name) {
-  return ({ overview: 'Overview', connectors: 'Connectors', routes: 'Routes', queues: 'Queues', schedules: 'Schedules', settings: 'Settings', setup: 'Setup guide' })[name] || titleCase(name);
+  return ({ overview: 'Overview', connectors: 'Connectors', routes: 'Routes', runtime: 'Runtime', queues: 'Queues', schedules: 'Schedules', settings: 'Settings', setup: 'Setup guide' })[name] || titleCase(name);
 }
 
 function navCount(name) {
   if (name === 'routes') return `<em>${(workspace.routes || []).length}</em>`;
+  if (name === 'runtime') return `<em>${(workspace.approvals || []).filter((entry) => entry.status === 'pending').length}</em>`;
   if (name === 'queues') return `<em>${(workspace.inbox || []).length + (workspace.outbox || []).length}</em>`;
   if (name === 'schedules') return `<em>${(workspace.schedules || []).length}</em>`;
   return '';
@@ -733,9 +847,10 @@ function formatDuration(seconds) {
 }
 
 function formatTime(value) {
-  const number = Number(value);
-  if (!number) return 'never';
-  try { return new Date(number).toLocaleString(); } catch (_) { return String(value); }
+  if (value === null || value === undefined || value === '') return 'never';
+  const text = String(value);
+  const date = /^\d+$/.test(text) ? new Date(Number(text)) : new Date(text);
+  return Number.isNaN(date.getTime()) ? text : date.toLocaleString();
 }
 
 function blankSchedule() {

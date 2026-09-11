@@ -256,14 +256,17 @@ def test_persephone_workspace_uses_the_owner_control_contract() -> None:
     assert "'/persephone'" in app
     assert 'id="tool-persephone-workspace-btn"' in index
     assert "Persephone gateway workspace" in workspace
-    for tab in ("Overview", "Connectors", "Routes", "Queues", "Schedules", "Settings", "Setup"):
+    for tab in ("Overview", "Connectors", "Routes", "Runtime", "Queues", "Schedules", "Settings", "Setup"):
         assert tab in workspace
     assert "/api/odysseus/persephone/workspace?limit=80" in workspace
     assert "/api/odysseus/persephone/queue/" in workspace
+    assert "/api/odysseus/persephone/logs?lines=300" in workspace
     assert "/api/odysseus/persephone/lifecycle/jobs/plan" in workspace
     assert "/api/odysseus/persephone/mutations/jobs/plan" in workspace
     assert "configuration.replace" in workspace
     assert "prompt.enqueue" in workspace
+    assert "data-pers-approval-action" in workspace
+    assert "data-pers-logs-load" in workspace
     assert "schedule.put" in workspace
     assert "queue.retry" in workspace
     assert "dio-persephone-window" in styles
