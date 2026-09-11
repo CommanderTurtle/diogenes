@@ -49,7 +49,7 @@ class HermesStackControl:
             "schema_version": "diogenes.hermes-integration.v2",
             "hermes_available": bool(executable),
             "executable": executable or None,
-            "integration_model": "native-cli-per-dependency",
+            "integration_model": "repository-owned-scripts",
             "gateway_restart_is_explicit": True,
         }
 

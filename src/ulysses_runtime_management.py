@@ -329,7 +329,54 @@ def load_runtime_management(
                 f"{runtime_id} integration contract is invalid"
             )
         item["integration"] = integration or None
+        integration_owner = str(raw.get("integration_owner") or "").strip()
+        if integration_owner and not re.fullmatch(
+            r"[a-z][a-z0-9._-]{1,63}", integration_owner
+        ):
+            raise RuntimeJobError(
+                f"{runtime_id} integration owner is invalid"
+            )
+        item["integration_owner"] = integration_owner or None
         item["root"] = root
+        raw_owner_scripts = raw.get("owner_scripts") or {}
+        if not isinstance(raw_owner_scripts, dict) or set(raw_owner_scripts) - {
+            "update",
+            "integrate",
+            "doctor",
+        }:
+            raise RuntimeJobError(
+                f"{runtime_id} owner scripts are invalid"
+            )
+        owner_scripts: dict[str, dict[str, Any]] = {}
+        for action, raw_script in raw_owner_scripts.items():
+            if not isinstance(raw_script, dict):
+                raise RuntimeJobError(
+                    f"{runtime_id} owner {action} script is invalid"
+                )
+            relative = str(raw_script.get("path") or "")
+            arguments = raw_script.get("args") or []
+            candidate = (root / relative).resolve()
+            if (
+                not relative.endswith(".sh")
+                or candidate == root
+                or not candidate.is_relative_to(root)
+                or not isinstance(arguments, list)
+                or any(
+                    not isinstance(value, str)
+                    or not value
+                    or len(value) > 200
+                    or any(character in value for character in "\r\n\0")
+                    for value in arguments
+                )
+            ):
+                raise RuntimeJobError(
+                    f"{runtime_id} owner {action} script is invalid"
+                )
+            owner_scripts[action] = {
+                "path": candidate,
+                "args": tuple(arguments),
+            }
+        item["owner_scripts"] = owner_scripts
         bun_install_mode = str(raw.get("bun_install_mode") or "auto")
         if bun_install_mode not in {
             "auto",
@@ -644,6 +691,15 @@ def load_runtime_management(
             )
         if item["id"] in (item.get("depends_on") or []):
             raise RuntimeJobError(f"{item['id']} cannot depend on itself")
+        owner_id = item.get("integration_owner")
+        if owner_id and owner_id not in by_id:
+            raise RuntimeJobError(
+                f"{item['id']} has unknown integration owner: {owner_id}"
+            )
+        if owner_id == item["id"]:
+            raise RuntimeJobError(
+                f"{item['id']} cannot own its own integration indirectly"
+            )
 
     visiting: set[str] = set()
     visited: set[str] = set()
@@ -661,6 +717,44 @@ def load_runtime_management(
 
     for runtime_id in by_id:
         visit(runtime_id)
+
+    for item in items:
+        current = item
+        owners: set[str] = set()
+        while current.get("integration_owner"):
+            owner_id = str(current["integration_owner"])
+            if owner_id in owners:
+                raise RuntimeJobError(
+                    "runtime management integration ownership contains a cycle"
+                )
+            owners.add(owner_id)
+            current = by_id[owner_id]
+        if item.get("integration") and item.get("integration_owner") and not (
+            current.get("owner_scripts") or {}
+        ).get("integrate"):
+            raise RuntimeJobError(
+                f"{item['id']} integration owner has no integrate script"
+            )
+        if (
+            item.get("integration")
+            and not item.get("integration_owner")
+            and item.get("integration")
+            not in {"diogenes-searxng", "diogenes-firecrawl"}
+            and not all(
+                action in (item.get("owner_scripts") or {})
+                for action in ("integrate", "doctor")
+            )
+        ):
+            raise RuntimeJobError(
+                f"{item['id']} must declare owner integrate and doctor scripts"
+            )
+        if item.get("integration_owner") and any(
+            action in (item.get("owner_scripts") or {})
+            for action in ("integrate", "doctor")
+        ):
+            raise RuntimeJobError(
+                f"{item['id']} cannot declare integration scripts and a separate owner"
+            )
     return tuple(sorted(items, key=lambda value: (value["category"], value["id"])))
 
 
@@ -1314,7 +1408,14 @@ def _dependency_maintenance_previews(
     branch = str(item.get("source_branch") or "")
     update_steps: list[str]
     package_json = item.get("package_json")
-    if isinstance(package_json, Path) and package_json.is_file():
+    owner_update = (item.get("owner_scripts") or {}).get("update")
+    if isinstance(owner_update, dict):
+        update_steps = [
+            f"Run the committed owner updater: {owner_update['path'].relative_to(root)}",
+            "Let the repository fast-forward, refresh its own dependencies, and reconcile only its owned integration state.",
+            "Run the repository's doctor before refreshing the Diogenes receipt.",
+        ]
+    elif isinstance(package_json, Path) and package_json.is_file():
         recursive = False
         try:
             payload = json.loads(package_json.read_text(encoding="utf-8"))
@@ -1342,26 +1443,21 @@ def _dependency_maintenance_previews(
     else:
         update_steps = ["Check the declared installed dependency runtime."]
 
-    integration_steps = {
-        "librarian": [
-            "Verify the selected Librarian backend, public MCP, isolated OKF profile, and routing skill.",
-            "If .env already exists, do not reinstall packages or rebuild; rewrite only mismatched registrations.",
-        ],
-        "persephone": [
-            "Run Persephone's integration-only doctor first.",
-            "If healthy, refresh only the Diogenes receipt; otherwise re-apply its OMP plugin and user-service contract.",
-        ],
-        "retrieval": [
-            "Verify the separate Hermes and OMP MCP/projection lanes, skill intake, IWE paths, and watcher.",
-            "Reconcile only missing or drifted registrations, then sync the skill-intake source.",
-        ],
-        "leetcoder": [
-            "Verify the isolated OMP profile, provider state, service, Hermes MCP, and routing skill.",
-            "Reuse existing dist artifacts; rebuild only if cli.js or mcp.js is absent.",
-        ],
-    }.get(
-        str(item.get("integration") or ""),
-        ["Verify the declared live harness contract and rewrite only mismatches."],
+    owner_id = str(item.get("integration_owner") or item["id"])
+    integration_steps = (
+        [
+            f"Run the committed doctor from {owner_id} without contacting a model or web backend.",
+            "If it reports drift, run that repository's committed integration script and repeat its doctor.",
+            "Record a Diogenes receipt only after the owner reports a valid contract.",
+        ]
+        if item.get("integration") not in {
+            "diogenes-searxng",
+            "diogenes-firecrawl",
+        }
+        else [
+            "Compare only the search settings owned by Diogenes.",
+            "Update mismatched Diogenes settings without changing any harness registry or provider choice.",
+        ]
     )
 
     return {

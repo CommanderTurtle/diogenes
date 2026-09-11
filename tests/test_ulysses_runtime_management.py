@@ -861,7 +861,7 @@ def test_dependency_maintenance_preview_explains_independent_javascript_actions(
 
     assert preview["update"]["steps"][0] == "bun update --no-save --recursive"
     assert "only when those inputs changed" in preview["update"]["steps"][2]
-    assert "do not reinstall packages or rebuild" in preview["integrate"]["steps"][1]
+    assert "committed integration script" in preview["integrate"]["steps"][1]
     assert "Fast-forward source only" in preview["sync"]["steps"][2]
 
 

@@ -7,6 +7,19 @@ import pytest
 from src.ulysses_hermes_stack import HermesStackControl
 
 
+def test_observe_reports_repository_owned_integration_model(monkeypatch) -> None:
+    monkeypatch.setattr(
+        HermesStackControl,
+        "_hermes",
+        classmethod(lambda _cls: "/usr/bin/hermes"),
+    )
+
+    report = HermesStackControl.observe()
+
+    assert report["integration_model"] == "repository-owned-scripts"
+    assert report["gateway_restart_is_explicit"] is True
+
+
 def test_apply_plan_reconciles_dependencies_without_implicit_restart(
     monkeypatch,
     tmp_path: Path,

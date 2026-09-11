@@ -8,8 +8,8 @@
       "dependency_section": "Search",
       "recommended": true,
       "capability_group": "search",
-      "role": "Hermes search frontend",
-      "integration": "hermes-firecrawl",
+      "role": "Diogenes search and scrape backend",
+      "integration": "diogenes-firecrawl",
       "depends_on": ["searxng.search"],
       "root": "${ULYSSES_MICROSERVICES_ROOT}/firecrawl/firecrawl",
       "compose": "docker-compose.yaml",
@@ -93,8 +93,7 @@
       "dependency_section": "Interactive services",
       "recommended": true,
       "capability_group": "browser",
-      "role": "Shared Odysseus and Hermes browser backend",
-      "integration": "hermes-camofox",
+      "role": "Shared Diogenes and MCP browser backend",
       "root": "${ULYSSES_MICROSERVICES_ROOT}/camofox/camofox-browser",
       "package_json": "package.json",
       "env_files": [".env"],
@@ -192,6 +191,11 @@
       "source_branch": "feat/hermes-native-support",
       "build_script": "build",
       "bun_install_mode": "frozen",
+      "owner_scripts": {
+        "update": {"path": "update.sh"},
+        "integrate": {"path": "integrate.sh"},
+        "doctor": {"path": "doctor.sh"}
+      },
       "hermes_mcp": true,
       "ports": []
     },
@@ -215,6 +219,11 @@
       "source_branch": "main",
       "build_script": "build",
       "bun_install_mode": "frozen",
+      "owner_scripts": {
+        "update": {"path": "update.sh"},
+        "integrate": {"path": "integrate.sh"},
+        "doctor": {"path": "doctor.sh"}
+      },
       "hermes_mcp": true,
       "ports": []
     },
@@ -227,7 +236,6 @@
       "recommended": true,
       "capability_group": "search",
       "role": "Scriptable Firecrawl CLI",
-      "integration": "firecrawl-cli",
       "depends_on": ["firecrawl.api"],
       "root": "${ULYSSES_MICROSERVICES_ROOT}/firecrawl/cli",
       "package_json": "package.json",
@@ -252,6 +260,46 @@
       "ports": []
     },
     {
+      "id": "localflame.mcp",
+      "label": "Localflame",
+      "category": "javascript",
+      "resource_kind": "mcp",
+      "dependency_section": "Hermes MCPs",
+      "recommended": true,
+      "hermes_component": "localflame",
+      "capability_group": "search",
+      "role": "Firecrawl search, scrape, section, image, and resource MCP for OMP, Hermes, and DSH",
+      "integration": "localflame",
+      "depends_on": ["firecrawl.api"],
+      "root": "${HOME}/Deepseek/localflame",
+      "package_json": "package.json",
+      "env_files": [],
+      "config_files": [
+        {"path": "SKILL.md", "format": "text"},
+        {"path": "docs/INTEGRATION-AUDIT.md", "format": "text"}
+      ],
+      "git_update": true,
+      "source_url": "https://github.com/CommanderTurtle/localflame",
+      "source_branch": "master",
+      "bun_install_mode": "frozen",
+      "setup_on_update": false,
+      "setup_during_install": false,
+      "owner_scripts": {
+        "update": {"path": "update.sh"},
+        "integrate": {"path": "install.sh"},
+        "doctor": {"path": "doctor.sh"}
+      },
+      "readiness_checks": [
+        {
+          "label": "Localflame command",
+          "path": "${HOME}/.local/bin/localflame",
+          "executable": true
+        }
+      ],
+      "hermes_mcp": true,
+      "ports": []
+    },
+    {
       "id": "hermes.workspace",
       "label": "Hermes Workspace",
       "category": "javascript",
@@ -260,8 +308,9 @@
       "recommended": true,
       "hermes_component": "hermes-workspace",
       "capability_group": "agent-control",
-      "role": "Hermes orchestration dashboard",
-      "integration": "workspace",
+      "role": "Hermes orchestration dashboard and Retrieval source",
+      "integration": "retrieval-index",
+      "integration_owner": "retrieval.mcp",
       "root": "${ULYSSES_MICROSERVICES_ROOT}/hermes-workspace",
       "package_json": "package.json",
       "env_files": [".env"],
@@ -300,6 +349,9 @@
       "source_branch": "main",
       "build_script": "build",
       "bun_install_mode": "pnpm_lock",
+      "owner_scripts": {
+        "update": {"path": "update.sh"}
+      },
       "dashboard": {
         "label": "Open Hermes Workspace",
         "url": "http://127.0.0.1:3003"
@@ -335,6 +387,11 @@
       },
       "setup_on_update": false,
       "setup_during_install": false,
+      "owner_scripts": {
+        "update": {"path": "update.sh"},
+        "integrate": {"path": "integrate.sh"},
+        "doctor": {"path": "doctor.sh"}
+      },
       "launch": ["bash", "start.sh"],
       "tmux_session": "diogenes-librarian-web",
       "dashboard": {
@@ -346,35 +403,6 @@
       "ports": [3800]
     },
     {
-      "id": "iwe.graph",
-      "label": "IWE",
-      "category": "native",
-      "resource_kind": "repository",
-      "dependency_section": "Knowledge",
-      "recommended": true,
-      "capability_group": "knowledge",
-      "role": "Maintainable local Markdown graph CLI used by Retrieval for read-only structural navigation",
-      "root": "${ULYSSES_MICROSERVICES_ROOT}/iwe",
-      "env_files": [],
-      "config_files": [],
-      "git_update": true,
-      "source_url": "https://github.com/iwe-org/iwe.git",
-      "source_branch": "master",
-      "setup": {
-        "kind": "cargo_path",
-        "value": "crates/iwe"
-      },
-      "readiness_checks": [
-        {
-          "label": "IWE CLI",
-          "path": "${HOME}/.cargo/bin/iwe",
-          "executable": true
-        }
-      ],
-      "optional": true,
-      "ports": []
-    },
-    {
       "id": "retrieval.mcp",
       "label": "Retrieval",
       "category": "native",
@@ -383,10 +411,10 @@
       "recommended": true,
       "hermes_component": "retrieval",
       "capability_group": "knowledge",
-      "role": "Dual Hermes and OMP cold-skill catalog with isolated projection lanes, IWE navigation, Chroma ranking, and an ephemeral OMP scout",
+      "role": "Hermes and OMP cold-skill catalog with an internal graph, isolated projections, Chroma ranking, and ephemeral scouts",
       "integration": "retrieval",
       "root": "${ULYSSES_MICROSERVICES_ROOT}/retrieval",
-      "depends_on": ["chroma.vector", "iwe.graph"],
+      "depends_on": ["chroma.vector"],
       "maintenance_requires_dependencies": true,
       "env_files": [".env"],
       "config_files": [
@@ -401,6 +429,11 @@
         "value": "setup.sh"
       },
       "setup_on_update": true,
+      "owner_scripts": {
+        "update": {"path": "update.sh"},
+        "integrate": {"path": "integrate.sh"},
+        "doctor": {"path": "doctor.sh"}
+      },
       "hermes_mcp": true,
       "optional": true,
       "ports": []
@@ -423,10 +456,14 @@
       "source_branch": "main",
       "setup": {
         "kind": "shell_script",
-        "value": "install.sh",
-        "args": ["--skip-config"]
+        "value": "install-local.sh"
       },
       "setup_on_update": true,
+      "owner_scripts": {
+        "update": {"path": "update-local.sh"},
+        "integrate": {"path": "integrate-local.sh"},
+        "doctor": {"path": "doctor-local.sh"}
+      },
       "readiness_checks": [
         {
           "label": "Codebase Memory command",
@@ -446,7 +483,8 @@
       "recommended": true,
       "capability_group": "skill-libraries",
       "role": "Writing guidance",
-      "integration": "humanizer",
+      "integration": "retrieval-index",
+      "integration_owner": "retrieval.mcp",
       "root": "${ULYSSES_MICROSERVICES_ROOT}/humanizer",
       "env_files": [],
       "git_update": true,
@@ -464,7 +502,8 @@
       "hermes_component": "agent-skills",
       "capability_group": "skill-libraries",
       "role": "Build, review, test, and ship workflows",
-      "integration": "agent-workflows",
+      "integration": "retrieval-index",
+      "integration_owner": "retrieval.mcp",
       "root": "${ULYSSES_MICROSERVICES_ROOT}/agent-skills",
       "env_files": [],
       "git_update": true,
@@ -482,6 +521,7 @@
       "capability_group": "skill-libraries",
       "role": "Specialist security retrieval corpus",
       "integration": "retrieval-index",
+      "integration_owner": "retrieval.mcp",
       "root": "${ULYSSES_MICROSERVICES_ROOT}/Anthropic-Cybersecurity-Skills",
       "env_files": [],
       "git_update": true,
@@ -498,7 +538,8 @@
       "recommended": true,
       "capability_group": "skill-libraries",
       "role": "Focused interaction and interface guidance",
-      "integration": "interface-skills",
+      "integration": "retrieval-index",
+      "integration_owner": "retrieval.mcp",
       "root": "${ULYSSES_MICROSERVICES_ROOT}/make-interfaces-feel-better",
       "env_files": [],
       "git_update": true,
@@ -559,6 +600,11 @@
       },
       "setup_on_update": false,
       "setup_during_install": false,
+      "owner_scripts": {
+        "update": {"path": "scripts/update.sh"},
+        "integrate": {"path": "scripts/integrate.sh"},
+        "doctor": {"path": "scripts/doctor.sh"}
+      },
       "readiness_checks": [
         {
           "label": "OMP command",
@@ -597,6 +643,11 @@
       "bun_install_mode": "frozen",
       "setup_on_update": false,
       "setup_during_install": false,
+      "owner_scripts": {
+        "update": {"path": "update.sh"},
+        "integrate": {"path": "integrate.sh"},
+        "doctor": {"path": "doctor.sh"}
+      },
       "readiness_checks": [
         {
           "label": "Leetcoder CLI bundle",

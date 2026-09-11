@@ -13,7 +13,7 @@ Usage: ./ompsettings.sh [--yes]
 
 Apply CommanderTurtle's optimized, sovereign OMP settings baseline through
 OMP's native configuration interface. This does not change models.yml,
-mcp.json, credentials, sessions, or project profiles.
+mcp.json, credentials, sessions, project profiles, or native web providers.
 
   --yes   Skip the interactive confirmation.
   -h      Show this help.
@@ -259,22 +259,12 @@ cat >"$baseline_file" <<'JSON'
   "secrets.enabled": true,
 
   "providers.maxInFlightRequests": {"vllm": 8},
-  "providers.fetch": "native",
-  "providers.webSearchOrder": [],
-  "providers.webSearchExclude": [
-    "perplexity", "gemini", "anthropic", "codex", "xai", "zai", "exa",
-    "tinyfish", "jina", "kagi", "tavily", "firecrawl", "brave", "kimi",
-    "parallel", "synthetic", "searxng", "startpage", "duckduckgo",
-    "ecosia", "google", "mojeek", "public"
-  ],
-  "providers.webSearchTimeoutSeconds": 60,
   "providers.imageOrder": [],
   "providers.openaiWebsockets": "auto",
   "provider.appendOnlyContext": "auto",
   "providers.unexpectedStopModel": "online",
   "providers.anthropic.serverSideFallback": false,
   "providers.ollama-cloud.maxConcurrency": 0,
-  "exa.enabled": false,
 
   "startup.checkUpdate": false,
   "marketplace.autoUpdate": "off",
@@ -289,12 +279,6 @@ cat >"$baseline_file" <<'JSON'
   "retry.fallbackChains": {},
   "retry.fallbackRevertPolicy": "cooldown-expiry",
 
-  "browser.enabled": false,
-  "browser.headless": true,
-  "browser.relay": false,
-  "browser.cmux": false,
-  "fetch.enabled": false,
-  "web_search.enabled": false,
   "generate_image.enabled": false,
   "inspect_image.enabled": false,
   "inspect_image.mode": "auto",
@@ -358,6 +342,7 @@ setting_count="$(wc -l <"$entries_file")"
 printf 'OMP configuration root: %s\n' "$config_root"
 printf 'Validated baseline settings: %s\n' "$setting_count"
 printf 'External Camofox, Firecrawl, Retrieval, Librarian, and Persephone lanes must already be installed.\n'
+printf 'Native OMP web/search providers and their enablement remain unchanged.\n'
 printf 'This baseline also enables OMP yolo approval mode.\n'
 
 if [[ "$assume_yes" != true ]]; then

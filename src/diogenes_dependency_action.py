@@ -542,6 +542,30 @@ def _update(item: dict[str, Any]) -> None:
     if not root.is_dir():
         print(f"{item['label']}: not installed. Nothing to update.")
         return
+    owner_update = (item.get("owner_scripts") or {}).get("update")
+    if isinstance(owner_update, dict):
+        path = owner_update.get("path")
+        if not isinstance(path, Path) or not path.is_file():
+            raise DependencyActionError(
+                f"declared owner update script is missing: {path}"
+            )
+        _run(
+            [
+                "bash",
+                str(path),
+                *[str(value) for value in owner_update.get("args") or ()],
+            ],
+            cwd=root,
+            timeout=7200,
+        )
+        if item.get("integration"):
+            from src.diogenes_dependency_integration import integrate
+
+            integrate(str(item["id"]))
+        print(
+            f"{item['label']}: repository-owned update and verification completed."
+        )
+        return
     package_json = item.get("package_json")
     if isinstance(package_json, Path) and package_json.is_file():
         _update_javascript(item)
