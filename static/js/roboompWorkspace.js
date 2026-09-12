@@ -684,16 +684,119 @@ function selectedDiff(git) {
   return [committed && `# Committed against ${git.baseRef || 'base'}\n${committed}`, working && `# Working tree\n${working}`].filter(Boolean).join('\n\n');
 }
 
+/*
+ * Adapted from MyAppDesk/GitCito src/main/grounding.ts at
+ * 0bab066640ea4d73f4f7e5a580644031f125c1f3 (MIT). Splitting the unified
+ * diff into bounded hunks gives the browser the same stable path/line units
+ * used by Persephone's owner-side evidence resolver.
+ */
+function buildDiffEvidence(diff, options = {}) {
+  const maxBytes = options.maxBytes ?? 24000;
+  const maxHunks = options.maxHunks ?? 40;
+  const maxHunkBytes = options.maxHunkBytes ?? 4000;
+  const items = [];
+  let omitted = 0;
+  let used = 0;
+  let path = '';
+  let scope = '';
+  let head = null;
+  let body = [];
+  let startLine = 0;
+  let endLine = 0;
+  let newLine = 0;
+  let oldLine = 0;
+  let sawNew = false;
+
+  const flush = () => {
+    if (head === null) return;
+    let text = [head, ...body].join('\n');
+    if (text.length > maxHunkBytes) text = `${text.slice(0, maxHunkBytes)}\n…(hunk truncated)`;
+    head = null;
+    body = [];
+    if (items.length >= maxHunks || used + text.length > maxBytes) {
+      omitted += 1;
+      return;
+    }
+    used += text.length;
+    items.push({ id: `E${items.length + 1}`, path, scope, startLine, endLine: Math.max(startLine, endLine), text });
+  };
+
+  for (const line of String(diff || '').split('\n')) {
+    if (line.startsWith('# ')) {
+      flush();
+      scope = line.slice(2).trim();
+      continue;
+    }
+    const file = line.match(/^diff --git a\/(.+?) b\/(.+)$/);
+    if (file) {
+      flush();
+      path = file[2];
+      continue;
+    }
+    if (line.startsWith('+++ ')) {
+      const target = line.slice(4).trim();
+      if (target !== '/dev/null') path = target.replace(/^b\//, '');
+      continue;
+    }
+    if (line.startsWith('--- ')) {
+      const source = line.slice(4).trim();
+      if (!path && source !== '/dev/null') path = source.replace(/^a\//, '');
+      continue;
+    }
+    const hunk = line.match(/^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/);
+    if (hunk) {
+      flush();
+      oldLine = Number(hunk[1]);
+      newLine = Number(hunk[3]);
+      sawNew = Number(hunk[4] ?? '1') > 0;
+      startLine = sawNew ? newLine : oldLine;
+      endLine = startLine;
+      head = line;
+      continue;
+    }
+    if (head === null) continue;
+    body.push(line);
+    if (line.startsWith('+')) {
+      endLine = newLine;
+      newLine += 1;
+    } else if (line.startsWith('-')) {
+      if (!sawNew) endLine = oldLine;
+      oldLine += 1;
+    } else if (line.startsWith(' ') || line === '') {
+      endLine = sawNew ? newLine : oldLine;
+      newLine += 1;
+      oldLine += 1;
+    }
+  }
+  flush();
+  return { items, omitted };
+}
+
 function renderDiff(source, fileFilter = '') {
-  let active = !fileFilter;
-  const lines = source.split('\n');
+  const evidence = buildDiffEvidence(source, {
+    maxBytes: 250000,
+    maxHunks: 400,
+    maxHunkBytes: 20000,
+  });
+  const hunks = fileFilter ? evidence.items.filter((item) => item.path === fileFilter) : evidence.items;
+  let lines = hunks.length
+    ? hunks.flatMap((item) => [
+        `# ${item.scope ? `${item.scope} · ` : ''}${item.id} · ${item.path}:${item.startLine}${item.endLine > item.startLine ? `-${item.endLine}` : ''}`,
+        ...item.text.split('\n'),
+      ])
+    : String(source || '').split('\n');
+  if (!hunks.length && fileFilter) {
+    let active = false;
+    lines = lines.filter((line) => {
+      if (line.startsWith('diff --git ')) {
+        const match = line.match(/^diff --git a\/(.+) b\/(.+)$/);
+        active = match?.[1] === fileFilter || match?.[2] === fileFilter;
+      }
+      return active || line.startsWith('# ');
+    });
+  }
   const rendered = [];
   for (const line of lines) {
-    if (line.startsWith('diff --git ')) {
-      const match = line.match(/^diff --git a\/(.+) b\/(.+)$/);
-      active = !fileFilter || match?.[1] === fileFilter || match?.[2] === fileFilter;
-    }
-    if (!active && !line.startsWith('# ')) continue;
     let kind = 'context';
     if (line.startsWith('@@')) kind = 'hunk';
     else if (line.startsWith('+++') || line.startsWith('---') || line.startsWith('diff --git') || line.startsWith('index ')) kind = 'meta';
@@ -701,6 +804,9 @@ function renderDiff(source, fileFilter = '') {
     else if (line.startsWith('-')) kind = 'remove';
     else if (line.startsWith('# ')) kind = 'scope';
     rendered.push(`<span class="${kind}"><i>${esc(diffMarker(line))}</i><code>${esc(line || ' ')}</code></span>`);
+  }
+  if (evidence.omitted > 0) {
+    rendered.push(`<span class="meta"><i> </i><code>${esc(`${evidence.omitted} further hunk(s) omitted`)}</code></span>`);
   }
   return `<pre class="dio-roboomp-diff">${rendered.join('')}</pre>`;
 }
@@ -826,29 +932,34 @@ function paletteEntries() {
   return entries;
 }
 
-function fuzzyScore(value, query) {
-  const source = String(value || '').toLowerCase();
-  const needle = String(query || '').trim().toLowerCase();
-  if (!needle) return 0;
-  const exact = source.indexOf(needle);
-  if (exact >= 0) return 10000 - exact * 10 - source.length;
-  let cursor = 0;
-  let gap = 0;
-  for (const character of needle) {
-    const found = source.indexOf(character, cursor);
-    if (found < 0) return -1;
-    gap += found - cursor;
-    cursor = found + 1;
+/* Adapted from GitCito's CommandPalette fuzzyScore at the pinned MIT revision. */
+function fuzzyScore(query, text) {
+  if (!query) return 0;
+  const q = String(query).toLowerCase();
+  const t = String(text).toLowerCase();
+  let score = 0;
+  let ti = 0;
+  let previousMatch = -2;
+  for (let qi = 0; qi < q.length; qi += 1) {
+    const character = q[qi];
+    const found = t.indexOf(character, ti);
+    if (found === -1) return null;
+    score += 1;
+    if (found === previousMatch + 1) score += 4;
+    if (found === 0 || /[\s/_\-.]/.test(t[found - 1])) score += 3;
+    score -= Math.min(found - ti, 3) * 0.3;
+    previousMatch = found;
+    ti = found + 1;
   }
-  return 1000 - gap - source.length;
+  return score;
 }
 
 function paletteResultsMarkup(query) {
   const needle = String(query || '').trim();
   if (!needle) return '';
   const matches = paletteEntries()
-    .map((entry) => ({ ...entry, score: fuzzyScore(`${entry.label} ${entry.detail} ${entry.reference}`, needle) }))
-    .filter((entry) => entry.score >= 0)
+    .map((entry) => ({ ...entry, score: fuzzyScore(needle, `${entry.label} ${entry.detail} ${entry.reference}`) }))
+    .filter((entry) => entry.score !== null)
     .sort((left, right) => right.score - left.score || left.label.localeCompare(right.label))
     .slice(0, 12);
   return matches.map((entry) => `<button type="button" data-robo-palette-item="${esc(entry.type)}" data-robo-palette-reference="${esc(entry.reference)}"><span><strong>${esc(entry.label)}</strong><small>${esc(entry.detail)}</small></span><em>${esc(entry.type)}</em></button>`).join('') || '<p>No loaded repository item matches.</p>';

@@ -308,6 +308,10 @@ def test_roboomp_workspace_uses_the_persephone_owner_contract() -> None:
         assert action in workspace
     assert "reviewComments" in workspace
     assert "Orca / GitCito handoff" in workspace
+    assert "0bab066640ea4d73f4f7e5a580644031f125c1f3" in workspace
+    assert "function buildDiffEvidence" in workspace
+    assert "Math.min(found - ti, 3) * 0.3" in workspace
+    assert "evidence.items.filter((item) => item.path === fileFilter)" in workspace
     assert "dio-roboomp-window" in styles
     assert "/static/js/roboompWorkspace.js" in service_worker
 
