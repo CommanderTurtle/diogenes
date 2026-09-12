@@ -23,8 +23,10 @@ from src.ulysses_jobs import RuntimeJobError, RuntimeJobStore, native_host_envir
 
 WORKSPACE_SCHEMA = "persephone.robomp.workspace.v1"
 ISSUE_SCHEMA = "robomp.issue.workspace.v1"
+ASSISTANT_SCHEMA = "persephone.robomp.assistant.v1"
 MAX_OWNER_OUTPUT = 16_000_000
 MAX_MUTATION_BYTES = 1_000_000
+MAX_ASSISTANT_BYTES = 1_000_000
 MUTATION_ACTIONS = {
     "configuration.patch",
     "trigger.triage",
@@ -113,6 +115,68 @@ class RoboOMPWorkspaceControl:
             raise RoboOMPWorkspaceError("Persephone returned an unsupported issue-workspace schema")
         if result.get("reference") != issue:
             raise RoboOMPWorkspaceError("Persephone returned a mismatched issue workspace")
+        return result
+
+    def assistant(self, request: dict[str, Any]) -> dict[str, Any]:
+        if (
+            not isinstance(request, dict)
+            or type(request.get("version")) is not int
+            or request.get("version") != 1
+        ):
+            raise RoboOMPWorkspaceError("RoboOMP assistant request version must be 1")
+        operation = request.get("operation", "ask")
+        if operation not in {"ask", "history"}:
+            raise RoboOMPWorkspaceError("RoboOMP assistant operation must be ask or history")
+        issue = request.get("issue")
+        if not isinstance(issue, str) or not issue.strip() or len(issue) > 500:
+            raise RoboOMPWorkspaceError("RoboOMP assistant issue reference is invalid")
+        issue = issue.strip()
+        request = {**request, "issue": issue}
+        question = request.get("question", "")
+        if operation == "ask" and (
+            not isinstance(question, str)
+            or not question.strip()
+            or len(question) > 32_000
+        ):
+            raise RoboOMPWorkspaceError("RoboOMP assistant question is invalid")
+        context = request.get("context", [])
+        if not isinstance(context, list) or len(context) > 16:
+            raise RoboOMPWorkspaceError("RoboOMP assistant context is invalid")
+        if not all(isinstance(item, dict) for item in context):
+            raise RoboOMPWorkspaceError("RoboOMP assistant context items must be objects")
+        encoded = json.dumps(request, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        if len(encoded) > MAX_ASSISTANT_BYTES:
+            raise RoboOMPWorkspaceError("RoboOMP assistant request exceeds the 1 MB owner limit")
+
+        self.payload_root.mkdir(parents=True, exist_ok=True, mode=0o700)
+        try:
+            self.payload_root.chmod(0o700)
+        except OSError:
+            pass
+        digest = hashlib.sha256(encoded).hexdigest()
+        payload = self.payload_root / f"assistant-{time.time_ns()}-{digest[:16]}.json"
+        atomic_write_json(str(payload), request, indent=2)
+        try:
+            payload.chmod(0o600)
+        except OSError:
+            pass
+        try:
+            result = self._owner_json(
+                [
+                    "git-agent",
+                    "workspace",
+                    "assistant",
+                    str(payload),
+                    "--consume",
+                ],
+                timeout=691_320,
+            )
+        finally:
+            payload.unlink(missing_ok=True)
+        if result.get("schemaVersion") != ASSISTANT_SCHEMA:
+            raise RoboOMPWorkspaceError("Persephone returned an unsupported RoboOMP assistant schema")
+        if result.get("issue") != issue or result.get("operation") != operation:
+            raise RoboOMPWorkspaceError("Persephone returned a mismatched RoboOMP assistant response")
         return result
 
     def create_lifecycle_plan(self, *, action: str) -> tuple[dict[str, Any], str]:

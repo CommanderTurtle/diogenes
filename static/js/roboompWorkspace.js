@@ -1,10 +1,12 @@
 import uiModule from './ui.js';
 import * as Modals from './modalManager.js';
 import { makeWindowDraggable } from './windowDrag.js';
+import markdownModule from './markdown.js';
 
 const MODAL_ID = 'diogenes-roboomp-workspace-modal';
 const TERMINAL = new Set(['succeeded', 'failed', 'cancelled']);
-const VIEWS = ['overview', 'issues', 'worktree', 'activity', 'releases', 'settings', 'setup'];
+const VIEWS = ['overview', 'issues', 'assistant', 'worktree', 'activity', 'releases', 'settings', 'setup'];
+const MAX_ASSISTANT_CONTEXT = 15;
 const ICON = `<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor"
   stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
   <circle cx="12" cy="12" r="8"/><path d="M8 9h8M8 13h5M15 16l2 2 3-4"/>
@@ -100,6 +102,8 @@ let error = '';
 let notice = '';
 let reviewRepositoryPath = '';
 let reviewPullRequest = '';
+let paletteQuery = '';
+const assistantSessions = new Map();
 
 const esc = (value) => uiModule.esc(String(value ?? ''));
 
@@ -156,11 +160,23 @@ function ensureModal() {
   body?.addEventListener('click', onClick);
   body?.addEventListener('input', onInput);
   body?.addEventListener('change', onChange);
+  body?.addEventListener('keydown', onKeyDown);
   return modal;
 }
 
 function onInput(event) {
   const target = event.target;
+  if (target.matches('[data-robo-palette]')) {
+    paletteQuery = target.value || '';
+    updatePaletteResults(target);
+    return;
+  }
+  if (target.matches('[data-robo-assistant-question]')) {
+    assistantState().question = target.value || '';
+    const send = target.closest('.dio-roboomp-assistant-composer')?.querySelector('[data-robo-assistant-send]');
+    if (send) send.disabled = assistantState().loading || !assistantState().question.trim();
+    return;
+  }
   if (target.matches('[data-robo-config]')) updateConfig(target);
   if (target.matches('[data-robo-secret]')) {
     const name = target.dataset.roboSecret;
@@ -181,9 +197,37 @@ function onChange(event) {
 }
 
 function onClick(event) {
+  const paletteItem = event.target.closest('[data-robo-palette-item]');
+  if (paletteItem) {
+    openPaletteItem(paletteItem.dataset.roboPaletteItem, paletteItem.dataset.roboPaletteReference || '');
+    return;
+  }
   const tab = event.target.closest('[data-robo-view]');
   if (tab) {
     view = VIEWS.includes(tab.dataset.roboView) ? tab.dataset.roboView : 'overview';
+    render();
+    if (view === 'assistant') loadAssistantHistory();
+    return;
+  }
+  if (event.target.closest('[data-robo-open-assistant]')) {
+    view = 'assistant';
+    render();
+    loadAssistantHistory();
+    return;
+  }
+  if (event.target.closest('[data-robo-assistant-send]')) { askAssistant(); return; }
+  if (event.target.closest('[data-robo-assistant-reload]')) { loadAssistantHistory(true); return; }
+  const pin = event.target.closest('[data-robo-pin-kind]');
+  if (pin) {
+    toggleAssistantContext(pin.dataset.roboPinKind || '', pin.dataset.roboPinReference || '');
+    return;
+  }
+  const proposal = event.target.closest('[data-robo-proposal]');
+  if (proposal) { reviewAssistantProposal(proposal.dataset.roboProposal || ''); return; }
+  const sourceLink = event.target.closest('[data-robo-source-path]');
+  if (sourceLink) {
+    selectedFile = sourceLink.dataset.roboSourcePath || '';
+    view = 'worktree';
     render();
     return;
   }
@@ -217,11 +261,37 @@ function onClick(event) {
   if (event.target.closest('[data-robo-timer-enable]')) { configureTimer(true); return; }
   if (event.target.closest('[data-robo-timer-disable]')) { configureTimer(false); return; }
   if (event.target.closest('[data-robo-review-open]')) { openReview(); return; }
+  const copyAssistant = event.target.closest('[data-robo-copy-assistant]');
+  if (copyAssistant) {
+    const messages = assistantMessageList(assistantState().response || {});
+    const message = messages[Number(copyAssistant.dataset.roboCopyAssistant)];
+    if (message?.content) copyText(message.content);
+    return;
+  }
   const copy = event.target.closest('[data-robo-copy]');
   if (copy) {
     const source = copy.dataset.roboCopy;
     if (source === 'diff') copyText(selectedDiff(inspection?.workspace?.git || {}));
     else if (source === 'logs') copyText((runtimeValue('logs').entries || []).map(logText).join('\n'));
+  }
+}
+
+function onKeyDown(event) {
+  const target = event.target;
+  if ((event.ctrlKey || event.metaKey) && event.key === 'Enter' && target.matches('[data-robo-assistant-question]')) {
+    event.preventDefault();
+    askAssistant();
+    return;
+  }
+  if (event.key === '/' && !target.matches('input, textarea, select, [contenteditable="true"]')) {
+    event.preventDefault();
+    ensureModal().querySelector('[data-robo-palette]')?.focus();
+    return;
+  }
+  if (event.key === 'Escape' && target.matches('[data-robo-palette]')) {
+    paletteQuery = '';
+    target.value = '';
+    updatePaletteResults(target);
   }
 }
 
@@ -245,14 +315,17 @@ function render() {
       <div class="dio-roboomp-nav-foot"><small>Owner schema</small><code>${esc(workspace.schemaVersion)}</code></div>
     </aside>
     <main class="dio-roboomp-main">
+      ${renderPalette()}
       ${error ? `<div class="dio-roboomp-alert error"><strong>Operation failed</strong><span>${esc(error)}</span></div>` : ''}
       ${notice ? `<div class="dio-roboomp-alert notice"><span>${esc(notice)}</span></div>` : ''}
       ${renderView()}
     </main>`;
+  if (view === 'assistant' && markdownModule.renderMermaid) markdownModule.renderMermaid(body);
 }
 
 function renderView() {
   if (view === 'issues') return renderIssues();
+  if (view === 'assistant') return renderAssistant();
   if (view === 'worktree') return renderWorktree();
   if (view === 'activity') return renderActivity();
   if (view === 'releases') return renderReleases();
@@ -327,6 +400,100 @@ function renderIssues() {
     </div>`;
 }
 
+function renderPalette() {
+  return `<section class="dio-roboomp-palette">
+    <span aria-hidden="true">⌕</span>
+    <input data-robo-palette value="${esc(paletteQuery)}" placeholder="Find view, issue, file, or commit" aria-label="Find view, issue, file, or commit" autocomplete="off">
+    <kbd>/</kbd>
+    <div class="dio-roboomp-palette-results ${paletteQuery.trim() ? '' : 'hidden'}" data-robo-palette-results>${paletteResultsMarkup(paletteQuery)}</div>
+  </section>`;
+}
+
+function renderAssistant() {
+  if (!selectedIssue) {
+    return `${sectionHeading('Assistant', 'Ask OMP about one existing RoboOMP issue worktree.')}${panelMessage('Select an issue', 'Open an issue first; each issue receives a separate assistant session.')}`;
+  }
+  const state = assistantState();
+  const response = state.response || {};
+  const messages = assistantMessageList(response);
+  const session = response.session || {};
+  const usage = response.usage || {};
+  return `
+    ${sectionHeading(selectedIssue, 'Ask about the repository, its changes, and its recorded RoboOMP run.')}
+    <section class="dio-roboomp-assistant-layout">
+      <article class="dio-roboomp-card dio-roboomp-assistant-chat">
+        <header><div><small>OMP RPC</small><h3>Issue assistant</h3></div><div class="dio-roboomp-assistant-meta">${response.model ? badge(modelLabel(response.model)) : ''}${response.thinking ? badge(response.thinking) : ''}<button type="button" data-robo-assistant-reload ${state.loading ? 'disabled' : ''}>Reload history</button></div></header>
+        ${state.error ? `<div class="dio-roboomp-alert error"><span>${esc(state.error)}</span></div>` : ''}
+        <div class="dio-roboomp-assistant-messages" data-robo-assistant-messages>
+          ${messages.map(renderAssistantMessage).join('') || panelMessage(state.loading ? 'Opening assistant session…' : 'No assistant turns yet', state.loading ? 'Persephone is reading the issue-scoped OMP session.' : 'Ask a repository question below.')}
+          ${state.loading && messages.length ? '<div class="dio-roboomp-assistant-wait"><i></i><span>OMP is working in the issue checkout…</span></div>' : ''}
+        </div>
+        <div class="dio-roboomp-assistant-composer">
+          <textarea data-robo-assistant-question rows="4" maxlength="32000" placeholder="Ask about this issue, diff, file, commit, run, or artifact…" ${state.loading ? 'disabled' : ''}>${esc(state.question)}</textarea>
+          <div><span>${session.id ? `Session ${esc(String(session.id).slice(0, 12))}${session.resumed ? ' · resumed' : ''}` : 'Separate from the automated issue session'}${usage.input_tokens || usage.output_tokens ? ` · ${Number(usage.input_tokens || 0) + Number(usage.output_tokens || 0)} tokens` : ''}</span><button type="button" data-robo-assistant-send ${state.loading || !state.question.trim() ? 'disabled' : ''}>${state.loading ? 'Working…' : 'Ask'}</button></div>
+        </div>
+      </article>
+      <aside class="dio-roboomp-assistant-side">
+        ${renderAssistantContext(state)}
+        ${renderAssistantSources(response.sources || [])}
+        ${renderAssistantProposals(state, response.proposals || [])}
+        ${renderAssistantTools(response)}
+        ${renderUnavailableActions()}
+      </aside>
+    </section>`;
+}
+
+function renderAssistantMessage(message, index) {
+  const role = message?.role === 'assistant' ? 'assistant' : 'user';
+  const content = String(message?.content || '');
+  const body = role === 'assistant'
+    ? markdownModule.processWithThinking(markdownModule.squashOutsideCode(content))
+    : `<pre>${esc(content)}</pre>`;
+  return `<article class="dio-roboomp-assistant-message ${role}"><header><strong>${role === 'assistant' ? 'OMP' : 'You'}</strong><small>${index + 1}</small></header><div class="dio-roboomp-assistant-copy"><button type="button" data-robo-copy-assistant="${index}">Copy</button></div><div class="dio-roboomp-assistant-content">${body}</div></article>`;
+}
+
+function assistantMessageList(response) {
+  const messages = Array.isArray(response.messages) ? [...response.messages] : [];
+  if (!messages.length && response.answer) messages.push({ role: 'assistant', content: response.answer });
+  return messages;
+}
+
+function renderAssistantContext(state) {
+  const selected = state.context || [];
+  const suggestions = assistantContextSuggestions();
+  return `<section class="dio-roboomp-card dio-roboomp-assistant-context"><header><div><small>PINNED CONTEXT</small><h3>${selected.length + 1} / 16</h3></div>${badge(selectedIssue)}</header>
+    <div class="dio-roboomp-context-chips"><span class="fixed">issue · ${esc(selectedIssue)}</span>${selected.map((item) => `<button type="button" data-robo-pin-kind="${esc(item.kind)}" data-robo-pin-reference="${esc(item.reference)}" title="Remove pinned context">${esc(item.kind)} · ${esc(item.reference)} <b>×</b></button>`).join('')}</div>
+    <details ${selected.length ? '' : 'open'}><summary>Add loaded repository context</summary><div class="dio-roboomp-context-options">${suggestions.map((item) => contextChoice(item, selected)).join('') || '<span>No issue worktree data is loaded yet.</span>'}</div></details>
+  </section>`;
+}
+
+function renderAssistantSources(sources) {
+  if (!Array.isArray(sources) || !sources.length) return '';
+  return `<section class="dio-roboomp-card dio-roboomp-assistant-sources"><header><div><small>EVIDENCE</small><h3>Repository sources</h3></div><strong>${sources.length}</strong></header>${sources.map((source) => `<details><summary><code>${esc(source.label)}</code></summary><div class="dio-roboomp-source-actions"><button type="button" data-robo-source-path="${esc(source.path)}">Open diff</button></div><pre>${esc(source.excerpt || '')}</pre></details>`).join('')}</section>`;
+}
+
+function renderAssistantProposals(state, proposals) {
+  if (!Array.isArray(proposals) || !proposals.length) return '';
+  return `<section class="dio-roboomp-card dio-roboomp-assistant-proposals"><header><div><small>REVIEW QUEUE</small><h3>Proposed owner actions</h3></div><strong>${proposals.length}</strong></header>${proposals.map((proposal) => {
+    const reviewed = state.reviewed.has(proposal.id);
+    const action = proposal.mutation?.action || 'owner action';
+    return `<article><div><strong>${esc(action)}</strong><p>${esc(proposal.reason || '')}</p><code>${esc(formatJson(proposal.mutation || {}))}</code></div><button type="button" data-robo-proposal="${esc(proposal.id)}" ${reviewed || busy ? 'disabled' : ''}>${reviewed ? 'Reviewed' : 'Review'}</button></article>`;
+  }).join('')}</section>`;
+}
+
+function renderAssistantTools(response) {
+  const activity = Array.isArray(response.toolActivity) ? response.toolActivity : [];
+  const tools = Array.isArray(response.tools) ? response.tools : [];
+  if (!activity.length && !tools.length) return '';
+  return `<section class="dio-roboomp-card dio-roboomp-assistant-tools"><header><div><small>TOOL SURFACE</small><h3>Read activity</h3></div><strong>${activity.length}</strong></header><div class="dio-roboomp-tool-chips">${tools.map((name) => `<span>${esc(name)}</span>`).join('')}</div>${activity.map((entry) => `<div><i class="${entry.status === 'error' ? 'failed' : ''}"></i><span><strong>${esc(entry.name || 'tool')}</strong><small>${esc(entry.intent || entry.status || '')}</small></span></div>`).join('')}</section>`;
+}
+
+function renderUnavailableActions() {
+  const entries = workspace?.capabilities?.unavailable || [];
+  if (!Array.isArray(entries) || !entries.length) return '';
+  return `<details class="dio-roboomp-card dio-roboomp-unavailable"><summary>Unavailable in this browser</summary>${entries.map((entry) => `<div><code>${esc(entry.id)}</code><span>${esc(entry.reason)}</span></div>`).join('')}</details>`;
+}
+
 function renderWorktree() {
   if (!selectedIssue) {
     return `${sectionHeading('Worktree', 'Inspect a native RoboOMP issue checkout without granting the browser filesystem access.')}${panelMessage('Select an issue', 'Choose an issue from Overview or Issues to open its Git workspace.')}`;
@@ -345,7 +512,8 @@ function renderWorktree() {
   const files = git.files || [];
   const diff = selectedDiff(git);
   return `
-    ${sectionHeading(selectedIssue, `${git.branch || 'detached'} · ${shortHash(git.head)} · base ${git.baseRef || 'not resolved'}`, 'Clean workspace', 'data-robo-cleanup')}
+    ${sectionHeading(selectedIssue, `${git.branch || 'detached'} · ${shortHash(git.head)} · base ${git.baseRef || 'not resolved'}`)}
+    <section class="dio-roboomp-worktree-actions"><button type="button" data-robo-open-assistant>Ask OMP</button><button type="button" data-robo-cleanup class="danger" ${busy ? 'disabled' : ''}>Clean workspace</button></section>
     <section class="dio-roboomp-repo-head">
       <div><small>BRANCH</small><strong>${esc(git.branch || 'detached')}</strong></div>
       <div><small>HEAD</small><code>${esc(shortHash(git.head))}</code></div>
@@ -359,7 +527,7 @@ function renderWorktree() {
         ${renderManifests(work)}
       </aside>
       <section class="dio-roboomp-diff-panel">
-        <header><div><small>UNIFIED DIFF</small><strong>${esc(selectedFile || 'All changed files')}</strong></div><button type="button" data-robo-copy="diff">Copy</button></header>
+        <header><div><small>UNIFIED DIFF</small><strong>${esc(selectedFile || 'All changed files')}</strong></div><div><button type="button" data-robo-pin-kind="diff" data-robo-pin-reference="${esc(selectedFile || '.')}">Pin</button><button type="button" data-robo-copy="diff">Copy</button></div></header>
         ${diff ? renderDiff(diff, selectedFile) : panelMessage('No diff', 'The current checkout matches its comparison base.')}
       </section>
       <aside class="dio-roboomp-history-panel">
@@ -383,7 +551,7 @@ function renderActivity() {
     </div>
     <section class="dio-roboomp-card dio-roboomp-reviews"><header><div><small>REVIEW</small><h3>${selectedIssue ? esc(selectedIssue) : 'Pull-request comments'}</h3></div><strong>${reviewComments.length}</strong></header>
       <div>${reviewComments.map(reviewCommentRow).join('') || panelMessage('No review comments', 'Open a pull-request worktree to inspect its bounded review history.')}</div></section>
-    <section class="dio-roboomp-card dio-roboomp-log"><header><div><small>JSONL</small><h3>RoboOMP log</h3></div><button type="button" data-robo-copy="logs">Copy</button></header><pre>${logs.map((entry) => `<span>${esc(logText(entry))}</span>`).join('') || 'No log entries returned.'}</pre></section>`;
+    <section class="dio-roboomp-card dio-roboomp-log"><header><div><small>JSONL</small><h3>RoboOMP log</h3></div><div><button type="button" data-robo-pin-kind="log" data-robo-pin-reference="runtime">Pin</button><button type="button" data-robo-copy="logs">Copy</button></div></header><pre>${logs.map((entry) => `<span>${esc(logText(entry))}</span>`).join('') || 'No log entries returned.'}</pre></section>`;
 }
 
 function renderReleases() {
@@ -483,7 +651,8 @@ function pipelineRow(entry) {
 }
 
 function eventRow(entry) {
-  return `<article class="state-${esc(entry.state || 'unknown')}"><i></i><div><header><strong>${esc(entry.issue_key || entry.repo || entry.delivery_id)}</strong>${badge(entry.state || 'unknown')}</header><span>${esc(entry.event_type || 'event')} · ${Number(entry.attempts || 0)} attempt${Number(entry.attempts || 0) === 1 ? '' : 's'}</span>${entry.last_error ? `<pre>${esc(entry.last_error)}</pre>` : ''}<small>${formatTime(entry.received_at)}</small></div>${entry.state === 'failed' && entry.delivery_id ? `<button type="button" data-robo-retry="${esc(entry.delivery_id)}">Retry</button>` : ''}${entry.state === 'running' && entry.delivery_id ? `<button type="button" class="danger" data-robo-cancel="${esc(entry.delivery_id)}">Stop</button>` : ''}</article>`;
+  const pin = entry.delivery_id && (!selectedIssue || entry.issue_key === selectedIssue) ? `<button type="button" data-robo-pin-kind="run" data-robo-pin-reference="${esc(entry.delivery_id)}">Pin</button>` : '';
+  return `<article class="state-${esc(entry.state || 'unknown')}"><i></i><div><header><strong>${esc(entry.issue_key || entry.repo || entry.delivery_id)}</strong>${badge(entry.state || 'unknown')}</header><span>${esc(entry.event_type || 'event')} · ${Number(entry.attempts || 0)} attempt${Number(entry.attempts || 0) === 1 ? '' : 's'}</span>${entry.last_error ? `<pre>${esc(entry.last_error)}</pre>` : ''}<small>${formatTime(entry.received_at)}</small></div><div>${pin}${entry.state === 'failed' && entry.delivery_id ? `<button type="button" data-robo-retry="${esc(entry.delivery_id)}">Retry</button>` : ''}${entry.state === 'running' && entry.delivery_id ? `<button type="button" class="danger" data-robo-cancel="${esc(entry.delivery_id)}">Stop</button>` : ''}</div></article>`;
 }
 
 function toolRow(entry) {
@@ -501,12 +670,12 @@ function releaseCard(entry) {
 }
 
 function renderManifests(workspaceData) {
-  const groups = [['Session', workspaceData.session], ['Context', workspaceData.context], ['Artifacts', workspaceData.artifacts]];
-  return `<div class="dio-roboomp-manifests">${groups.map(([label, manifest]) => `<details><summary>${label}<span>${manifest?.entries?.length || 0}</span></summary>${(manifest?.entries || []).map((entry) => `<div title="${esc(entry.path)}"><span>${esc(entry.path)}</span><small>${formatBytes(entry.size)}</small></div>`).join('') || '<p>Empty</p>'}</details>`).join('')}</div>`;
+  const groups = [['Session', workspaceData.session, ''], ['Context', workspaceData.context, ''], ['Artifacts', workspaceData.artifacts, 'artifact']];
+  return `<div class="dio-roboomp-manifests">${groups.map(([label, manifest, kind]) => `<details><summary>${label}<span>${manifest?.entries?.length || 0}</span></summary>${(manifest?.entries || []).map((entry) => `<div title="${esc(entry.path)}"><span>${esc(entry.path)}</span><small>${formatBytes(entry.size)}</small>${kind ? `<button type="button" data-robo-pin-kind="${kind}" data-robo-pin-reference="${esc(entry.path)}">Pin</button>` : ''}</div>`).join('') || '<p>Empty</p>'}</details>`).join('')}</div>`;
 }
 
 function commitRow(commit, index) {
-  return `<div class="dio-roboomp-commit"><span class="dio-roboomp-graph"><i></i>${index < 999 ? '<b></b>' : ''}</span><div><strong>${esc(commit.subject)}</strong><small>${esc(commit.author)} · ${formatTime(commit.date)}</small><code>${esc(commit.shortHash)}</code></div></div>`;
+  return `<div class="dio-roboomp-commit"><span class="dio-roboomp-graph"><i></i>${index < 999 ? '<b></b>' : ''}</span><div><strong>${esc(commit.subject)}</strong><small>${esc(commit.author)} · ${formatTime(commit.date)}</small><code>${esc(commit.shortHash)}</code></div><button type="button" data-robo-pin-kind="commit" data-robo-pin-reference="${esc(commit.hash || commit.shortHash)}">Pin</button></div>`;
 }
 
 function selectedDiff(git) {
@@ -571,15 +740,153 @@ function panelMessage(title, detail = '') {
 }
 
 function navLabel(name) {
-  return ({ overview: 'Overview', issues: 'Issues', worktree: 'Worktree', activity: 'Activity', releases: 'Releases', settings: 'Settings', setup: 'Setup' })[name] || titleCase(name);
+  return ({ overview: 'Overview', issues: 'Issues', assistant: 'Assistant', worktree: 'Worktree', activity: 'Activity', releases: 'Releases', settings: 'Settings', setup: 'Setup' })[name] || titleCase(name);
 }
 
 function navCount(name) {
   if (name === 'issues') return `<em>${issueRows().length}</em>`;
+  if (name === 'assistant' && selectedIssue) {
+    const state = assistantState();
+    if (state.loading) return '<i></i>';
+    const count = state.response?.messages?.length || 0;
+    return count ? `<em>${count}</em>` : '<i></i>';
+  }
   if (name === 'activity') return `<em>${(runtimeValue('status').recent_events || []).length}</em>`;
   if (name === 'releases') return `<em>${(runtimeValue('status').releases || []).length}</em>`;
   if (name === 'worktree' && selectedIssue) return '<i></i>';
   return '';
+}
+
+function assistantState(issue = selectedIssue) {
+  const key = issue || '__none__';
+  if (!assistantSessions.has(key)) {
+    assistantSessions.set(key, {
+      loaded: false,
+      loading: false,
+      question: '',
+      context: [],
+      response: null,
+      error: '',
+      reviewed: new Set(),
+    });
+  }
+  return assistantSessions.get(key);
+}
+
+function assistantContextSuggestions() {
+  const git = inspection?.workspace?.git || {};
+  const db = inspection?.database || {};
+  const suggestions = [];
+  if (selectedDiff(git)) suggestions.push({ kind: 'diff', reference: selectedFile || '.', label: selectedFile ? `Diff · ${selectedFile}` : 'Diff · all changes' });
+  for (const file of (git.files || []).slice(0, 12)) suggestions.push({ kind: 'file', reference: file.path, label: `File · ${file.path}` });
+  for (const commit of (git.commits || []).slice(0, 8)) suggestions.push({ kind: 'commit', reference: commit.hash || commit.shortHash, label: `Commit · ${commit.shortHash} ${commit.subject || ''}` });
+  for (const run of (db.events || []).slice(0, 8)) {
+    if (run.delivery_id) suggestions.push({ kind: 'run', reference: run.delivery_id, label: `Run · ${run.event_type || 'event'} ${run.state || ''}` });
+  }
+  for (const artifact of (inspection?.workspace?.artifacts?.entries || []).slice(0, 8)) suggestions.push({ kind: 'artifact', reference: artifact.path, label: `Artifact · ${artifact.path}` });
+  const pullRequest = db.issue?.pr_number;
+  if (pullRequest) suggestions.unshift({ kind: 'pull_request', reference: `#${pullRequest}`, label: `Pull request · #${pullRequest}` });
+  const seen = new Set();
+  return suggestions.filter((item) => {
+    const key = `${item.kind}\0${item.reference}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function contextChoice(item, selected) {
+  const active = selected.some((entry) => entry.kind === item.kind && entry.reference === item.reference);
+  return `<button type="button" class="${active ? 'active' : ''}" data-robo-pin-kind="${esc(item.kind)}" data-robo-pin-reference="${esc(item.reference)}" title="${esc(item.reference)}"><span>${esc(item.label)}</span><b>${active ? '✓' : '+'}</b></button>`;
+}
+
+function toggleAssistantContext(kind, reference) {
+  if (!selectedIssue || !kind || !reference) return;
+  const state = assistantState();
+  const index = state.context.findIndex((item) => item.kind === kind && item.reference === reference);
+  if (index >= 0) {
+    state.context.splice(index, 1);
+    notice = `Removed ${kind} from assistant context.`;
+  } else if (state.context.length >= MAX_ASSISTANT_CONTEXT) {
+    error = 'Assistant context is full. Remove one pinned item first.';
+  } else {
+    state.context.push({ kind, reference });
+    notice = `Pinned ${kind} for the ${selectedIssue} assistant.`;
+    error = '';
+  }
+  render();
+}
+
+function paletteEntries() {
+  const entries = VIEWS.map((name) => ({ type: 'view', reference: name, label: navLabel(name), detail: 'View' }));
+  for (const issue of issueRows()) entries.push({ type: 'issue', reference: issue.key, label: issue.title || issue.key, detail: issue.key });
+  const git = inspection?.workspace?.git || {};
+  for (const file of (git.files || [])) entries.push({ type: 'file', reference: file.path, label: file.path, detail: `${file.scope || 'file'} · ${selectedIssue}` });
+  for (const commit of (git.commits || [])) entries.push({ type: 'commit', reference: commit.hash || commit.shortHash, label: commit.subject || commit.shortHash, detail: `${commit.shortHash} · ${commit.author || ''}` });
+  return entries;
+}
+
+function fuzzyScore(value, query) {
+  const source = String(value || '').toLowerCase();
+  const needle = String(query || '').trim().toLowerCase();
+  if (!needle) return 0;
+  const exact = source.indexOf(needle);
+  if (exact >= 0) return 10000 - exact * 10 - source.length;
+  let cursor = 0;
+  let gap = 0;
+  for (const character of needle) {
+    const found = source.indexOf(character, cursor);
+    if (found < 0) return -1;
+    gap += found - cursor;
+    cursor = found + 1;
+  }
+  return 1000 - gap - source.length;
+}
+
+function paletteResultsMarkup(query) {
+  const needle = String(query || '').trim();
+  if (!needle) return '';
+  const matches = paletteEntries()
+    .map((entry) => ({ ...entry, score: fuzzyScore(`${entry.label} ${entry.detail} ${entry.reference}`, needle) }))
+    .filter((entry) => entry.score >= 0)
+    .sort((left, right) => right.score - left.score || left.label.localeCompare(right.label))
+    .slice(0, 12);
+  return matches.map((entry) => `<button type="button" data-robo-palette-item="${esc(entry.type)}" data-robo-palette-reference="${esc(entry.reference)}"><span><strong>${esc(entry.label)}</strong><small>${esc(entry.detail)}</small></span><em>${esc(entry.type)}</em></button>`).join('') || '<p>No loaded repository item matches.</p>';
+}
+
+function updatePaletteResults(input) {
+  const container = input.closest('.dio-roboomp-palette')?.querySelector('[data-robo-palette-results]');
+  if (!container) return;
+  container.innerHTML = paletteResultsMarkup(paletteQuery);
+  container.classList.toggle('hidden', !paletteQuery.trim());
+}
+
+function openPaletteItem(type, reference) {
+  paletteQuery = '';
+  if (type === 'view') {
+    view = VIEWS.includes(reference) ? reference : 'overview';
+    render();
+    if (view === 'assistant') loadAssistantHistory();
+    return;
+  }
+  if (type === 'issue') { selectIssue(reference); return; }
+  if (type === 'file') {
+    selectedFile = reference;
+    view = 'worktree';
+    render();
+    return;
+  }
+  if (type === 'commit') {
+    toggleAssistantContext('commit', reference);
+    view = 'assistant';
+    render();
+    loadAssistantHistory();
+  }
+}
+
+function modelLabel(model) {
+  if (typeof model === 'string') return model;
+  return model?.id || model?.name || model?.model || 'model';
 }
 
 function runtimeValue(name) {
@@ -682,6 +989,68 @@ async function openReview() {
     repositoryPath,
     ...(pullRequest === null ? {} : { pullRequest }),
   }, 'review', 'Host review workspace opened.');
+}
+
+async function loadAssistantHistory(force = false) {
+  if (!selectedIssue) return;
+  const issue = selectedIssue;
+  const state = assistantState(issue);
+  if (state.loading || (state.loaded && !force)) return;
+  state.loading = true;
+  state.error = '';
+  render();
+  try {
+    const response = await request('/api/odysseus/roboomp/assistant', {
+      method: 'POST',
+      body: JSON.stringify({ version: 1, operation: 'history', issue, question: '', context: state.context }),
+    });
+    state.response = response;
+    state.loaded = true;
+  } catch (caught) {
+    state.error = caught?.message || String(caught);
+  } finally {
+    state.loading = false;
+    if (selectedIssue === issue && view === 'assistant') render();
+  }
+}
+
+async function askAssistant() {
+  if (!selectedIssue) return;
+  const issue = selectedIssue;
+  const state = assistantState(issue);
+  const question = state.question.trim();
+  if (state.loading || !question) return;
+  state.loading = true;
+  state.error = '';
+  notice = '';
+  render();
+  try {
+    const response = await request('/api/odysseus/roboomp/assistant', {
+      method: 'POST',
+      body: JSON.stringify({ version: 1, operation: 'ask', issue, question, context: state.context }),
+    });
+    state.response = response;
+    state.question = '';
+    state.loaded = true;
+  } catch (caught) {
+    state.error = caught?.message || String(caught);
+  } finally {
+    state.loading = false;
+    if (selectedIssue === issue && view === 'assistant') render();
+  }
+}
+
+async function reviewAssistantProposal(id) {
+  const state = assistantState();
+  const proposal = (state.response?.proposals || []).find((item) => item.id === id);
+  if (!proposal?.mutation || state.reviewed.has(id)) return;
+  const action = proposal.mutation.action || 'owner action';
+  const danger = action === 'trigger.cancel' || action === 'issue.cleanup';
+  const completed = await runMutation(proposal.mutation, `proposal:${id}`, `${action} completed.`, danger);
+  if (completed) {
+    state.reviewed.add(id);
+    render();
+  }
 }
 
 async function selectIssue(issue) {
@@ -878,6 +1247,7 @@ export function open() {
   modal.classList.remove('hidden', 'modal-minimized');
   render();
   if (!workspace && !loading) loadWorkspace();
+  else if (view === 'assistant') loadAssistantHistory();
 }
 
 export function close() {

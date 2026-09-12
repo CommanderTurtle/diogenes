@@ -89,6 +89,92 @@ def test_secret_mutation_is_0600_and_redacted_from_job_metadata(tmp_path) -> Non
     assert plan["steps"][0]["argv"][-1] == "--consume"
 
 
+def test_assistant_request_uses_private_consumed_owner_payload(tmp_path) -> None:
+    observed = {}
+
+    def run(argv, **kwargs):
+        payload = Path(argv[4])
+        observed["argv"] = argv
+        observed["request"] = json.loads(payload.read_text(encoding="utf-8"))
+        observed["mode"] = stat.S_IMODE(payload.stat().st_mode)
+        observed["timeout"] = kwargs["timeout"]
+        value = {
+            "schemaVersion": "persephone.robomp.assistant.v1",
+            "operation": "ask",
+            "issue": "owner/repo#12",
+            "answer": "See src/main.py:4.",
+            "messages": [],
+            "sources": [],
+            "proposals": [],
+        }
+        return subprocess.CompletedProcess(argv, 0, json.dumps(value), "")
+
+    control = RoboOMPWorkspaceControl(
+        tmp_path / "control",
+        cli=_cli(tmp_path),
+        run=run,
+    )
+    request = {
+        "version": 1,
+        "operation": "ask",
+        "issue": "owner/repo#12",
+        "question": "What changed?",
+        "context": [{"kind": "file", "reference": "src/main.py"}],
+    }
+    result = control.assistant(request)
+
+    assert result["answer"] == "See src/main.py:4."
+    assert observed["request"] == request
+    assert observed["mode"] == 0o600
+    assert observed["timeout"] == 691_320
+    assert observed["argv"][1:4] == ["git-agent", "workspace", "assistant"]
+    assert observed["argv"][-1] == "--consume"
+    assert not Path(observed["argv"][4]).exists()
+
+
+def test_assistant_rejects_invalid_requests_and_owner_responses(tmp_path) -> None:
+    control = RoboOMPWorkspaceControl(tmp_path / "control", cli=_cli(tmp_path))
+    with pytest.raises(RoboOMPWorkspaceError, match="version must be 1"):
+        control.assistant({
+            "version": True,
+            "operation": "history",
+            "issue": "owner/repo#12",
+        })
+    with pytest.raises(RoboOMPWorkspaceError, match="question"):
+        control.assistant({
+            "version": 1,
+            "operation": "ask",
+            "issue": "owner/repo#12",
+            "question": "",
+        })
+
+    def run(argv, **kwargs):
+        return subprocess.CompletedProcess(
+            argv,
+            0,
+            json.dumps({
+                "schemaVersion": "persephone.robomp.assistant.v1",
+                "operation": "history",
+                "issue": "owner/repo#99",
+            }),
+            "",
+        )
+
+    mismatch = RoboOMPWorkspaceControl(
+        tmp_path / "mismatch",
+        cli=_cli(tmp_path),
+        run=run,
+    )
+    with pytest.raises(RoboOMPWorkspaceError, match="mismatched"):
+        mismatch.assistant({
+            "version": 1,
+            "operation": "history",
+            "issue": "owner/repo#12",
+            "question": "",
+            "context": [],
+        })
+
+
 def test_lifecycle_plans_are_fixed_persephone_git_agent_actions(tmp_path) -> None:
     control = RoboOMPWorkspaceControl(tmp_path / "control", cli=_cli(tmp_path))
     update, _token = control.create_lifecycle_plan(action="update")

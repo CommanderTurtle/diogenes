@@ -9,7 +9,7 @@ import json
 from urllib.parse import urlsplit
 
 from fastapi import APIRouter, HTTPException, Request, WebSocket, WebSocketDisconnect
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, StrictInt
 from starlette.concurrency import run_in_threadpool
 
 from core.middleware import INTERNAL_TOOL_HEADER, require_admin
@@ -199,6 +199,19 @@ class RoboOMPLifecyclePlanRequest(BaseModel):
 
 class RoboOMPMutationPlanRequest(BaseModel):
     mutation: dict[str, object]
+
+
+class RoboOMPAssistantContext(BaseModel):
+    kind: str = Field(min_length=1, max_length=40)
+    reference: str = Field(min_length=1, max_length=4000)
+
+
+class RoboOMPAssistantRequest(BaseModel):
+    version: StrictInt = 1
+    operation: str = Field(default="ask", min_length=3, max_length=20)
+    issue: str = Field(min_length=1, max_length=500)
+    question: str = Field(default="", max_length=32000)
+    context: list[RoboOMPAssistantContext] = Field(default_factory=list, max_length=16)
 
 
 class RuntimeDocumentSaveRequest(BaseModel):
@@ -752,6 +765,20 @@ def setup_ulysses_routes(
                 roboomp_control_factory().inspect,
                 issue=issue,
                 limit=limit,
+            )
+        except RoboOMPWorkspaceError as exc:
+            raise HTTPException(400, str(exc)) from exc
+
+    @router.post("/roboomp/assistant")
+    async def query_roboomp_assistant(
+        request: Request,
+        body: RoboOMPAssistantRequest,
+    ) -> dict:
+        require_admin(request)
+        try:
+            return await run_in_threadpool(
+                roboomp_control_factory().assistant,
+                body.model_dump(),
             )
         except RoboOMPWorkspaceError as exc:
             raise HTTPException(400, str(exc)) from exc
