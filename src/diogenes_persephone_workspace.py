@@ -18,6 +18,7 @@ from src.ulysses_jobs import RuntimeJobError, RuntimeJobStore, native_host_envir
 
 WORKSPACE_SCHEMA = "persephone.workspace.v1"
 WORKSPACE_LOG_SCHEMA = "persephone.workspace-logs.v1"
+INTEGRATION_INVENTORY_SCHEMA = "persephone.integration-inventory.v1"
 MUTATION_ACTIONS = {
     "configuration.replace",
     "schedule.put",
@@ -31,6 +32,7 @@ LIFECYCLE_ACTIONS = {
     "initialize",
     "integrate",
     "doctor",
+    "reconcile",
     "start",
     "stop",
     "restart",
@@ -95,6 +97,19 @@ class PersephoneWorkspaceControl:
             raise PersephoneWorkspaceError("Persephone returned an unsupported log schema")
         return result
 
+    def integrations(self) -> dict[str, Any]:
+        result = self._owner_json(["integrations"], timeout=120)
+        if result.get("schemaVersion") != INTEGRATION_INVENTORY_SCHEMA:
+            raise PersephoneWorkspaceError(
+                "Persephone returned an unsupported integration inventory schema"
+            )
+        for field in ("profiles", "integrations", "ompReconciliation"):
+            if not isinstance(result.get(field), list):
+                raise PersephoneWorkspaceError(
+                    f"Persephone integration inventory is missing {field}"
+                )
+        return result
+
     def create_lifecycle_plan(self, *, action: str) -> tuple[dict[str, Any], str]:
         if action not in LIFECYCLE_ACTIONS:
             raise PersephoneWorkspaceError("Unsupported Persephone lifecycle action")
@@ -125,6 +140,22 @@ class PersephoneWorkspaceControl:
                 "Run Persephone's read-only health audit",
                 "AUDIT PERSEPHONE",
                 [{"label": "Run the owner health audit", "argv": [cli, "doctor"], "timeout": 900}],
+            ),
+            "reconcile": (
+                "Restore Persephone-owned OMP settings",
+                "RECONCILE PERSEPHONE OMP",
+                [
+                    {
+                        "label": "Apply OMP settings maintained by Persephone",
+                        "argv": [cli, "reconcile"],
+                        "timeout": 900,
+                    },
+                    {
+                        "label": "Audit integration state",
+                        "argv": [cli, "doctor", "--integration-only"],
+                        "timeout": 900,
+                    },
+                ],
             ),
             "start": (
                 "Start the Persephone user service",

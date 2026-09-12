@@ -675,6 +675,16 @@ def setup_ulysses_routes(
         except PersephoneWorkspaceError as exc:
             raise HTTPException(503, str(exc)) from exc
 
+    @router.get("/persephone/integrations")
+    async def get_persephone_integrations(request: Request) -> dict:
+        require_admin(request)
+        try:
+            return await run_in_threadpool(
+                persephone_control_factory().integrations,
+            )
+        except PersephoneWorkspaceError as exc:
+            raise HTTPException(503, str(exc)) from exc
+
     @router.get("/persephone/queue/{kind}/{record_id}")
     async def get_persephone_queue_record(
         request: Request,

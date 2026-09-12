@@ -18853,6 +18853,30 @@ body:not(.email-doc-split-active) #email-lib-modal.email-lib-fullscreen:not(.mod
 .dio-persephone-connectors { grid-template-columns: repeat(3, minmax(270px, 1fr)); align-items: start; }
 .dio-persephone-settings { grid-template-columns: repeat(2, minmax(320px, 1fr)); }
 .dio-persephone-setup-grid { grid-template-columns: repeat(3, minmax(280px, 1fr)); align-items: start; }
+.dio-persephone-integration-grid { display: grid; grid-template-columns: minmax(360px, 1fr) minmax(360px, 1fr); gap: 12px; align-items: start; }
+.dio-persephone-integration-list,
+.dio-persephone-integration-side { display: flex; flex-direction: column; gap: 12px; }
+.dio-persephone-integration-owner dl { margin: 0; display: grid; gap: 8px; }
+.dio-persephone-integration-owner dl > div { min-width: 0; padding: 8px; border: 1px solid var(--pers-line); border-radius: 7px; }
+.dio-persephone-integration-owner dt { color: var(--text-muted, #777); font-size: 7px; letter-spacing: .08em; text-transform: uppercase; }
+.dio-persephone-integration-owner dd { min-width: 0; margin: 4px 0 0; }
+.dio-persephone-integration-owner code,
+.dio-persephone-profile-list code { display: block; overflow-wrap: anywhere; color: color-mix(in srgb, var(--pers-accent) 72%, var(--text-color, #ddd)); font-size: 8px; }
+.dio-persephone-integration-meta { margin: 10px 0 7px; display: flex; justify-content: space-between; gap: 8px; color: var(--text-muted, #888); font-size: 8px; }
+.dio-persephone-profile-chips { display: flex; flex-wrap: wrap; gap: 5px; }
+.dio-persephone-profile-chips span { padding: 3px 6px; border: 1px solid var(--pers-line); border-radius: 999px; color: var(--text-muted, #999); font-size: 7px; }
+.dio-persephone-reconcile-list,
+.dio-persephone-profile-list { max-height: 420px; display: flex; flex-direction: column; gap: 6px; overflow: auto; scrollbar-gutter: stable; }
+.dio-persephone-reconcile-list > div,
+.dio-persephone-profile-list > div { min-width: 0; padding: 8px; display: flex; align-items: flex-start; gap: 8px; border: 1px solid var(--pers-line); border-radius: 7px; }
+.dio-persephone-reconcile-list i { width: 6px; height: 6px; margin-top: 3px; flex: 0 0 auto; border-radius: 50%; background: #b77c71; }
+.dio-persephone-reconcile-list .ok i { background: #66c79a; }
+.dio-persephone-reconcile-list span,
+.dio-persephone-profile-list > div { min-width: 0; flex: 1; }
+.dio-persephone-reconcile-list strong,
+.dio-persephone-profile-list strong { display: block; overflow-wrap: anywhere; font-size: 8px; }
+.dio-persephone-reconcile-list small { display: block; margin-top: 3px; overflow-wrap: anywhere; color: var(--text-muted, #777); font-size: 7px; }
+.dio-persephone-metrics.integrations { grid-template-columns: repeat(4, minmax(110px, 1fr)); }
 
 .dio-persephone-form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 11px; }
 .dio-persephone-form-grid .wide { grid-column: 1 / -1; }
@@ -19033,6 +19057,7 @@ button.dio-persephone-row.queue.active { border-color: color-mix(in srgb, var(--
   .dio-persephone-runtime-grid.lower,
   .dio-persephone-queue-layout,
   .dio-persephone-schedule-layout { grid-template-columns: 1fr; }
+  .dio-persephone-integration-grid { grid-template-columns: 1fr; }
   .dio-persephone-queue-detail,
   .dio-persephone-schedule-editor,
   .dio-persephone-schedule-help { position: static; }
@@ -19054,6 +19079,7 @@ button.dio-persephone-row.queue.active { border-color: color-mix(in srgb, var(--
   .dio-persephone-runtime-grid.lower,
   .dio-persephone-queue-layout,
   .dio-persephone-schedule-layout { grid-template-columns: 1fr; }
+  .dio-persephone-integration-grid { grid-template-columns: 1fr; }
   .dio-persephone-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .dio-persephone-queue-detail,
   .dio-persephone-schedule-editor,

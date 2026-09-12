@@ -34,6 +34,13 @@ def test_workspace_reads_only_the_versioned_owner_cli_contract(tmp_path) -> None
                 "lines": 25,
                 "text": "owner log\n",
             }
+        elif argv[1:] == ["integrations"]:
+            value = {
+                "schemaVersion": "persephone.integration-inventory.v1",
+                "profiles": [],
+                "integrations": [{"key": "localflame"}],
+                "ompReconciliation": [],
+            }
         else:
             value = {
                 "schemaVersion": "persephone.workspace.v1",
@@ -46,13 +53,16 @@ def test_workspace_reads_only_the_versioned_owner_cli_contract(tmp_path) -> None
     report = control.observe(limit=12)
     record = control.queue_record(kind="inbox", record_id=7)
     logs = control.logs(lines=25)
+    integrations = control.integrations()
 
     assert report["schemaVersion"] == "persephone.workspace.v1"
     assert record == {"kind": "inbox", "id": 7, "body": "hello"}
     assert logs["text"] == "owner log\n"
+    assert integrations["integrations"] == [{"key": "localflame"}]
     assert calls[0][0][1:] == ["workspace", "show", "--limit", "12"]
     assert calls[1][0][1:] == ["workspace", "queue", "inbox", "7"]
     assert calls[2][0][1:] == ["workspace", "logs", "--lines", "25"]
+    assert calls[3][0][1:] == ["integrations"]
     assert "VIRTUAL_ENV" not in calls[0][1]["env"]
 
     with pytest.raises(PersephoneWorkspaceError):
@@ -86,6 +96,11 @@ def test_lifecycle_plans_are_fixed_owner_cli_actions(tmp_path) -> None:
     assert [step["argv"][1:] for step in plan["steps"]] == [
         ["restart"],
         ["status"],
+    ]
+    reconcile, _token = control.create_lifecycle_plan(action="reconcile")
+    assert [step["argv"][1:] for step in reconcile["steps"]] == [
+        ["reconcile"],
+        ["doctor", "--integration-only"],
     ]
     with pytest.raises(PersephoneWorkspaceError):
         control.create_lifecycle_plan(action="shell")

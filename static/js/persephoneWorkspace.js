@@ -4,7 +4,7 @@ import { makeWindowDraggable } from './windowDrag.js';
 
 const MODAL_ID = 'diogenes-persephone-workspace-modal';
 const TERMINAL = new Set(['succeeded', 'failed', 'cancelled']);
-const VIEWS = ['overview', 'connectors', 'routes', 'runtime', 'queues', 'schedules', 'settings', 'setup'];
+const VIEWS = ['overview', 'connectors', 'routes', 'runtime', 'queues', 'schedules', 'integrations', 'settings', 'setup'];
 const ICON = `<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor"
   stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
   <path d="M12 3a4 4 0 0 0-4 4v2H6a2 2 0 0 0-2 2v8h16v-8a2 2 0 0 0-2-2h-2V7a4 4 0 0 0-4-4z"/>
@@ -24,6 +24,9 @@ let scheduleDraft = null;
 let dispatchDraft = { channel: 'api', peerId: 'owner', message: '' };
 let runtimeLogs = null;
 let runtimeLogsLoading = false;
+let integrationInventory = null;
+let integrationLoading = false;
+let integrationError = '';
 let approvalValues = {};
 let busy = '';
 let error = '';
@@ -77,7 +80,7 @@ function ensureModal() {
   });
   Modals.injectMinimizeButton(modal, MODAL_ID);
   modal.querySelector('.close-btn')?.addEventListener('click', () => Modals.close(MODAL_ID));
-  modal.querySelector('[data-pers-refresh]')?.addEventListener('click', () => loadWorkspace(true));
+  modal.querySelector('[data-pers-refresh]')?.addEventListener('click', refreshCurrent);
   const body = modal.querySelector('.dio-persephone-body');
   body?.addEventListener('click', onClick);
   body?.addEventListener('input', onInput);
@@ -109,8 +112,10 @@ function onClick(event) {
   if (tab) {
     view = VIEWS.includes(tab.dataset.persView) ? tab.dataset.persView : 'overview';
     render();
+    if (view === 'integrations' && !integrationInventory) void loadIntegrations();
     return;
   }
+  if (event.target.closest('[data-pers-integrations-refresh]')) { loadIntegrations(true); return; }
   const lifecycle = event.target.closest('[data-pers-lifecycle]');
   if (lifecycle) { runLifecycle(lifecycle.dataset.persLifecycle); return; }
   if (event.target.closest('[data-pers-config-save]')) { saveConfiguration(); return; }
@@ -217,6 +222,7 @@ function renderView() {
   if (view === 'runtime') return renderRuntime();
   if (view === 'queues') return renderQueues();
   if (view === 'schedules') return renderSchedules();
+  if (view === 'integrations') return renderIntegrations();
   if (view === 'settings') return renderSettings();
   if (view === 'setup') return renderSetup();
   return renderOverview();
@@ -511,6 +517,65 @@ function renderSettings() {
     </div>${configFooter()}`;
 }
 
+function renderIntegrations() {
+  const inventory = integrationInventory;
+  const entries = inventory?.integrations || [];
+  const checks = inventory?.ompReconciliation || [];
+  const profiles = inventory?.profiles || [];
+  const readyOwners = entries.filter((entry) => entry.configured && entry.ownerContractPresent).length;
+  const passingChecks = checks.filter((entry) => entry.ok).length;
+  return `${sectionHeading(
+    'Integrations',
+    'Inspect the repositories Persephone maintains and the OMP settings it will restore after upgrades.',
+    integrationLoading ? 'Checking…' : 'Check again',
+    'data-pers-integrations-refresh',
+  )}
+    ${integrationError ? `<div class="dio-persephone-inline-error">${esc(integrationError)}</div>` : ''}
+    ${integrationLoading && !inventory ? panelMessage('Reading owner inventory…', 'Persephone is checking its configured repositories and OMP profiles.') : ''}
+    ${inventory ? `
+      <section class="dio-persephone-actions">
+        <button type="button" data-pers-lifecycle="reconcile" ${busy ? 'disabled' : ''}>${busy === 'lifecycle:reconcile' ? 'Working…' : 'Review OMP repair'}</button>
+        <button type="button" data-pers-lifecycle="integrate" ${busy ? 'disabled' : ''}>${busy === 'lifecycle:integrate' ? 'Working…' : 'Review full integration'}</button>
+      </section>
+      <section class="dio-persephone-metrics integrations">
+        ${metric('Owners', readyOwners, `${entries.length} configured`)}
+        ${metric('OMP checks', passingChecks, `${checks.length - passingChecks} need repair`)}
+        ${metric('Profiles', profiles.length, 'discovered by owner')}
+        ${metric('Session repair', inventory.reconcileOnSessionStart ? 1 : 0, inventory.reconcileOnSessionStart ? 'enabled' : 'disabled')}
+      </section>
+      <div class="dio-persephone-integration-grid">
+        <section class="dio-persephone-integration-list">
+          ${entries.length ? entries.map(renderIntegrationOwner).join('') : panelMessage('No integrations configured')}
+        </section>
+        <section class="dio-persephone-integration-side">
+          <article class="dio-persephone-card">
+            <header><div><small>OMP RECONCILIATION</small><h3>Maintained settings</h3><p>Read from Persephone; no repair runs until you review and confirm it.</p></div>${badge(passingChecks === checks.length ? 'ready' : 'incomplete')}</header>
+            <div class="dio-persephone-reconcile-list">${checks.map((entry) => `<div class="${entry.ok ? 'ok' : 'failed'}"><i></i><span><strong>${esc(entry.check)}</strong><small>${esc(entry.detail)}</small></span></div>`).join('')}</div>
+          </article>
+          <article class="dio-persephone-card">
+            <header><div><small>OMP PROFILES</small><h3>Discovered agents</h3></div></header>
+            <div class="dio-persephone-profile-list">${profiles.map((profile) => `<div><strong>${esc(profile.profile)}</strong><code>${esc(profile.agentDir)}</code></div>`).join('')}</div>
+          </article>
+        </section>
+      </div>` : (!integrationLoading ? panelMessage('Inventory not loaded', 'Use Check again to ask Persephone for its current owner inventory.') : '')}`;
+}
+
+function renderIntegrationOwner(entry) {
+  const ready = Boolean(entry.configured && entry.ownerContractPresent);
+  return `<article class="dio-persephone-card dio-persephone-integration-owner">
+    <header><div><small>${esc(entry.key)}</small><h3>${esc(entry.label)}</h3></div>${badge(ready ? 'ready' : (entry.configured ? 'missing' : 'disabled'))}</header>
+    <dl>
+      <div><dt>Repository</dt><dd><code>${esc(entry.directory)}</code></dd></div>
+      <div><dt>Owner contract</dt><dd><code>${esc(entry.ownerContract)}</code></dd></div>
+    </dl>
+    <div class="dio-persephone-integration-meta">
+      <span>MCP ${esc((entry.mcpNames || []).join(', ') || 'none')}</span>
+      <span>${(entry.activeProfiles || []).length} active profile${(entry.activeProfiles || []).length === 1 ? '' : 's'}</span>
+    </div>
+    <div class="dio-persephone-profile-chips">${(entry.activeProfiles || []).map((profile) => `<span>${esc(profile)}</span>`).join('')}</div>
+  </article>`;
+}
+
 function renderSetup() {
   const guides = workspace.setup || {};
   return `${sectionHeading('Setup', 'Provider-side steps and copy-ready values generated by the owner repository.')}
@@ -598,6 +663,28 @@ async function loadWorkspace(force = false) {
     loading = false;
     render();
   }
+}
+
+async function loadIntegrations(force = false) {
+  if (integrationLoading) return;
+  integrationLoading = true;
+  if (force) integrationError = '';
+  render();
+  try {
+    integrationInventory = await request('/api/odysseus/persephone/integrations');
+    integrationError = '';
+  } catch (caught) {
+    integrationError = caught?.message || String(caught);
+    if (force) integrationInventory = null;
+  } finally {
+    integrationLoading = false;
+    render();
+  }
+}
+
+async function refreshCurrent() {
+  await loadWorkspace(true);
+  if (view === 'integrations') await loadIntegrations(true);
 }
 
 async function loadQueue(kind, id) {
@@ -790,6 +877,7 @@ async function refreshAfterJob() {
   } catch (caught) {
     error = caught?.message || String(caught);
   }
+  if (integrationInventory || view === 'integrations') await loadIntegrations(true);
 }
 
 async function copyText(value) {
@@ -824,7 +912,7 @@ function panelMessage(title, detail = '') {
 }
 
 function navLabel(name) {
-  return ({ overview: 'Overview', connectors: 'Connectors', routes: 'Routes', runtime: 'Runtime', queues: 'Queues', schedules: 'Schedules', settings: 'Settings', setup: 'Setup guide' })[name] || titleCase(name);
+  return ({ overview: 'Overview', connectors: 'Connectors', routes: 'Routes', runtime: 'Runtime', queues: 'Queues', schedules: 'Schedules', integrations: 'Integrations', settings: 'Settings', setup: 'Setup guide' })[name] || titleCase(name);
 }
 
 function navCount(name) {
@@ -832,6 +920,7 @@ function navCount(name) {
   if (name === 'runtime') return `<em>${(workspace.approvals || []).filter((entry) => entry.status === 'pending').length}</em>`;
   if (name === 'queues') return `<em>${(workspace.inbox || []).length + (workspace.outbox || []).length}</em>`;
   if (name === 'schedules') return `<em>${(workspace.schedules || []).length}</em>`;
+  if (name === 'integrations' && integrationInventory) return `<em>${(integrationInventory.integrations || []).length}</em>`;
   return '';
 }
 
