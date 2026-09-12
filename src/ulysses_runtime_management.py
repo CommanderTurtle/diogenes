@@ -289,10 +289,14 @@ def load_runtime_management(
         if raw.get("git_update"):
             source_url = str(raw.get("source_url") or "")
             source_branch = str(raw.get("source_branch") or "")
+            source_remote = str(raw.get("source_remote") or "origin")
             if (
                 not re.fullmatch(r"https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(?:\.git)?", source_url)
                 or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,127}", source_branch)
                 or ".." in source_branch.split("/")
+                or not re.fullmatch(
+                    r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}", source_remote
+                )
             ):
                 raise RuntimeJobError(
                     f"{runtime_id} Git update source is not pinned safely"
@@ -304,6 +308,8 @@ def load_runtime_management(
             repository_root=repo.resolve(),
         )
         item = dict(raw)
+        if raw.get("git_update"):
+            item["source_remote"] = source_remote
         item["resource_kind"] = resource_kind
         dependency_section = str(
             raw.get("dependency_section") or "Other"
@@ -766,18 +772,25 @@ def _git(root: Path) -> dict[str, Any]:
             "branch": None,
             "commit": None,
             "origin": None,
+            "remotes": {},
         }
 
     def value(*args: str) -> str:
         result = _run(["git", "-C", str(root), *args])
         return result.stdout.strip() if result.returncode == 0 else ""
 
+    remotes = {
+        remote: value("remote", "get-url", remote)
+        for remote in value("remote").splitlines()
+        if remote
+    }
     return {
         "present": True,
         "dirty": bool(value("status", "--porcelain", "--untracked-files=no")),
         "branch": value("branch", "--show-current") or None,
         "commit": value("rev-parse", "HEAD") or None,
-        "origin": value("remote", "get-url", "origin") or None,
+        "origin": remotes.get("origin") or None,
+        "remotes": remotes,
     }
 
 
@@ -786,12 +799,17 @@ def _canonical_git_url(value: object) -> str:
 
 
 def _git_contract_matches(item: dict[str, Any], git: dict[str, Any]) -> bool:
+    source_remote = str(item.get("source_remote") or "origin")
+    remotes = git.get("remotes") if isinstance(git.get("remotes"), dict) else {}
+    source_remote_url = remotes.get(source_remote)
+    if source_remote == "origin" and not source_remote_url:
+        source_remote_url = git.get("origin")
     return bool(
         item.get("git_update")
         and git.get("present")
         and not git.get("dirty")
         and git.get("branch") == item.get("source_branch")
-        and _canonical_git_url(git.get("origin"))
+        and _canonical_git_url(source_remote_url)
         == _canonical_git_url(item.get("source_url"))
     )
 
@@ -810,6 +828,7 @@ def _git_remote_status(
     result = dict(git)
     result.update(
         {
+            "source_remote": str(item.get("source_remote") or "origin"),
             "remote_commit": None,
             "ahead": None,
             "behind": None,
@@ -1093,6 +1112,8 @@ def _git_sync_step(
             str(item["root"]),
             "--source",
             str(item["source_url"]),
+            "--remote",
+            str(item.get("source_remote") or "origin"),
             "--branch",
             str(item["source_branch"]),
         ],
@@ -2354,6 +2375,8 @@ class ManagedRuntimeControl:
                         "argv": [
                             "git",
                             "clone",
+                            "--origin",
+                            str(item.get("source_remote") or "origin"),
                             "--branch",
                             str(item["source_branch"]),
                             "--single-branch",

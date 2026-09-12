@@ -15,6 +15,7 @@ SOURCE_RE = re.compile(
     r"^https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(?:\.git)?$"
 )
 BRANCH_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$")
+REMOTE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 
 
 def _run(argv: list[str], root: Path) -> subprocess.CompletedProcess[str]:
@@ -38,7 +39,7 @@ def _value(root: Path, *args: str) -> str:
     return result.stdout.strip()
 
 
-def sync(root: Path, source: str, branch: str) -> str:
+def sync(root: Path, source: str, branch: str, remote_name: str = "origin") -> str:
     root = root.expanduser()
     if not root.is_absolute():
         raise RuntimeError("Git checkout path must be absolute")
@@ -52,14 +53,18 @@ def sync(root: Path, source: str, branch: str) -> str:
         or ".." in branch.split("/")
     ):
         raise RuntimeError("Declared Git branch is invalid")
+    if not REMOTE_RE.fullmatch(remote_name):
+        raise RuntimeError("Declared Git remote is invalid")
     current_branch = _value(root, "branch", "--show-current")
     if current_branch != branch:
         raise RuntimeError(
             f"Checkout is on {current_branch or 'detached HEAD'}, expected {branch}"
         )
-    origin = _value(root, "remote", "get-url", "origin")
-    if canonical_git_remote(origin) != canonical_git_remote(source):
-        raise RuntimeError("Checkout origin does not match the declared source")
+    remote_url = _value(root, "remote", "get-url", remote_name)
+    if canonical_git_remote(remote_url) != canonical_git_remote(source):
+        raise RuntimeError(
+            f"Checkout remote {remote_name} does not match the declared source"
+        )
     dirty = _value(root, "status", "--porcelain", "--untracked-files=no")
     if dirty:
         raise RuntimeError(
@@ -85,7 +90,7 @@ def sync(root: Path, source: str, branch: str) -> str:
     if before.lower() == remote_commit:
         return f"Current at {before[:7]}. Nothing to do."
     fetched = _run(
-        ["git", "-C", str(root), "fetch", "--prune", "origin", branch],
+        ["git", "-C", str(root), "fetch", "--prune", remote_name, branch],
         root,
     )
     if fetched.returncode:
@@ -97,7 +102,7 @@ def sync(root: Path, source: str, branch: str) -> str:
             str(root),
             "merge",
             "--ff-only",
-            f"origin/{branch}",
+            f"{remote_name}/{branch}",
         ],
         root,
     )
@@ -114,10 +119,11 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--root", type=Path, required=True)
     parser.add_argument("--source", required=True)
+    parser.add_argument("--remote", default="origin")
     parser.add_argument("--branch", required=True)
     args = parser.parse_args()
     try:
-        message = sync(args.root, args.source, args.branch)
+        message = sync(args.root, args.source, args.branch, args.remote)
     except (OSError, RuntimeError, subprocess.SubprocessError) as exc:
         print(f"Update blocked: {exc}")
         return 1

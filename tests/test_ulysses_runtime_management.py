@@ -734,6 +734,52 @@ def test_git_remote_status_reports_ahead_and_behind_without_changing_refs(
     assert "--no-write-fetch-head" not in flattened
 
 
+def test_named_source_remote_drives_contract_and_sync_step(tmp_path: Path) -> None:
+    source = "https://github.com/example/runtime.git"
+    item = {
+        "root": tmp_path,
+        "git_update": True,
+        "source_url": source,
+        "source_remote": "upstream",
+        "source_branch": "main",
+    }
+    git = {
+        "present": True,
+        "dirty": False,
+        "branch": "main",
+        "commit": "1" * 40,
+        "origin": "https://github.com/example/fork.git",
+        "remotes": {
+            "fork": "https://github.com/example/fork.git",
+            "upstream": source,
+        },
+    }
+
+    assert manager._git_contract_matches(item, git) is True
+    step = manager._git_sync_step(item)
+    remote_index = step["argv"].index("--remote")
+    assert step["argv"][remote_index + 1] == "upstream"
+
+
+def test_fork_backed_catalog_declares_source_remotes(tmp_path: Path) -> None:
+    items = {
+        item["id"]: item
+        for item in manager.load_runtime_management(
+            home=tmp_path,
+            services_root=tmp_path / "services",
+        )
+    }
+
+    assert items["camofox.browser"]["source_remote"] == "upstream"
+    assert items["camofox.mcp"]["source_remote"] == "upstream"
+    assert items["hermes.workspace"]["source_remote"] == "upstream"
+    assert items["context.mode.mcp"]["source_remote"] == "ildunari"
+    assert items["camofox.browser"]["launch"][:2] == [
+        "env",
+        "BROWSER_IDLE_TIMEOUT_MS=0",
+    ]
+
+
 def test_port_only_process_at_a_missing_root_is_unmanaged(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

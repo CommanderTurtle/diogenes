@@ -102,7 +102,7 @@
         {
           "path": ".env",
           "mode": "0600",
-          "content": "# Camofox browser environment\nCAMOFOX_PORT=9377\nCAMOUFOX_INSTALL_DIR=${HOME}/.cache/camoufox\nCAMOFOX_CRASH_REPORT_ENABLED=false\n"
+          "content": "# Camofox browser environment\nCAMOFOX_PORT=9377\nCAMOUFOX_INSTALL_DIR=${HOME}/.cache/camoufox\nCAMOFOX_CRASH_REPORT_ENABLED=false\nBROWSER_IDLE_TIMEOUT_MS=0\n"
         },
         {
           "path": "start.sh",
@@ -110,10 +110,11 @@
           "content": "#!/usr/bin/env bash\nset -Eeuo pipefail\nROOT=\"$(cd -- \"$(dirname -- \"${BASH_SOURCE[0]}\")\" && pwd -P)\"\ncd \"$ROOT\"\nif [[ -f .env ]]; then\n  set -a\n  source .env\n  set +a\nfi\nexec bun start\n"
         }
       ],
-      "launch": ["bash", "start.sh"],
+      "launch": ["env", "BROWSER_IDLE_TIMEOUT_MS=0", "bash", "start.sh"],
       "tmux_session": "diogenes-camofox-browser",
       "git_update": true,
       "source_url": "https://github.com/jo-inc/camofox-browser",
+      "source_remote": "upstream",
       "source_branch": "master",
       "build_script": "build",
       "bun_install_mode": "foreign_lock",
@@ -188,6 +189,7 @@
       "env_files": [],
       "git_update": true,
       "source_url": "https://github.com/ildunari/context-mode.git",
+      "source_remote": "ildunari",
       "source_branch": "feat/hermes-native-support",
       "build_script": "build",
       "bun_install_mode": "frozen",
@@ -216,6 +218,7 @@
       "env_files": [],
       "git_update": true,
       "source_url": "https://github.com/redf0x1/camofox-mcp.git",
+      "source_remote": "upstream",
       "source_branch": "main",
       "build_script": "build",
       "bun_install_mode": "frozen",
@@ -346,6 +349,7 @@
       "tmux_session": "diogenes-hermes-workspace",
       "git_update": true,
       "source_url": "https://github.com/outsourc-e/hermes-workspace.git",
+      "source_remote": "upstream",
       "source_branch": "main",
       "build_script": "build",
       "bun_install_mode": "pnpm_lock",
