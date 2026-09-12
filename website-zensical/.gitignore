@@ -1,0 +1,17 @@
+# Zensical and Preview output
+site/
+.cache/
+.zensical/
+
+# Generated navigation proposals are review artifacts
+nav.txt
+
+# Python cache from the rendered helper
+__pycache__/
+*.py[cod]
+
+# Local editor and OS state
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
