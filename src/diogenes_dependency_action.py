@@ -558,10 +558,6 @@ def _update(item: dict[str, Any]) -> None:
             cwd=root,
             timeout=7200,
         )
-        if item.get("integration"):
-            from src.diogenes_dependency_integration import integrate
-
-            integrate(str(item["id"]))
         print(
             f"{item['label']}: repository-owned update and verification completed."
         )

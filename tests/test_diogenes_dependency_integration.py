@@ -301,7 +301,7 @@ def test_owner_doctor_result_is_the_contract_gate(monkeypatch, tmp_path: Path) -
     assert integration._owner_doctor_current(item) is True
 
 
-def test_update_action_delegates_to_owner_then_refreshes_receipt(
+def test_update_action_delegates_entirely_to_owner_without_duplicate_integration(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
@@ -319,7 +319,6 @@ def test_update_action_delegates_to_owner_then_refreshes_receipt(
         },
     }
     commands: list[list[str]] = []
-    receipts: list[str] = []
     monkeypatch.setattr(
         dependency_action,
         "_run",
@@ -328,10 +327,9 @@ def test_update_action_delegates_to_owner_then_refreshes_receipt(
     monkeypatch.setattr(
         integration,
         "integrate",
-        lambda runtime_id: receipts.append(runtime_id),
+        lambda _runtime_id: pytest.fail("owner update must not be integrated twice"),
     )
 
     dependency_action._update(item)
 
     assert commands == [["bash", str(update), "--all"]]
-    assert receipts == ["owner.mcp"]

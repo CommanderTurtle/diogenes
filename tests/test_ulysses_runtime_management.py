@@ -770,10 +770,35 @@ def test_fork_backed_catalog_declares_source_remotes(tmp_path: Path) -> None:
         )
     }
 
-    assert items["camofox.browser"]["source_remote"] == "upstream"
-    assert items["camofox.mcp"]["source_remote"] == "upstream"
-    assert items["hermes.workspace"]["source_remote"] == "upstream"
-    assert items["context.mode.mcp"]["source_remote"] == "ildunari"
+    expected_sources = {
+        "camofox.browser": (
+            "https://github.com/CommanderTurtle/archive--camofox-browser.git",
+            "master",
+        ),
+        "camofox.mcp": (
+            "https://github.com/CommanderTurtle/archive--camofox-mcp.git",
+            "main",
+        ),
+        "hermes.workspace": (
+            "https://github.com/CommanderTurtle/archive--hermes-workspace.git",
+            "main",
+        ),
+        "context.mode.mcp": (
+            "https://github.com/CommanderTurtle/context-mode.git",
+            "main",
+        ),
+    }
+    for runtime_id, (source_url, source_branch) in expected_sources.items():
+        item = items[runtime_id]
+        assert item["source_url"] == source_url
+        assert item["source_remote"] == "fork"
+        assert item["source_branch"] == source_branch
+        expected_owner_scripts = (
+            {"update"}
+            if runtime_id == "hermes.workspace"
+            else {"update", "integrate", "doctor"}
+        )
+        assert set(item["owner_scripts"]) == expected_owner_scripts
     assert items["camofox.browser"]["launch"][:2] == [
         "env",
         "BROWSER_IDLE_TIMEOUT_MS=0",
