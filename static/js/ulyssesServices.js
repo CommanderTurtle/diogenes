@@ -5,6 +5,7 @@ import uiModule from './ui.js';
 import * as Modals from './modalManager.js';
 import { makeWindowDraggable } from './windowDrag.js';
 import markdownModule from './markdown.js';
+import cookbookModule from './cookbook.js';
 
 const MODAL_ID = 'diogenes-services-modal';
 const SKILLS_MODAL_ID = 'diogenes-skills-auditor-modal';
@@ -41,6 +42,8 @@ let hostShellReport = null;
 let selectedHostServiceId = '';
 let selectedHostServiceLog = '';
 let selectedShellId = '';
+let selectedNinferId = '';
+let hostTerminalKind = 'shell';
 let hostTerminal = null;
 let hostTerminalExpanded = false;
 const savedHostTerminalFontSize = Number(
@@ -869,6 +872,122 @@ function renderHostServiceLog() {
     </details>`;
 }
 
+function renderHostTerminalPanel({ id, path, kind }) {
+  const interactive = kind === 'shell';
+  return `
+    <div class="dio-host-terminal-panel" data-host-terminal-panel>
+      <div class="dio-host-terminal-toolbar">
+        <span class="dio-host-terminal-path" title="${esc(path || '')}">${esc(path || '')}</span>
+        <div>
+          <button type="button" data-host-terminal-copy title="Copy selection">Copy</button>
+          ${interactive ? '<button type="button" data-host-terminal-paste title="Paste from clipboard">Paste</button>' : ''}
+          <button type="button" data-host-terminal-zoom="-1" aria-label="Zoom out">−</button>
+          <output data-host-terminal-zoom-value>${hostTerminalFontSize}px</output>
+          <button type="button" data-host-terminal-zoom="1" aria-label="Zoom in">+</button>
+          <button type="button" data-host-terminal-expand>${hostTerminalExpanded ? 'Restore' : 'Expand'}</button>
+        </div>
+      </div>
+      ${interactive ? `
+        <div class="dio-host-terminal-keys" aria-label="Touch terminal keys">
+          ${['Ctrl', 'Win', 'Alt', 'Shift'].map((key) => `<button type="button" data-host-terminal-mod="${key.toLowerCase()}" aria-pressed="${hostTerminalModifiers.has(key.toLowerCase())}" title="Tap to hold ${key}">${key}</button>`).join('')}
+          <button type="button" data-host-terminal-key="escape">Esc</button>
+          <button type="button" data-host-terminal-key="tab">Tab</button>
+          <button type="button" data-host-terminal-key="left" aria-label="Left arrow">←</button>
+          <button type="button" data-host-terminal-key="up" aria-label="Up arrow">↑</button>
+          <button type="button" data-host-terminal-key="down" aria-label="Down arrow">↓</button>
+          <button type="button" data-host-terminal-key="right" aria-label="Right arrow">→</button>
+          <button type="button" data-host-terminal-key="enter">Enter</button>
+          <button type="button" data-host-terminal-key="flag" title="Insert two literal hyphens">--</button>
+        </div>` : ''}
+      <div class="dio-host-terminal-stage">
+        <div class="dio-host-terminal" data-host-terminal data-terminal-kind="${esc(kind)}" data-target-id="${esc(id)}" tabindex="0"></div>
+        <div class="dio-host-terminal-touch-menu" data-host-terminal-touch-menu>
+          <button type="button" data-host-terminal-copy>Copy</button>
+          ${interactive ? '<button type="button" data-host-terminal-paste>Paste</button>' : ''}
+        </div>
+      </div>
+    </div>`;
+}
+
+function renderNinfer() {
+  const report = hostServicesReport?.ninfer || {};
+  const configs = report.configs || [];
+  const artifacts = report.artifacts || [];
+  if (!configs.some((value) => value.id === selectedNinferId)) selectedNinferId = '';
+  const selected = configs.find((value) => value.id === selectedNinferId);
+  return `
+    <details class="dio-host-tree dio-ninfer-tree" open>
+      <summary>
+        <span><strong>NInfer</strong><small>${esc(report.root || '~/Odysseus/ninfer/ninfer')}</small></span>
+        ${statusBadge(report.supported ? 'ready' : 'unavailable')}
+      </summary>
+      <div class="dio-host-tree-body">
+        <div class="dio-ninfer-heading">
+          <p>Each model keeps one editable Docker command. Browser clients require <code>--cors</code>.</p>
+          <div class="dio-ninfer-download">
+            <input type="text" data-ninfer-download-repo placeholder="org/model or Hugging Face URL" aria-label="NInfer Hugging Face model">
+            <button type="button" data-ninfer-download>Download artifact</button>
+          </div>
+        </div>
+        ${configs.length ? `<div class="dio-ninfer-configs">${configs.map((config) => `
+          <article class="dio-ninfer-config ${config.active ? 'active' : ''}" data-ninfer-config="${esc(config.id)}">
+            <div class="dio-ninfer-config-head">
+              <span class="dio-host-status-dot ${config.active ? 'active' : ''}" title="${esc(config.state)}"></span>
+              <input type="text" data-ninfer-label value="${esc(config.label)}" aria-label="NInfer configuration name">
+              <span>port ${Number(config.port)}</span>
+            </div>
+            <code title="${esc(config.artifact)}">${esc(config.artifact)}</code>
+            <input type="text" data-ninfer-command value="${esc(config.command)}" aria-label="NInfer one-line launch command" spellcheck="false">
+            <div class="dio-host-service-actions">
+              <button type="button" data-ninfer-action="start" ${config.managed || !report.supported ? 'disabled' : ''}>Start</button>
+              <button type="button" data-ninfer-action="stop" ${config.managed ? '' : 'disabled'}>Stop</button>
+              <button type="button" data-ninfer-action="restart" ${config.managed ? '' : 'disabled'}>Restart</button>
+              <button type="button" data-ninfer-console ${config.managed ? '' : 'disabled'}>Console</button>
+              <button type="button" data-ninfer-save ${config.managed ? 'disabled' : ''}>Save</button>
+              <button type="button" data-ninfer-delete ${config.managed ? 'disabled' : ''}>Delete config</button>
+            </div>
+          </article>`).join('')}</div>` : panelMessage('No NInfer configurations', 'Configure an existing artifact or download one from Cookbook.')}
+        ${artifacts.length ? `
+          <details class="dio-ninfer-artifacts">
+            <summary>Unconfigured artifacts (${artifacts.length})</summary>
+            ${artifacts.map((artifact) => `
+              <div><code title="${esc(artifact.artifact)}">${esc(artifact.artifact)}</code><button type="button" data-ninfer-configure="${esc(artifact.artifact)}">Configure</button></div>`).join('')}
+          </details>` : ''}
+        ${selected && hostTerminalKind === 'ninfer' && selected.managed
+          ? renderHostTerminalPanel({ id: selected.id, path: selected.session, kind: 'ninfer' })
+          : ''}
+      </div>
+    </details>`;
+}
+
+function renderHostDependencyPaths() {
+  const report = hostServicesReport?.host_dependencies || {};
+  const cuda = report.cuda || {};
+  const llama = report.llama_cpp || {};
+  const ninfer = report.ninfer || {};
+  return `
+    <details class="dio-host-service-branch dio-host-dependency-paths">
+      <summary>
+        <span><strong>Host dependency paths</strong><small>read-only audit</small></span>
+        ${statusBadge(cuda.ready && llama.source_ready && ninfer.source_ready ? 'ready' : 'partial')}
+      </summary>
+      <div class="dio-host-service-list">
+        <div class="dio-host-service-row">
+          <div class="dio-host-service-identity"><div><strong>CUDA shell</strong><small>${esc(cuda.bashrc || '~/.bashrc')}</small></div></div>
+          <div class="dio-host-service-address"><span>${cuda.ready ? 'CUDA_HOME · PATH · LD_LIBRARY_PATH' : 'review CUDA exports'}</span></div>
+        </div>
+        <div class="dio-host-service-row">
+          <div class="dio-host-service-identity"><div><strong>llama.cpp</strong><small>${esc(llama.root || '~/llama.cpp')}</small></div></div>
+          <div class="dio-host-service-address"><span>${llama.built ? esc(llama.binary) : 'independent source build'}</span></div>
+        </div>
+        <div class="dio-host-service-row">
+          <div class="dio-host-service-identity"><div><strong>NInfer</strong><small>${esc(ninfer.root || '~/Odysseus/ninfer/ninfer')}</small></div></div>
+          <div class="dio-host-service-address"><span>${ninfer.download_ready ? 'hf_transfer ready' : esc(ninfer.download_environment || '~/temp-hf-download-venv')}</span></div>
+        </div>
+      </div>
+    </details>`;
+}
+
 function renderOperatorShell() {
   const sessions = hostShellReport?.sessions || [];
   if (!sessions.some((value) => value.id === selectedShellId)) {
@@ -892,43 +1011,15 @@ function renderOperatorShell() {
         ${sessions.length ? `
           <div class="dio-host-shell-tabs" role="tablist" aria-label="Operator shells">
             ${sessions.map((session) => `
-              <span class="${session.id === selectedShellId ? 'active' : ''}">
-                <button type="button" role="tab" aria-selected="${session.id === selectedShellId}"
+              <span class="${hostTerminalKind === 'shell' && session.id === selectedShellId ? 'active' : ''}">
+                <button type="button" role="tab" aria-selected="${hostTerminalKind === 'shell' && session.id === selectedShellId}"
                   data-host-shell-select="${esc(session.id)}" title="${esc(session.cwd)}">${esc(session.title)}</button>
                 <button type="button" data-host-shell-delete="${esc(session.id)}" aria-label="Close ${esc(session.title)}">×</button>
               </span>`).join('')}
           </div>
-          <div class="dio-host-terminal-panel" data-host-terminal-panel>
-            <div class="dio-host-terminal-toolbar">
-              <span class="dio-host-terminal-path" title="${esc(selected?.cwd || '')}">${esc(selected?.cwd || '')}</span>
-              <div>
-                <button type="button" data-host-terminal-copy title="Copy selection">Copy</button>
-                <button type="button" data-host-terminal-paste title="Paste from clipboard">Paste</button>
-                <button type="button" data-host-terminal-zoom="-1" aria-label="Zoom out">−</button>
-                <output data-host-terminal-zoom-value>${hostTerminalFontSize}px</output>
-                <button type="button" data-host-terminal-zoom="1" aria-label="Zoom in">+</button>
-                <button type="button" data-host-terminal-expand>${hostTerminalExpanded ? 'Restore' : 'Expand'}</button>
-              </div>
-            </div>
-            <div class="dio-host-terminal-keys" aria-label="Touch terminal keys">
-              ${['Ctrl', 'Win', 'Alt', 'Shift'].map((key) => `<button type="button" data-host-terminal-mod="${key.toLowerCase()}" aria-pressed="${hostTerminalModifiers.has(key.toLowerCase())}" title="Tap to hold ${key}">${key}</button>`).join('')}
-              <button type="button" data-host-terminal-key="escape">Esc</button>
-              <button type="button" data-host-terminal-key="tab">Tab</button>
-              <button type="button" data-host-terminal-key="left" aria-label="Left arrow">←</button>
-              <button type="button" data-host-terminal-key="up" aria-label="Up arrow">↑</button>
-              <button type="button" data-host-terminal-key="down" aria-label="Down arrow">↓</button>
-              <button type="button" data-host-terminal-key="right" aria-label="Right arrow">→</button>
-              <button type="button" data-host-terminal-key="enter">Enter</button>
-              <button type="button" data-host-terminal-key="flag" title="Insert two literal hyphens">--</button>
-            </div>
-            <div class="dio-host-terminal-stage">
-              <div class="dio-host-terminal" data-host-terminal data-shell-id="${esc(selectedShellId)}" tabindex="0"></div>
-              <div class="dio-host-terminal-touch-menu" data-host-terminal-touch-menu>
-                <button type="button" data-host-terminal-copy>Copy</button>
-                <button type="button" data-host-terminal-paste>Paste</button>
-              </div>
-            </div>
-          </div>`
+          ${hostTerminalKind === 'shell'
+            ? renderHostTerminalPanel({ id: selectedShellId, path: selected?.cwd || '', kind: 'shell' })
+            : ''}`
           : panelMessage('No shell tabs', 'Create one to open a persistent host terminal.')}
       </div>
     </details>`;
@@ -942,8 +1033,10 @@ function renderVenvs() {
   return `
     <div class="dio-host-plane-note">
       <strong>Operator plane</strong>
-      <span>Explicit mm-tools environments and shells use <code>${esc(hostServicesReport.tmux_socket || 'diogenes-operator')}</code>. They never enter Diogenes' default tmux server or virtual environment.</span>
+      <span>NInfer, explicit mm-tools environments, and shells use <code>${esc(hostServicesReport.tmux_socket || 'diogenes-operator')}</code>. They never enter Diogenes' default tmux server or virtual environment.</span>
     </div>
+    ${renderHostDependencyPaths()}
+    ${renderNinfer()}
     <details class="dio-host-tree" open>
       <summary>
         <span><strong>mm-tools</strong><small>${esc(hostServicesReport.root || '~/multimedia')}</small></span>
@@ -1031,7 +1124,9 @@ function fitHostTerminal() {
 async function mountHostTerminal() {
   const mount = document.querySelector(`#${MODAL_ID} [data-host-terminal]`);
   if (!mount || activeTab !== 'venvs') return;
-  const shellId = mount.dataset.shellId;
+  const targetId = mount.dataset.targetId;
+  const terminalKind = mount.dataset.terminalKind || 'shell';
+  const interactive = terminalKind === 'shell';
   const marker = Symbol('host-terminal');
   teardownHostTerminal();
   hostTerminal = { marker, destroyed: false, disposables: [] };
@@ -1051,7 +1146,7 @@ async function mountHostTerminal() {
     const terminal = new Terminal({
       allowProposedApi: false,
       convertEol: false,
-      cursorBlink: true,
+      cursorBlink: interactive,
       fontFamily: 'JetBrains Mono, Cascadia Code, ui-monospace, monospace',
       fontSize: hostTerminalFontSize,
       scrollback: 100000,
@@ -1063,10 +1158,13 @@ async function mountHostTerminal() {
     hostTerminal = { marker, terminal, fit, socket: null, disposables: [], destroyed: false };
     const base = new URL(apiBase, window.location.href);
     const scheme = base.protocol === 'https:' ? 'wss:' : 'ws:';
-    const socket = new WebSocket(`${scheme}//${base.host}/api/odysseus/host-shell/sessions/${encodeURIComponent(shellId)}/ws?cols=${terminal.cols}&rows=${terminal.rows}`);
+    const socketPath = interactive
+      ? `/api/odysseus/host-shell/sessions/${encodeURIComponent(targetId)}/ws`
+      : `/api/odysseus/host-services/ninfer/configs/${encodeURIComponent(targetId)}/ws`;
+    const socket = new WebSocket(`${scheme}//${base.host}${socketPath}?cols=${terminal.cols}&rows=${terminal.rows}`);
     socket.binaryType = 'arraybuffer';
     hostTerminal.socket = socket;
-    hostTerminal.disposables.push(terminal.onData((data) => sendHostTerminal(applyHeldTerminalModifiers(data))));
+    if (interactive) hostTerminal.disposables.push(terminal.onData((data) => sendHostTerminal(applyHeldTerminalModifiers(data))));
     socket.addEventListener('open', () => {
       if (hostTerminal?.marker !== marker) return;
       fitHostTerminal();
@@ -1080,7 +1178,7 @@ async function mountHostTerminal() {
     });
     socket.addEventListener('close', (event) => {
       if (hostTerminal?.marker === marker && !hostTerminal.destroyed) {
-        terminal.writeln(`\r\n\u001b[90m[operator shell disconnected: ${event.code}]\u001b[0m`);
+        terminal.writeln(`\r\n\u001b[90m[${interactive ? 'operator shell' : 'NInfer console'} disconnected: ${event.code}]\u001b[0m`);
       }
     });
     const resizeObserver = new ResizeObserver(() => window.requestAnimationFrame(fitHostTerminal));
@@ -1100,6 +1198,7 @@ async function mountHostTerminal() {
     }
     mount.addEventListener('click', (event) => {
       terminal.focus();
+      if (!interactive) return;
       if (terminal.hasSelection()) return;
       const rect = mount.getBoundingClientRect();
       const cursorRow = terminal.buffer.active.cursorY - terminal.buffer.active.viewportY;
@@ -1142,6 +1241,10 @@ function render() {
   modal.querySelector('.uly-services-window')?.classList.toggle(
     'host-shell-fullscreen',
     activeTab === 'venvs' && hostTerminalExpanded,
+  );
+  modal.querySelector('.uly-services-window')?.classList.toggle(
+    'ninfer-console-fullscreen',
+    activeTab === 'venvs' && hostTerminalExpanded && hostTerminalKind === 'ninfer',
   );
   restoreCommandOutputPosition();
   if (activeTab === 'venvs' && selectedShellId) window.requestAnimationFrame(mountHostTerminal);
@@ -1539,6 +1642,89 @@ async function controlHostService(button) {
   render();
 }
 
+async function configureNinferArtifact(artifactPath) {
+  const artifact = (hostServicesReport?.ninfer?.artifacts || [])
+    .find((value) => value.artifact === artifactPath);
+  if (!artifact) return;
+  try {
+    hostServicesReport = await request('/api/odysseus/host-services/ninfer/configs', {
+      method: 'POST',
+      body: JSON.stringify({
+        label: artifact.label || '',
+        artifact: artifact.artifact,
+        command: artifact.command,
+      }),
+    });
+    loadError = '';
+  } catch (error) {
+    loadError = error?.message || String(error);
+  }
+  render();
+}
+
+async function saveNinferConfig(button) {
+  const card = button.closest('[data-ninfer-config]');
+  const configId = card?.dataset.ninferConfig;
+  const config = (hostServicesReport?.ninfer?.configs || []).find((value) => value.id === configId);
+  if (!card || !config) return;
+  try {
+    hostServicesReport = await request(`/api/odysseus/host-services/ninfer/configs/${encodeURIComponent(configId)}`, {
+      method: 'PUT',
+      body: JSON.stringify({
+        label: card.querySelector('[data-ninfer-label]')?.value || config.label,
+        artifact: config.artifact,
+        command: card.querySelector('[data-ninfer-command]')?.value || '',
+      }),
+    });
+    loadError = '';
+    uiModule.showToast('NInfer command saved.', 2500);
+  } catch (error) {
+    loadError = error?.message || String(error);
+  }
+  render();
+}
+
+async function deleteNinferConfig(configId) {
+  const config = (hostServicesReport?.ninfer?.configs || []).find((value) => value.id === configId);
+  if (!config) return;
+  const confirmed = await uiModule.styledConfirm(
+    `Delete the ${config.label} configuration? The .ninfer artifact remains on disk.`,
+    { title: 'Delete NInfer config', confirmText: 'Delete config', cancelText: 'Keep it', danger: true },
+  );
+  if (!confirmed) return;
+  try {
+    hostServicesReport = await request(`/api/odysseus/host-services/ninfer/configs/${encodeURIComponent(configId)}`, {
+      method: 'DELETE',
+    });
+    if (selectedNinferId === configId) {
+      selectedNinferId = '';
+      hostTerminalKind = 'shell';
+    }
+    loadError = '';
+  } catch (error) {
+    loadError = error?.message || String(error);
+  }
+  render();
+}
+
+async function controlNinferConfig(configId, action) {
+  try {
+    hostServicesReport = await request(`/api/odysseus/host-services/ninfer/configs/${encodeURIComponent(configId)}/${encodeURIComponent(action)}`, {
+      method: 'POST',
+    });
+    if (action !== 'stop') {
+      selectedNinferId = configId;
+      hostTerminalKind = 'ninfer';
+    } else if (selectedNinferId === configId) {
+      hostTerminalKind = 'shell';
+    }
+    loadError = '';
+  } catch (error) {
+    loadError = error?.message || String(error);
+  }
+  render();
+}
+
 async function loadHostServiceLog(serviceId) {
   try {
     const log = await request(`/api/odysseus/host-services/${encodeURIComponent(serviceId)}/log`);
@@ -1562,6 +1748,7 @@ async function createHostShell() {
     selectedShellId = hostShellReport.sessions?.find((value) => !before.has(value.id))?.id
       || hostShellReport.sessions?.at(-1)?.id
       || '';
+    hostTerminalKind = 'shell';
     hostTerminalModifiers.clear();
     loadError = '';
   } catch (error) {
@@ -1666,6 +1853,7 @@ function toggleHostTerminalExpanded() {
   hostTerminalExpanded = !hostTerminalExpanded;
   const windowNode = document.querySelector(`#${MODAL_ID} .uly-services-window`);
   windowNode?.classList.toggle('host-shell-fullscreen', hostTerminalExpanded);
+  windowNode?.classList.toggle('ninfer-console-fullscreen', hostTerminalExpanded && hostTerminalKind === 'ninfer');
   const button = document.querySelector(`#${MODAL_ID} [data-host-terminal-expand]`);
   if (button) button.textContent = hostTerminalExpanded ? 'Restore' : 'Expand';
   window.requestAnimationFrame(fitHostTerminal);
@@ -1710,12 +1898,41 @@ function handleServicesClick(event) {
   if (hostAction) return controlHostService(hostAction);
   const hostLog = event.target.closest('[data-host-service-log]');
   if (hostLog) return loadHostServiceLog(hostLog.dataset.hostServiceLog);
+  const ninferDownload = event.target.closest('[data-ninfer-download]');
+  if (ninferDownload) {
+    const downloadRepo = ninferDownload.closest('.dio-ninfer-download')
+      ?.querySelector('[data-ninfer-download-repo]')?.value?.trim() || '';
+    return cookbookModule.open({ tab: 'Search', downloadBackend: 'ninfer', downloadRepo });
+  }
+  const configureNinfer = event.target.closest('[data-ninfer-configure]');
+  if (configureNinfer) return configureNinferArtifact(configureNinfer.dataset.ninferConfigure);
+  const ninferAction = event.target.closest('[data-ninfer-action]');
+  if (ninferAction) {
+    const configId = ninferAction.closest('[data-ninfer-config]')?.dataset.ninferConfig;
+    if (configId) return controlNinferConfig(configId, ninferAction.dataset.ninferAction);
+  }
+  const ninferConsole = event.target.closest('[data-ninfer-console]');
+  if (ninferConsole) {
+    selectedNinferId = ninferConsole.closest('[data-ninfer-config]')?.dataset.ninferConfig || '';
+    hostTerminalKind = 'ninfer';
+    hostTerminalModifiers.clear();
+    render();
+    return;
+  }
+  const ninferSave = event.target.closest('[data-ninfer-save]');
+  if (ninferSave) return saveNinferConfig(ninferSave);
+  const ninferDelete = event.target.closest('[data-ninfer-delete]');
+  if (ninferDelete) {
+    const configId = ninferDelete.closest('[data-ninfer-config]')?.dataset.ninferConfig;
+    if (configId) return deleteNinferConfig(configId);
+  }
   if (event.target.closest('[data-host-shell-new]')) return createHostShell();
   const closeShell = event.target.closest('[data-host-shell-delete]');
   if (closeShell) return deleteHostShell(closeShell.dataset.hostShellDelete);
   const selectShell = event.target.closest('[data-host-shell-select]');
   if (selectShell) {
     selectedShellId = selectShell.dataset.hostShellSelect;
+    hostTerminalKind = 'shell';
     hostTerminalModifiers.clear();
     render();
     return;

@@ -17,7 +17,7 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, Request, Depends
 
 from src.auth_helpers import require_user
-from src.constants import COOKBOOK_STATE_FILE
+from src.constants import COOKBOOK_STATE_FILE, DATA_DIR
 from pydantic import BaseModel
 
 from core.middleware import require_admin
@@ -604,6 +604,170 @@ def _normalize_minimax_m3_vllm_cmd(cmd: str) -> str:
     add_bool("--disable-custom-all-reduce")
     add_bool("--enable-expert-parallel")
     return shlex.join(env_parts + body)
+
+
+def _next_ninfer_model_dir(root: Path) -> Path:
+    for index in range(1, 10000):
+        candidate = root / f"models{index}"
+        try:
+            candidate.mkdir(mode=0o755)
+            return candidate
+        except FileExistsError:
+            continue
+    raise RuntimeError("No free NInfer modelsN directory is available")
+
+
+async def _start_ninfer_artifact_download(
+    req: ModelDownloadRequest,
+    session_id: str,
+) -> dict:
+    """Launch the workstation's established hf_transfer script shape in tmux."""
+    if IS_WINDOWS or req.remote_host:
+        return {
+            "ok": False,
+            "error": "NInfer artifact downloads are available only on the local Linux workstation.",
+            "session_id": session_id,
+        }
+
+    ninfer_root = Path(
+        os.environ.get(
+            "DIOGENES_NINFER_ROOT",
+            Path.home() / "Odysseus" / "ninfer" / "ninfer",
+        )
+    ).expanduser().resolve()
+    download_venv = Path(
+        os.environ.get(
+            "DIOGENES_HF_TRANSFER_ROOT",
+            Path.home() / "temp-hf-download-venv",
+        )
+    ).expanduser().resolve()
+    activate = download_venv / ".venv" / "bin" / "activate"
+    if not ninfer_root.is_dir():
+        return {"ok": False, "error": f"NInfer checkout not found: {ninfer_root}", "session_id": session_id}
+    if not activate.is_file():
+        return {"ok": False, "error": f"hf_transfer environment not found: {activate}", "session_id": session_id}
+    if not shutil.which("tmux"):
+        return {"ok": False, "error": _missing_binary_message("tmux", "local server"), "session_id": session_id}
+
+    source_dir = ninfer_root.parent / req.repo_id.replace("/", "--")
+    target_dir = _next_ninfer_model_dir(ninfer_root)
+    config_id = f"ninfer-{uuid.uuid4().hex[:12]}"
+    config_dir = Path(DATA_DIR).expanduser().resolve() / "diogenes-operator" / "ninfer-configs"
+    config_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+    config_path = config_dir / f"{config_id}.json"
+    download_script = TMUX_LOG_DIR / f"{session_id}-download-ninfer.py"
+    wrapper_script = TMUX_LOG_DIR / f"{session_id}.sh"
+    model_dir = target_dir.name
+    label = req.repo_id.split("/")[-1]
+
+    download_script.write_text(
+        "\n".join(
+            [
+                "import os",
+                "",
+                "# Enable hf_transfer for high-speed downloads",
+                'os.environ["HF_HUB_ENABLE_HF_TRANSFER"] = "1"',
+                "# Optional: Tune Tokio worker threads for your CPU cores",
+                'os.environ["TOKIO_WORKER_THREADS"] = "16"',
+                "",
+                "from huggingface_hub import snapshot_download, logging",
+                "",
+                "# Enable maximum verbosity logging",
+                "logging.set_verbosity_debug()",
+                "",
+                "snapshot_download(",
+                f"    repo_id={req.repo_id!r},",
+                f"    local_dir={str(source_dir)!r},",
+                "    local_dir_use_symlinks=False,",
+                ")",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    safe_chmod(download_script, 0o600)
+
+    register_code = (
+        "import json,pathlib,sys;"
+        "p=pathlib.Path(sys.argv[1]);"
+        "p.write_text(json.dumps({'id':sys.argv[2],'label':sys.argv[3],"
+        "'artifact':sys.argv[4],'command':sys.argv[5]},indent=2)+'\\n',encoding='utf-8');"
+        "p.chmod(0o600)"
+    )
+    command_prefix = (
+        "docker run --rm --gpus '\"device=0\"' "
+        "--publish 0.0.0.0:8080:8080 "
+        f"--volume \"$PWD/{model_dir}:/{model_dir}:ro\" "
+        "ninfer:local ninfer-serve "
+    )
+    command_suffix = (
+        " --host 0.0.0.0 --max-context 200000 --kv-capacity auto --kv-dtype int8"
+        " --max-concurrency 4 --spec mtp --draft-tokens 3 --lm-head-draft --vision --cors"
+    )
+    runner_lines = [
+        "#!/usr/bin/env bash",
+        "set -uo pipefail",
+        f"NINFER_DOWNLOAD_SCRIPT={shlex.quote(str(download_script))}",
+        f"NINFER_WRAPPER_SCRIPT={shlex.quote(str(wrapper_script))}",
+        f"NINFER_TARGET_DIR={shlex.quote(str(target_dir))}",
+        "trap 'rm -f \"$NINFER_DOWNLOAD_SCRIPT\" \"$NINFER_WRAPPER_SCRIPT\"; "
+        "rmdir \"$NINFER_TARGET_DIR\" 2>/dev/null || true' EXIT",
+        'export PATH="$HOME/.local/bin:$HOME/bin:/usr/local/bin:$PATH"',
+        f"source {shlex.quote(str(activate))}",
+        f"cd -- {shlex.quote(str(download_venv))}",
+    ]
+    if req.hf_token:
+        runner_lines.append(f"export HF_TOKEN={shlex.quote(req.hf_token)}")
+    runner_lines.extend(
+        [
+            f"exec > >(tee -a {shlex.quote(str(TMUX_LOG_DIR / f'{session_id}.log'))}) 2>&1",
+            f"uv run {shlex.quote(str(download_script))}",
+            "status=$?",
+            'if [ "$status" -ne 0 ]; then echo "DOWNLOAD_FAILED (exit $status)"; exit "$status"; fi',
+            f"NINFER_SOURCE=$(find {shlex.quote(str(source_dir))} -type f -name '*.ninfer' -print | sort | head -n 1)",
+            'if [ -z "$NINFER_SOURCE" ]; then echo "DOWNLOAD_FAILED (no .ninfer artifact found)"; exit 2; fi',
+            f"cp -- \"$NINFER_SOURCE\" {shlex.quote(str(target_dir))}/",
+            f"NINFER_ARTIFACT={shlex.quote(str(target_dir))}/\"$(basename \"$NINFER_SOURCE\")\"",
+            f"NINFER_COMMAND={shlex.quote(command_prefix)}\"/{model_dir}/$(basename \"$NINFER_SOURCE\")\"{shlex.quote(command_suffix)}",
+            f"python -c {shlex.quote(register_code)} {shlex.quote(str(config_path))} {shlex.quote(config_id)} {shlex.quote(label)} \"$NINFER_ARTIFACT\" \"$NINFER_COMMAND\"",
+            f"printf 'NInfer artifact copied to %s\\nConfiguration saved as %s\\n' \"$NINFER_ARTIFACT\" {shlex.quote(config_id)}",
+            'echo "DOWNLOAD_OK"',
+        ]
+    )
+    wrapper_script.write_text("\n".join(runner_lines) + "\n", encoding="utf-8")
+    safe_chmod(wrapper_script, 0o700)
+    setup_cmd = (
+        "tmux set-option -g history-limit 100000 2>/dev/null; "
+        f"tmux new-session -d -E -s {session_id} {shlex.quote(str(wrapper_script))} && "
+        + render_tmux_tag_shell(
+            session_id,
+            kind="download",
+            identity=req.repo_id,
+            provider="ninfer",
+        )
+    )
+    proc = await asyncio.create_subprocess_shell(
+        setup_cmd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    await proc.wait()
+    if proc.returncode != 0:
+        stderr = (await proc.stderr.read()).decode(errors="replace")
+        download_script.unlink(missing_ok=True)
+        wrapper_script.unlink(missing_ok=True)
+        try:
+            target_dir.rmdir()
+        except OSError:
+            pass
+        return {"ok": False, "error": stderr, "session_id": session_id}
+    return {
+        "ok": True,
+        "session_id": session_id,
+        "remote": "local",
+        "ninfer_config_id": config_id,
+        "ninfer_model_dir": str(target_dir),
+    }
 
 
 def setup_cookbook_routes() -> APIRouter:
@@ -1209,6 +1373,7 @@ def setup_cookbook_routes() -> APIRouter:
         # Defence-in-depth: even though this endpoint is admin-gated, refuse
         # values that would land in shell contexts with metacharacters.
         backend = (req.backend or "").strip().lower()
+        is_ninfer_download = backend == "ninfer"
         is_ollama_download = backend == "ollama" or ("/" not in req.repo_id and ":" in req.repo_id)
         if is_ollama_download:
             _validate_serve_model_id(req.repo_id)
@@ -1217,6 +1382,9 @@ def setup_cookbook_routes() -> APIRouter:
         else:
             _validate_repo_id(req.repo_id)
             _validate_include(req.include)
+        if is_ninfer_download:
+            req.include = None
+            req.local_dir = None
         validate_remote_host(req.remote_host)
         req.ssh_port = validate_ssh_port(req.ssh_port)
         req.local_dir = _validate_local_dir(req.local_dir)
@@ -1228,6 +1396,22 @@ def setup_cookbook_routes() -> APIRouter:
         TMUX_LOG_DIR.mkdir(parents=True, exist_ok=True)
         session_id = f"cookbook-{uuid.uuid4().hex[:8]}"
         wrapper_script = TMUX_LOG_DIR / f"{session_id}.sh"
+
+        if is_ninfer_download:
+            result = await _start_ninfer_artifact_download(req, session_id)
+            if result.get("ok"):
+                try:
+                    from src.assistant_log import log_to_assistant
+                    from src.auth_helpers import get_current_user
+
+                    log_to_assistant(
+                        get_current_user(request),
+                        f"Started NInfer artifact download {req.repo_id}",
+                        category="Download",
+                    )
+                except Exception:
+                    pass
+            return result
 
         # Custom download dir: point the HF cache at <dir>/hub via env vars
         # (HF_HOME + HUGGINGFACE_HUB_CACHE) instead of --local-dir. local_dir

@@ -10,6 +10,7 @@ from src.diogenes_host_services import (
     HostServiceError,
     HostServicesManager,
     MM_TOOL_SERVICES,
+    NINFER_SESSION_PREFIX,
     TMUX_SOCKET,
     clean_host_path,
 )
@@ -198,3 +199,107 @@ def test_unknown_services_and_untrusted_shell_ids_fail_explicitly(tmp_path: Path
         manager.act("mm.not-real", "start")
     with pytest.raises(HostServiceError, match="invalid operator shell id"):
         manager.delete_shell("../../default")
+
+
+def test_ninfer_default_command_is_one_line_and_browser_ready(tmp_path: Path) -> None:
+    root = tmp_path / "ninfer"
+    artifact = root / "models1" / "model file.ninfer"
+    artifact.parent.mkdir(parents=True)
+    artifact.write_bytes(b"ninfer")
+    manager = HostServicesManager(
+        root=tmp_path / "multimedia",
+        state_root=tmp_path / "state",
+        ninfer_root=root,
+        tmux="/usr/bin/tmux",
+        runner=_Recorder(),
+    )
+
+    command = manager.ninfer_default_command(artifact, port=8180)
+
+    assert "\n" not in command and "\r" not in command
+    assert "--publish 0.0.0.0:8180:8080" in command
+    assert '--volume "$PWD/models1:/models1:ro"' in command
+    assert "/models1/'model file.ninfer'" in command
+    assert command.endswith("--vision --cors")
+
+
+def test_ninfer_configs_are_durable_without_moving_artifacts(tmp_path: Path) -> None:
+    root = tmp_path / "ninfer"
+    artifact = root / "models2" / "model.ninfer"
+    artifact.parent.mkdir(parents=True)
+    artifact.write_bytes(b"ninfer")
+    manager = HostServicesManager(
+        root=tmp_path / "multimedia",
+        state_root=tmp_path / "state",
+        ninfer_root=root,
+        tmux="/usr/bin/tmux",
+        runner=_Recorder(),
+        port_probe=lambda _port: False,
+    )
+    command = manager.ninfer_default_command(artifact)
+
+    report = manager.save_ninfer_config(
+        config_id="ninfer-123456abcdef",
+        label="Qwen NInfer",
+        artifact=str(artifact),
+        command=command,
+    )
+
+    config = report["ninfer"]["configs"][0]
+    assert config["id"] == "ninfer-123456abcdef"
+    assert config["label"] == "Qwen NInfer"
+    assert config["port"] == 8080
+    assert artifact.is_file()
+    payload = (tmp_path / "state" / "ninfer-configs" / "ninfer-123456abcdef.json").read_text(encoding="utf-8")
+    assert '"artifact"' in payload and '"command"' in payload
+
+    manager.delete_ninfer_config("ninfer-123456abcdef")
+
+    assert artifact.is_file()
+    assert not (tmp_path / "state" / "ninfer-configs" / "ninfer-123456abcdef.json").exists()
+
+
+def test_ninfer_start_uses_the_private_operator_tmux_socket(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "ninfer"
+    artifact = root / "models1" / "model.ninfer"
+    artifact.parent.mkdir(parents=True)
+    artifact.write_bytes(b"ninfer")
+    recorder = _Recorder()
+    manager = HostServicesManager(
+        root=tmp_path / "multimedia",
+        state_root=tmp_path / "state",
+        ninfer_root=root,
+        tmux="/usr/bin/tmux",
+        runner=recorder,
+        port_probe=lambda _port: False,
+    )
+    monkeypatch.setattr(
+        "src.diogenes_host_services.shutil.which",
+        lambda name, **_kwargs: f"/usr/bin/{name}",
+    )
+    manager.save_ninfer_config(
+        config_id="ninfer-fedcba654321",
+        artifact=str(artifact),
+        command=manager.ninfer_default_command(artifact),
+    )
+    recorder.calls.clear()
+
+    manager.start_ninfer("ninfer-fedcba654321")
+
+    expected_session = f"{NINFER_SESSION_PREFIX}fedcba654321"
+    new_session = next(call for call in recorder.calls if "new-session" in call)
+    assert new_session[:3] == ["/usr/bin/tmux", "-L", TMUX_SOCKET]
+    assert new_session[new_session.index("-s") + 1] == expected_session
+    wrapper = tmp_path / "state" / "wrappers" / "ninfer-fedcba654321.sh"
+    source = wrapper.read_text(encoding="utf-8")
+    assert f"cd -- {root}" in source
+    assert "unset VIRTUAL_ENV PYTHONHOME CONDA_PREFIX CONDA_DEFAULT_ENV UV_ACTIVE" in source
+    assert "ninfer-serve" in source and "--cors" in source
+    assert any(
+        call[:3] == ["/usr/bin/tmux", "-L", TMUX_SOCKET]
+        and call[3:6] == ["set-option", "-w", "-t"]
+        for call in recorder.calls
+    )

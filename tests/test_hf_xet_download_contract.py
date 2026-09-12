@@ -97,6 +97,10 @@ def test_generic_downloader_uses_xet_without_legacy_transfer_runtime():
     route_source = (ROOT / "routes" / "cookbook_routes.py").read_text(
         encoding="utf-8"
     )
+    generic_route_source = (
+        route_source[: route_source.index("async def _start_ninfer_artifact_download")]
+        + route_source[route_source.index("def setup_cookbook_routes"):]
+    )
     helper_source = (ROOT / "routes" / "cookbook_helpers.py").read_text(
         encoding="utf-8"
     )
@@ -114,12 +118,12 @@ def test_generic_downloader_uses_xet_without_legacy_transfer_runtime():
         )
     )
 
-    assert "huggingface_hub[hf_xet]" in route_source
-    assert "import hf_xet" in route_source
-    assert "HF_HUB_DISABLE_XET" in route_source
-    assert "HF_XET_HIGH_PERFORMANCE" in route_source
-    assert "HF_HUB_ENABLE_HF_TRANSFER" not in route_source
-    assert "import hf_transfer" not in route_source
+    assert "huggingface_hub[hf_xet]" in generic_route_source
+    assert "import hf_xet" in generic_route_source
+    assert "HF_HUB_DISABLE_XET" in generic_route_source
+    assert "HF_XET_HIGH_PERFORMANCE" in generic_route_source
+    assert "HF_HUB_ENABLE_HF_TRANSFER" not in generic_route_source
+    assert "import hf_transfer" not in generic_route_source
     assert "ps_lines.append('try {{')" not in route_source
     assert "ps_lines.append('try {')" in route_source
     assert '"name": "hf_xet"' in dependency_source
@@ -213,6 +217,63 @@ async def test_local_bash_runner_uses_fast_xet_lane(monkeypatch, tmp_path):
     assert "huggingface_hub[hf_xet]" in runner
     assert "import hf_xet" in runner
     assert "HF_HUB_ENABLE_HF_TRANSFER" not in runner
+
+
+@pytest.mark.asyncio
+async def test_ninfer_download_uses_the_isolated_transfer_environment(
+    monkeypatch,
+    tmp_path,
+):
+    ninfer_root = tmp_path / "Odysseus" / "ninfer" / "ninfer"
+    ninfer_root.mkdir(parents=True)
+    download_root = tmp_path / "temp-hf-download-venv"
+    activate = download_root / ".venv" / "bin" / "activate"
+    activate.parent.mkdir(parents=True)
+    activate.write_text("# activate\n", encoding="utf-8")
+    log_root = tmp_path / "logs"
+
+    monkeypatch.setattr(cookbook_routes, "require_admin", lambda _request: None)
+    monkeypatch.setattr(cookbook_routes, "IS_WINDOWS", False)
+    monkeypatch.setattr(cookbook_routes, "TMUX_LOG_DIR", log_root)
+    monkeypatch.setattr(cookbook_routes, "DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setattr(
+        cookbook_routes.shutil,
+        "which",
+        lambda name: f"/usr/bin/{name}",
+    )
+    monkeypatch.setattr(
+        cookbook_routes.asyncio,
+        "create_subprocess_shell",
+        _launch,
+    )
+    monkeypatch.setenv("DIOGENES_NINFER_ROOT", str(ninfer_root))
+    monkeypatch.setenv("DIOGENES_HF_TRANSFER_ROOT", str(download_root))
+
+    response = await _download_endpoint()(
+        _admin_request(),
+        ModelDownloadRequest(
+            repo_id="DreamFast/example-Ninfer",
+            hf_token="hf_test",
+            backend="ninfer",
+        ),
+    )
+
+    assert response["ok"] is True
+    assert response["ninfer_model_dir"] == str(ninfer_root / "models1")
+    runner = next(log_root.glob("cookbook-*.sh"))
+    downloader = next(log_root.glob("cookbook-*-download-ninfer.py"))
+    source = runner.read_text(encoding="utf-8")
+    download_source = downloader.read_text(encoding="utf-8")
+    assert f"source {activate}" in source
+    assert f"cd -- {download_root}" in source
+    assert f"uv run {downloader}" in source
+    assert "cp -- \"$NINFER_SOURCE\"" in source
+    assert "models1" in source
+    assert "--lm-head-draft --vision --cors" in source
+    assert 'os.environ["HF_HUB_ENABLE_HF_TRANSFER"] = "1"' in download_source
+    assert 'os.environ["TOKIO_WORKER_THREADS"] = "16"' in download_source
+    assert "local_dir_use_symlinks=False" in download_source
+    subprocess.run(["bash", "-n", str(runner)], check=True)
 
 
 @pytest.mark.asyncio

@@ -19804,6 +19804,121 @@ button.dio-persephone-row.queue.active { border-color: color-mix(in srgb, var(--
   white-space: pre-wrap;
 }
 
+.dio-ninfer-heading,
+.dio-ninfer-config-head,
+.dio-ninfer-artifacts > div {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.dio-ninfer-heading {
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.dio-ninfer-heading p {
+  margin: 0;
+  opacity: .62;
+  font-size: 8px;
+}
+
+.dio-ninfer-download {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: min(360px, 58%);
+}
+
+.dio-ninfer-download input {
+  min-width: 0;
+  width: 100%;
+  min-height: 26px;
+  padding: 4px 7px;
+  border: 1px solid color-mix(in srgb, var(--fg) 14%, transparent);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--bg) 88%, transparent);
+  color: inherit;
+  font: 8px/1.2 var(--mono, monospace);
+}
+
+.dio-ninfer-heading button,
+.dio-ninfer-artifacts button {
+  min-height: 26px;
+  flex: 0 0 auto;
+  padding: 4px 8px;
+  border: 1px solid color-mix(in srgb, var(--fg) 14%, transparent);
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font: 8px/1.2 inherit;
+  cursor: pointer;
+}
+
+.dio-ninfer-configs {
+  display: grid;
+  gap: 7px;
+}
+
+.dio-ninfer-config {
+  display: grid;
+  gap: 6px;
+  padding: 8px;
+  border: 1px solid color-mix(in srgb, var(--fg) 9%, transparent);
+  border-radius: 7px;
+}
+
+.dio-ninfer-config.active {
+  border-color: color-mix(in srgb, #4bbf83 34%, transparent);
+  background: color-mix(in srgb, #4bbf83 4%, transparent);
+}
+
+.dio-ninfer-config-head input,
+.dio-ninfer-config > input {
+  min-width: 0;
+  padding: 6px 8px;
+  border: 1px solid color-mix(in srgb, var(--fg) 14%, transparent);
+  border-radius: 6px;
+  outline: none;
+  background: var(--bg);
+  color: var(--fg);
+  font: 8px/1.25 var(--mono, monospace);
+}
+
+.dio-ninfer-config-head input {
+  flex: 1 1 auto;
+  font-family: inherit;
+  font-weight: 600;
+}
+
+.dio-ninfer-config-head > span:last-child {
+  flex: 0 0 auto;
+  opacity: .58;
+  font: 8px/1 var(--mono, monospace);
+}
+
+.dio-ninfer-config > code,
+.dio-ninfer-artifacts code {
+  min-width: 0;
+  overflow: hidden;
+  opacity: .52;
+  font-size: 7px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dio-ninfer-artifacts {
+  margin-top: 8px;
+  padding-top: 7px;
+  border-top: 1px solid color-mix(in srgb, var(--fg) 8%, transparent);
+  font-size: 8px;
+}
+
+.dio-ninfer-artifacts > div {
+  justify-content: space-between;
+  padding: 5px 0 0 14px;
+}
+
 .dio-host-shell-create {
   display: flex;
   gap: 6px;
@@ -20010,6 +20125,25 @@ button.dio-persephone-row.queue.active { border-color: color-mix(in srgb, var(--
 
 .uly-services-window.host-shell-fullscreen .dio-host-plane-note,
 .uly-services-window.host-shell-fullscreen .dio-host-tree {
+  display: none;
+}
+
+.uly-services-window.host-shell-fullscreen.ninfer-console-fullscreen .dio-ninfer-tree,
+.uly-services-window.host-shell-fullscreen.ninfer-console-fullscreen .dio-ninfer-tree > .dio-host-tree-body {
+  display: flex;
+  min-height: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+}
+
+.uly-services-window.host-shell-fullscreen.ninfer-console-fullscreen .dio-ninfer-tree {
+  margin: 0;
+}
+
+.uly-services-window.host-shell-fullscreen.ninfer-console-fullscreen .dio-ninfer-heading,
+.uly-services-window.host-shell-fullscreen.ninfer-console-fullscreen .dio-ninfer-configs,
+.uly-services-window.host-shell-fullscreen.ninfer-console-fullscreen .dio-ninfer-artifacts,
+.uly-services-window.host-shell-fullscreen.ninfer-console-fullscreen .dio-host-shell {
   display: none;
 }
 

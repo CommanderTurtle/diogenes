@@ -9,6 +9,7 @@ project environment.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 import os
 from pathlib import Path
 import re
@@ -43,8 +44,10 @@ TMUX_SOCKET = os.environ.get(
 )
 SERVICE_SESSION_PREFIX = "host-svc-"
 SHELL_SESSION_PREFIX = "host-shell-"
+NINFER_SESSION_PREFIX = "host-svc-ninfer-"
 _SAFE_SOCKET = re.compile(r"^[A-Za-z0-9_.-]{1,80}$")
 _SAFE_SHELL_ID = re.compile(r"^host-shell-[a-f0-9]{12}$")
+_SAFE_NINFER_ID = re.compile(r"^ninfer-[a-f0-9]{12}$")
 
 
 class HostServiceError(RuntimeError):
@@ -166,6 +169,7 @@ class HostServicesManager:
         *,
         root: str | Path | None = None,
         state_root: str | Path | None = None,
+        ninfer_root: str | Path | None = None,
         tmux: str | None = None,
         runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
         port_probe: Callable[[int], bool] = _port_open,
@@ -174,6 +178,13 @@ class HostServicesManager:
             raise HostServiceError("DIOGENES_OPERATOR_TMUX_SOCKET is invalid")
         self.root = Path(root or os.environ.get("DIOGENES_MM_TOOLS_ROOT", Path.home() / "multimedia")).expanduser().resolve()
         self.state_root = Path(state_root or Path(DATA_DIR) / "diogenes-operator").expanduser().resolve()
+        self.ninfer_root = Path(
+            ninfer_root
+            or os.environ.get(
+                "DIOGENES_NINFER_ROOT",
+                Path.home() / "Odysseus" / "ninfer" / "ninfer",
+            )
+        ).expanduser().resolve()
         self.tmux = tmux if tmux is not None else shutil.which("tmux")
         self.runner = runner
         self.port_probe = port_probe
@@ -286,9 +297,305 @@ class HostServicesManager:
             "supported": self.supported,
             "tmux_socket": TMUX_SOCKET,
             "root": str(self.root),
+            "ninfer": self.observe_ninfer(live=live),
+            "host_dependencies": self.observe_host_dependencies(),
             "isolation": "dedicated tmux socket; Diogenes default tmux and .venv are unchanged",
             "services": services,
         }
+
+    def observe_host_dependencies(self) -> dict:
+        home = Path.home()
+        bashrc = home / ".bashrc"
+        try:
+            bashrc_text = bashrc.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            bashrc_text = ""
+        cuda_checks = {
+            "cuda_home": bool(re.search(r"^export\s+CUDA_HOME=/usr/local/cuda\s*$", bashrc_text, re.MULTILINE)),
+            "path": bool(re.search(r'^export\s+PATH=["\']?\$CUDA_HOME/bin:', bashrc_text, re.MULTILINE)),
+            "library_path": bool(re.search(r'^export\s+LD_LIBRARY_PATH=["\']?\$CUDA_HOME/lib64:', bashrc_text, re.MULTILINE)),
+        }
+        llama_root = Path(
+            os.environ.get("DIOGENES_LLAMA_CPP_ROOT", home / "llama.cpp")
+        ).expanduser().resolve()
+        llama_binaries = [
+            home / "bin" / "llama-server",
+            llama_root / "build" / "bin" / "llama-server",
+            llama_root / "build" / "bin" / "llama-server.exe",
+        ]
+        llama_binary = next((path for path in llama_binaries if path.is_file()), None)
+        transfer_root = Path(
+            os.environ.get("DIOGENES_HF_TRANSFER_ROOT", home / "temp-hf-download-venv")
+        ).expanduser().resolve()
+        return {
+            "cuda": {
+                "bashrc": str(bashrc),
+                "ready": all(cuda_checks.values()),
+                "checks": cuda_checks,
+            },
+            "llama_cpp": {
+                "root": str(llama_root),
+                "source_ready": (llama_root / "CMakeLists.txt").is_file(),
+                "binary": str(llama_binary) if llama_binary else "",
+                "built": llama_binary is not None,
+                "isolated": True,
+            },
+            "ninfer": {
+                "root": str(self.ninfer_root),
+                "source_ready": (self.ninfer_root / "Dockerfile").is_file(),
+                "download_environment": str(transfer_root),
+                "download_ready": (transfer_root / ".venv" / "bin" / "activate").is_file(),
+            },
+        }
+
+    @staticmethod
+    def _ninfer_port(command: str) -> int:
+        publish = re.search(
+            r"(?:^|\s)--publish(?:=|\s+)(?:[^\s:]+:)?(?P<port>\d{1,5}):\d{1,5}(?:\s|$)",
+            command,
+        )
+        if publish:
+            value = int(publish.group("port"))
+            if 1 <= value <= 65535:
+                return value
+        return 8080
+
+    def _ninfer_config_dir(self) -> Path:
+        path = self.state_root / "ninfer-configs"
+        path.mkdir(parents=True, exist_ok=True, mode=0o700)
+        return path
+
+    def _ninfer_session_name(self, config_id: str) -> str:
+        if not _SAFE_NINFER_ID.fullmatch(config_id):
+            raise HostServiceError("invalid NInfer configuration id")
+        return f"{NINFER_SESSION_PREFIX}{config_id.removeprefix('ninfer-')}"
+
+    def _ninfer_artifact(self, value: str) -> Path:
+        artifact = Path(value).expanduser().resolve()
+        try:
+            artifact.relative_to(self.ninfer_root)
+        except ValueError as exc:
+            raise HostServiceError("NInfer artifacts must remain under the NInfer checkout") from exc
+        if artifact.suffix.lower() != ".ninfer" or not artifact.is_file():
+            raise HostServiceError("NInfer artifact does not exist or is not a .ninfer file")
+        return artifact
+
+    def ninfer_default_command(self, artifact: str | Path, *, port: int = 8080) -> str:
+        path = self._ninfer_artifact(str(artifact))
+        relative = path.relative_to(self.ninfer_root)
+        if len(relative.parts) != 2 or not re.fullmatch(r"models\d*", relative.parts[0]):
+            raise HostServiceError("NInfer artifacts must be inside a models, models1, models2, ... directory")
+        model_dir, filename = relative.parts
+        return (
+            "docker run --rm --gpus '\"device=0\"' "
+            f"--publish 0.0.0.0:{int(port)}:8080 "
+            f"--volume \"$PWD/{model_dir}:/{model_dir}:ro\" "
+            f"ninfer:local ninfer-serve /{model_dir}/{shlex.quote(filename)} "
+            "--host 0.0.0.0 --max-context 200000 --kv-capacity auto "
+            "--kv-dtype int8 --max-concurrency 4 --spec mtp --draft-tokens 3 "
+            "--lm-head-draft --vision --cors"
+        )
+
+    def _read_ninfer_configs(self) -> list[dict]:
+        configs: list[dict] = []
+        for path in sorted(self._ninfer_config_dir().glob("ninfer-*.json")):
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+                config_id = str(payload.get("id") or path.stem)
+                if not _SAFE_NINFER_ID.fullmatch(config_id):
+                    continue
+                artifact = self._ninfer_artifact(str(payload.get("artifact") or ""))
+                command = str(payload.get("command") or "")
+                if not command or len(command) > 8192 or any(value in command for value in ("\n", "\r", "\0")):
+                    continue
+                label = " ".join(str(payload.get("label") or artifact.stem).split())[:100]
+                configs.append(
+                    {
+                        "id": config_id,
+                        "label": label or artifact.stem,
+                        "artifact": str(artifact),
+                        "command": command,
+                    }
+                )
+            except (OSError, TypeError, ValueError, json.JSONDecodeError, HostServiceError):
+                continue
+        return configs
+
+    def _write_ninfer_config(self, payload: dict) -> None:
+        target = self._ninfer_config_dir() / f"{payload['id']}.json"
+        temporary = target.with_suffix(".json.tmp")
+        temporary.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+        temporary.chmod(0o600)
+        temporary.replace(target)
+
+    def save_ninfer_config(
+        self,
+        *,
+        config_id: str = "",
+        label: str = "",
+        artifact: str,
+        command: str,
+    ) -> dict:
+        clean_id = config_id or f"ninfer-{uuid.uuid4().hex[:12]}"
+        if not _SAFE_NINFER_ID.fullmatch(clean_id):
+            raise HostServiceError("invalid NInfer configuration id")
+        clean_artifact = self._ninfer_artifact(artifact)
+        clean_command = str(command or "").strip()
+        if not clean_command or len(clean_command) > 8192 or any(value in clean_command for value in ("\n", "\r", "\0")):
+            raise HostServiceError("NInfer command must be one non-empty line")
+        if "ninfer-serve" not in clean_command:
+            raise HostServiceError("NInfer command must invoke ninfer-serve")
+        clean_label = " ".join((label or clean_artifact.stem).split())[:100]
+        self._write_ninfer_config(
+            {
+                "id": clean_id,
+                "label": clean_label or clean_artifact.stem,
+                "artifact": str(clean_artifact),
+                "command": clean_command,
+            }
+        )
+        return self.observe()
+
+    def delete_ninfer_config(self, config_id: str) -> dict:
+        session = self._ninfer_session_name(config_id)
+        if session in self._live_sessions():
+            raise HostServiceError("stop the NInfer service before deleting its configuration")
+        try:
+            (self._ninfer_config_dir() / f"{config_id}.json").unlink()
+        except FileNotFoundError:
+            raise HostServiceError("unknown NInfer configuration") from None
+        return self.observe()
+
+    def _ninfer_status(self, config: dict, live: set[str]) -> dict:
+        session = self._ninfer_session_name(config["id"])
+        port = self._ninfer_port(config["command"])
+        managed = session in live
+        reachable = self.port_probe(port)
+        return {
+            **config,
+            "port": port,
+            "session": session,
+            "managed": managed,
+            "reachable": reachable,
+            "active": managed or reachable,
+            "state": "running" if managed and reachable else "starting" if managed else "external" if reachable else "stopped",
+        }
+
+    def _ninfer_artifacts(self) -> list[Path]:
+        if not self.ninfer_root.is_dir():
+            return []
+        result: list[Path] = []
+        for directory in sorted(self.ninfer_root.glob("models*")):
+            if not directory.is_dir() or not re.fullmatch(r"models\d*", directory.name):
+                continue
+            result.extend(sorted(path.resolve() for path in directory.glob("*.ninfer") if path.is_file()))
+        return result
+
+    def observe_ninfer(self, *, live: set[str] | None = None) -> dict:
+        live = self._live_sessions() if live is None else live
+        configs = [self._ninfer_status(config, live) for config in self._read_ninfer_configs()]
+        configured = {item["artifact"] for item in configs}
+        artifacts = [
+            {
+                "artifact": str(path),
+                "label": path.stem,
+                "command": self.ninfer_default_command(path),
+            }
+            for path in self._ninfer_artifacts()
+            if str(path) not in configured
+        ]
+        return {
+            "root": str(self.ninfer_root),
+            "supported": self.supported and self.ninfer_root.is_dir() and bool(shutil.which("docker", path=self.host_path)),
+            "configs": configs,
+            "artifacts": artifacts,
+        }
+
+    def _ninfer_config(self, config_id: str) -> dict:
+        try:
+            return next(item for item in self._read_ninfer_configs() if item["id"] == config_id)
+        except StopIteration as exc:
+            raise HostServiceError("unknown NInfer configuration") from exc
+
+    def _ninfer_wrapper(self, config: dict) -> tuple[Path, Path]:
+        wrappers, logs = self._ensure_state_dirs()
+        wrapper = wrappers / f"{config['id']}.sh"
+        log = logs / f"{config['id']}.log"
+        self._write_executable(
+            wrapper,
+            "\n".join(
+                [
+                    "#!/usr/bin/env bash",
+                    "set -uo pipefail",
+                    "unset VIRTUAL_ENV PYTHONHOME CONDA_PREFIX CONDA_DEFAULT_ENV UV_ACTIVE",
+                    f"export PATH={shlex.quote(self.host_path)}",
+                    f"cd -- {shlex.quote(str(self.ninfer_root))}",
+                    f"printf '\\n[%s] starting {config['id']}\\n' \"$(date --iso-8601=seconds)\" >> {shlex.quote(str(log))}",
+                    f"bash -lc {shlex.quote(config['command'])} 2>&1 | tee -a {shlex.quote(str(log))}",
+                    "status=${PIPESTATUS[0]}",
+                    f"printf '[%s] exited status=%s\\n' \"$(date --iso-8601=seconds)\" \"$status\" >> {shlex.quote(str(log))}",
+                    "exit \"$status\"",
+                    "",
+                ]
+            ),
+        )
+        return wrapper, log
+
+    def start_ninfer(self, config_id: str) -> dict:
+        config = self._ninfer_config(config_id)
+        status = self._ninfer_status(config, self._live_sessions())
+        if status["managed"]:
+            return self.observe()
+        if status["reachable"]:
+            raise HostServiceError(f"port {status['port']} is already served outside the operator tmux socket")
+        if not shutil.which("docker", path=self.host_path):
+            raise HostServiceError("docker is not available on the host PATH")
+        wrapper, _log = self._ninfer_wrapper(config)
+        session = self._ninfer_session_name(config_id)
+        started = self._tmux(
+            "new-session", "-d", "-s", session, "-x", "160", "-y", "48",
+            "-c", str(self.ninfer_root), str(wrapper), timeout=10,
+        )
+        if started.returncode != 0:
+            raise HostServiceError(started.stderr.strip() or "tmux rejected the NInfer launcher")
+        for key, value in (
+            ("@diogenes_operator", "1"),
+            ("@diogenes_operator_type", "service"),
+            ("@diogenes_identity", config_id),
+        ):
+            self._tmux("set-option", "-t", session, key, value)
+        self._tmux("set-option", "-w", "-t", session, "history-limit", "100000")
+        return self.observe()
+
+    def stop_ninfer(self, config_id: str) -> dict:
+        self._ninfer_config(config_id)
+        session = self._ninfer_session_name(config_id)
+        if session in self._live_sessions():
+            self._tmux("send-keys", "-t", session, "C-c")
+            for _ in range(20):
+                if session not in self._live_sessions():
+                    break
+                time.sleep(0.1)
+            if session in self._live_sessions():
+                self._tmux("kill-session", "-t", session)
+        return self.observe()
+
+    def act_ninfer(self, config_id: str, action: str) -> dict:
+        if action == "start":
+            return self.start_ninfer(config_id)
+        if action == "stop":
+            return self.stop_ninfer(config_id)
+        if action == "restart":
+            self.stop_ninfer(config_id)
+            return self.start_ninfer(config_id)
+        raise HostServiceError("action must be start, stop, or restart")
+
+    def attach_ninfer(self, config_id: str, *, cols: int, rows: int) -> "TerminalAttachment":
+        self._ninfer_config(config_id)
+        session = self._ninfer_session_name(config_id)
+        if session not in self._live_sessions():
+            raise HostServiceError("NInfer service is not running")
+        return self._attach_session(session, cols=cols, rows=rows)
 
     def _ensure_state_dirs(self) -> tuple[Path, Path]:
         wrappers = self.state_root / "wrappers"
@@ -528,6 +835,9 @@ class HostServicesManager:
     def attach_shell(self, shell_id: str, *, cols: int, rows: int) -> "TerminalAttachment":
         if not _SAFE_SHELL_ID.fullmatch(shell_id) or shell_id not in self._live_sessions():
             raise HostServiceError("operator shell is not running")
+        return self._attach_session(shell_id, cols=cols, rows=rows)
+
+    def _attach_session(self, shell_id: str, *, cols: int, rows: int) -> "TerminalAttachment":
         return TerminalAttachment(
             tmux=str(self.tmux),
             socket_name=TMUX_SOCKET,

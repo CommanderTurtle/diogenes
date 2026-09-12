@@ -2853,6 +2853,7 @@ function _wireTabEvents(body) {
   // Download input
   const dlBtn = document.getElementById('cookbook-dl-btn');
   const dlInput = document.getElementById('cookbook-dl-repo');
+  const dlKind = document.getElementById('cookbook-dl-kind');
   const dlGgufRow = document.getElementById('cookbook-dl-gguf-row');
   const dlGgufQuant = document.getElementById('cookbook-dl-gguf-quant');
   const dlGgufNote = document.getElementById('cookbook-dl-gguf-note');
@@ -2919,6 +2920,10 @@ function _wireTabEvents(body) {
     }
     async function _scanGgufRepo(rawValue) {
       if (!dlGgufRow || !dlGgufQuant || !dlGgufNote) return false;
+      if (dlKind?.value === 'ninfer') {
+        _hideGgufPicker();
+        return false;
+      }
       const rawRepo = _stripHfUrl(rawValue || '');
       const ollamaName = _ollamaName(rawRepo);
       const fileSplit = !ollamaName ? _splitRepoFile(rawRepo) : null;
@@ -2989,7 +2994,7 @@ function _wireTabEvents(body) {
       const parts = raw.split('/');
       if (parts.length < 3) return null;
       const fname = parts[parts.length - 1];
-      if (!/\.(gguf|safetensors|bin|pt|pth|onnx|mlx)(\?[^?]*)?$/i.test(fname)) return null;
+      if (!/\.(gguf|safetensors|bin|pt|pth|onnx|mlx|ninfer)(\?[^?]*)?$/i.test(fname)) return null;
       const repo = parts.slice(0, 2).join('/');
       return { repo, include: fname.replace(/\?.*$/, '') };
     }
@@ -3007,6 +3012,7 @@ function _wireTabEvents(body) {
     const triggerDownload = async () => {
       const rawRepo = _stripHfUrl(dlInput.value);
       if (!rawRepo) return;
+      const ninferDownload = dlKind?.value === 'ninfer';
       const ollamaName = _ollamaName(rawRepo);
       // Prefer the deep-file split (org/repo/file.gguf → repo + exact
       // include) over the tag split (org/repo:tag → glob include), and
@@ -3028,7 +3034,7 @@ function _wireTabEvents(body) {
         dlInput.focus();
         return;
       }
-      const looksGgufRepo = !ollamaName && !_fileSplit && !autoInclude && /\bgguf\b/i.test(repo);
+      const looksGgufRepo = !ninferDownload && !ollamaName && !_fileSplit && !autoInclude && /\bgguf\b/i.test(repo);
       if (looksGgufRepo && !pickerInclude) {
         const oldText = dlBtn.textContent;
         dlBtn.disabled = true;
@@ -3059,11 +3065,16 @@ function _wireTabEvents(body) {
         host = _serverByVal(srvVal)?.host || '';
       }
       const _hsrv = _envState.servers.find(sv => sv.host === host) || {};
+      if (ninferDownload && host) {
+        uiModule.showToast('NInfer artifact downloads use the local workstation checkout.');
+        return;
+      }
       let env = host ? (_hsrv.env || 'none') : _envState.env;
       let envPath = host ? (_hsrv.envPath || '') : _envState.envPath;
       const payload = { repo_id: repo };
-      if (ollamaName) payload.backend = 'ollama';
-      if (autoInclude || pickerInclude) payload.include = autoInclude || pickerInclude;
+      if (ninferDownload) payload.backend = 'ninfer';
+      else if (ollamaName) payload.backend = 'ollama';
+      if (!ninferDownload && (autoInclude || pickerInclude)) payload.include = autoInclude || pickerInclude;
       if (_envState.hfToken && !ollamaName) payload.hf_token = _envState.hfToken;
       if (host) { payload.remote_host = host; const _sp3 = _getPort(host); if (_sp3) payload.ssh_port = _sp3; }
       const srvPlatform = _getPlatform(host);
@@ -3083,7 +3094,9 @@ function _wireTabEvents(body) {
         }
       }
       const shortName = repo.split('/').pop();
-      const displayName = payload.include
+      const displayName = ninferDownload
+        ? `${shortName} · NInfer`
+        : payload.include
         ? `${shortName} · ${_ggufQuantFromPath(String(payload.include).replace(/\*/g, '')) || String(payload.include).replace(/\*/g, '').replace(/\.gguf$/i, '')}`
         : shortName;
       _retryDownload(displayName, payload);
@@ -3100,6 +3113,12 @@ function _wireTabEvents(body) {
     };
     dlInput.addEventListener('input', _scheduleGgufScan);
     dlInput.addEventListener('blur', () => _scanGgufRepo(dlInput.value));
+    dlKind?.addEventListener('change', () => {
+      dlInput.placeholder = dlKind.value === 'ninfer'
+        ? 'org/model-name or NInfer HuggingFace URL'
+        : 'org/model-name, qwen2.5:14b, or HF URL';
+      _hideGgufPicker();
+    });
     dlGgufQuant?.addEventListener('change', () => {
       if (dlGgufNote) dlGgufNote.textContent = dlGgufQuant.value || '';
     });
@@ -3584,6 +3603,7 @@ function _renderRecipes() {
   } else {
     html += `<input type="hidden" id="hwfit-dl-server" value="local" />`;
   }
+  html += '<select class="cookbook-field-input" id="cookbook-dl-kind" title="Download format" style="height:28px;flex-shrink:0;"><option value="hf">Model</option><option value="ninfer">NInfer</option></select>';
   html += `<input type="text" class="cookbook-dl-repo" id="cookbook-dl-repo" placeholder="org/model-name, qwen2.5:14b, or HF URL" style="flex:1;min-width:0;" />`;
   html += `<button class="cookbook-btn cookbook-dl-btn" id="cookbook-dl-btn">Download</button>`;
   html += `</div>`;
@@ -3881,6 +3901,19 @@ export async function open(opts) {
     if (opts.serveSearch) {
       const s = document.getElementById('serve-search');
       if (s) { s.value = opts.serveSearch; s.dispatchEvent(new Event('input', { bubbles: true })); }
+    }
+    if (opts.downloadBackend) {
+      const kind = document.getElementById('cookbook-dl-kind');
+      if (kind) {
+        kind.value = opts.downloadBackend;
+        kind.dispatchEvent(new Event('change', { bubbles: true }));
+      }
+      const repo = document.getElementById('cookbook-dl-repo');
+      if (repo && opts.downloadRepo) {
+        repo.value = opts.downloadRepo;
+        repo.dispatchEvent(new Event('input', { bubbles: true }));
+      }
+      repo?.focus();
     }
   };
   // If minimized, restore in place — preserve all state

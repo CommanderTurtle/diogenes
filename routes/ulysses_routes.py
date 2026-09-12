@@ -236,6 +236,12 @@ class HostServiceActionRequest(BaseModel):
     action: str
 
 
+class NInferConfigWriteRequest(BaseModel):
+    label: str = ""
+    artifact: str
+    command: str
+
+
 class HostShellCreateRequest(BaseModel):
     title: str = ""
     cwd: str = ""
@@ -1282,6 +1288,67 @@ def setup_ulysses_routes(
         except HostServiceError as exc:
             raise HTTPException(404, str(exc)) from exc
 
+    @router.post("/host-services/ninfer/configs")
+    async def create_ninfer_config(
+        request: Request,
+        body: NInferConfigWriteRequest,
+    ) -> dict:
+        _require_operator_admin(request)
+        try:
+            return await run_in_threadpool(
+                host_services_manager_factory().save_ninfer_config,
+                label=body.label,
+                artifact=body.artifact,
+                command=body.command,
+            )
+        except HostServiceError as exc:
+            raise HTTPException(400, str(exc)) from exc
+
+    @router.put("/host-services/ninfer/configs/{config_id}")
+    async def update_ninfer_config(
+        request: Request,
+        config_id: str,
+        body: NInferConfigWriteRequest,
+    ) -> dict:
+        _require_operator_admin(request)
+        try:
+            return await run_in_threadpool(
+                host_services_manager_factory().save_ninfer_config,
+                config_id=config_id,
+                label=body.label,
+                artifact=body.artifact,
+                command=body.command,
+            )
+        except HostServiceError as exc:
+            raise HTTPException(400, str(exc)) from exc
+
+    @router.delete("/host-services/ninfer/configs/{config_id}")
+    async def delete_ninfer_config(request: Request, config_id: str) -> dict:
+        _require_operator_admin(request)
+        try:
+            return await run_in_threadpool(
+                host_services_manager_factory().delete_ninfer_config,
+                config_id,
+            )
+        except HostServiceError as exc:
+            raise HTTPException(400, str(exc)) from exc
+
+    @router.post("/host-services/ninfer/configs/{config_id}/{action}")
+    async def control_ninfer_config(
+        request: Request,
+        config_id: str,
+        action: str,
+    ) -> dict:
+        _require_operator_admin(request)
+        try:
+            return await run_in_threadpool(
+                host_services_manager_factory().act_ninfer,
+                config_id,
+                action,
+            )
+        except HostServiceError as exc:
+            raise HTTPException(400, str(exc)) from exc
+
     @router.get("/host-shell/sessions")
     async def get_host_shells(request: Request) -> dict:
         _require_operator_admin(request)
@@ -1338,23 +1405,7 @@ def setup_ulysses_routes(
         await websocket.close(code=4403, reason="Admin only")
         return False
 
-    @router.websocket("/host-shell/sessions/{shell_id}/ws")
-    async def attach_host_shell(websocket: WebSocket, shell_id: str) -> None:
-        if not await _authorize_host_shell(websocket):
-            return
-        try:
-            cols = max(20, min(int(websocket.query_params.get("cols", "100")), 400))
-            rows = max(8, min(int(websocket.query_params.get("rows", "30")), 200))
-            attachment = await run_in_threadpool(
-                host_services_manager_factory().attach_shell,
-                shell_id,
-                cols=cols,
-                rows=rows,
-            )
-        except (HostServiceError, TypeError, ValueError):
-            await websocket.close(code=4404, reason="Operator shell unavailable")
-            return
-
+    async def _bridge_host_terminal(websocket: WebSocket, attachment) -> None:
         await websocket.accept()
         loop = asyncio.get_running_loop()
         output: asyncio.Queue[bytes | None] = asyncio.Queue()
@@ -1412,5 +1463,41 @@ def setup_ulysses_routes(
             attachment.close()
             with suppress(RuntimeError):
                 await websocket.close()
+
+    @router.websocket("/host-shell/sessions/{shell_id}/ws")
+    async def attach_host_shell(websocket: WebSocket, shell_id: str) -> None:
+        if not await _authorize_host_shell(websocket):
+            return
+        try:
+            cols = max(20, min(int(websocket.query_params.get("cols", "100")), 400))
+            rows = max(8, min(int(websocket.query_params.get("rows", "30")), 200))
+            attachment = await run_in_threadpool(
+                host_services_manager_factory().attach_shell,
+                shell_id,
+                cols=cols,
+                rows=rows,
+            )
+        except (HostServiceError, TypeError, ValueError):
+            await websocket.close(code=4404, reason="Operator shell unavailable")
+            return
+        await _bridge_host_terminal(websocket, attachment)
+
+    @router.websocket("/host-services/ninfer/configs/{config_id}/ws")
+    async def attach_ninfer_service(websocket: WebSocket, config_id: str) -> None:
+        if not await _authorize_host_shell(websocket):
+            return
+        try:
+            cols = max(20, min(int(websocket.query_params.get("cols", "120")), 400))
+            rows = max(8, min(int(websocket.query_params.get("rows", "36")), 200))
+            attachment = await run_in_threadpool(
+                host_services_manager_factory().attach_ninfer,
+                config_id,
+                cols=cols,
+                rows=rows,
+            )
+        except (HostServiceError, TypeError, ValueError):
+            await websocket.close(code=4404, reason="NInfer service unavailable")
+            return
+        await _bridge_host_terminal(websocket, attachment)
 
     return router

@@ -147,7 +147,12 @@ const _RECIPES = [
     label: 'Any GGUF model',
     match: () => true,
     variants: {
-      pip:    { commands: ['CMAKE_ARGS="-DGGML_CUDA=on" uv pip install -U "llama-cpp-python[server]"'] },
+      pip:    { commands: [
+        'if [ -d "$HOME/llama.cpp/.git" ]; then git -C "$HOME/llama.cpp" pull --ff-only; else git clone https://github.com/ggml-org/llama.cpp "$HOME/llama.cpp"; fi',
+        'cmake -S "$HOME/llama.cpp" -B "$HOME/llama.cpp/build" -DGGML_CUDA=ON -DCMAKE_BUILD_TYPE=Release',
+        'cmake --build "$HOME/llama.cpp/build" --config Release -j1',
+        'mkdir -p "$HOME/bin" && cp "$HOME/llama.cpp/build/bin/llama-server" "$HOME/bin/llama-server"',
+      ] },
       docker: { commands: ['docker pull ghcr.io/ggml-org/llama.cpp:server-cuda'] },
     },
   },
