@@ -295,9 +295,17 @@ def test_json_document_redacts_provider_keys_and_validates_before_save(
         )
 
 
+@pytest.mark.parametrize(
+    "launch",
+    (
+        ["bash", "start.sh"],
+        ["env", "BROWSER_IDLE_TIMEOUT_MS=0", "bash", "start.sh"],
+    ),
+)
 def test_javascript_start_plan_requires_sandwich_and_uses_fixed_tmux(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    launch: list[str],
 ) -> None:
     runtime = tmp_path / "browser"
     runtime.mkdir()
@@ -307,7 +315,7 @@ def test_javascript_start_plan_requires_sandwich_and_uses_fixed_tmux(
         "category": "javascript",
         "root": runtime,
         "documents": (),
-        "launch": ["bash", "start.sh"],
+        "launch": launch,
         "tmux_session": "ulysses-example-browser",
         "ports": [],
     }
@@ -334,7 +342,23 @@ def test_javascript_start_plan_requires_sandwich_and_uses_fixed_tmux(
         "-c",
         str(runtime),
     ]
-    assert plan["steps"][0]["argv"][-2:] == ["bash", "start.sh"]
+    assert plan["steps"][0]["argv"][-len(launch) :] == launch
+
+
+def test_javascript_start_plan_rejects_env_options_before_fixed_wrapper(
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(
+        manager.RuntimeJobError,
+        match="must launch the project-local start.sh",
+    ):
+        manager._managed_tmux_start_steps(
+            {"id": "example.browser", "ports": []},
+            session="ulysses-example-browser",
+            root=tmp_path,
+            launch=["env", "--ignore-environment", "bash", "start.sh"],
+            label="Start managed tmux runtime",
+        )
 
 
 def test_open_and_initialize_actions_use_project_root(

@@ -1030,7 +1030,18 @@ def _managed_tmux_start_steps(
     launch: list[str],
     label: str,
 ) -> list[dict[str, Any]]:
-    if launch != ["bash", "start.sh"]:
+    direct_start = launch == ["bash", "start.sh"]
+    env_start = (
+        len(launch) >= 4
+        and launch[0] == "env"
+        and launch[-2:] == ["bash", "start.sh"]
+        and all(
+            "=" in assignment
+            and KEY_RE.fullmatch(assignment.split("=", 1)[0]) is not None
+            for assignment in launch[1:-2]
+        )
+    )
+    if not (direct_start or env_start):
         raise RuntimeJobError(
             "interactive runtimes must launch the project-local start.sh"
         )
