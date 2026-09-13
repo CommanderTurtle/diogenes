@@ -406,6 +406,82 @@ II. Files changed — commit diff: [`fa510e5`](https://github.com/CommanderTurtl
 
 </details>
 
+<details><summary>18. Repository-owned integration and fork maintenance</summary>
+
+I. Replaced duplicated harness-configuration code with calls to the update, integration, and audit scripts maintained by each installed project. Persephone now maintains the OMP settings pass, while Diogenes records source remotes, branch relationships, and completed integration receipts without pushing owner repositories.
+
+II. Files changed — commit diffs, oldest first: [`f6c87a1`](https://github.com/CommanderTurtle/diogenes/commit/f6c87a1), [`48ec1f2`](https://github.com/CommanderTurtle/diogenes/commit/48ec1f2), [`210c635`](https://github.com/CommanderTurtle/diogenes/commit/210c635), [`156d53f`](https://github.com/CommanderTurtle/diogenes/commit/156d53f).
+
+- [`config/ulysses/hermes-stack.json`](config/ulysses/hermes-stack.json) and [`config/ulysses/runtime-management.json`](config/ulysses/runtime-management.json) — declare owner entrypoints, source/fork remotes, branches, and runtime relationships.
+- [`src/diogenes_dependency_action.py`](src/diogenes_dependency_action.py), [`src/diogenes_dependency_integration.py`](src/diogenes_dependency_integration.py), and [`src/ulysses_hermes_stack.py`](src/ulysses_hermes_stack.py) — invoke repository-owned scripts and retain their results instead of reproducing their configuration logic.
+- [`src/diogenes_git_sync.py`](src/diogenes_git_sync.py) and [`src/ulysses_runtime_management.py`](src/ulysses_runtime_management.py) — inspect named source remotes and prepare bounded update plans while leaving publication to the owner repository.
+- [`ompsettings.sh`](ompsettings.sh) — preserves the historical command as a small launcher for Persephone's OMP reconciliation.
+- The dependency, Git-sync, Hermes-stack, and runtime-management tests under [`tests/`](tests/) — cover delegation, fork relationships, and owner-script selection.
+
+---
+
+</details>
+
+<details><summary>19. Librarian, Persephone, Retrieval, and RoboOMP workspaces</summary>
+
+I. Added authenticated operator workspaces for the integrated knowledge, gateway, skill-retrieval, and Git services. Librarian exposes its graph, concepts, traces, proposals, imports, exports, and isolated chat; Persephone exposes routes, queues, schedules, settings, logs, lifecycle controls, and integration inventory; RoboOMP exposes repositories, issues, worktrees, reviews, tool history, an issue-scoped assistant, and GitCito-derived diff navigation.
+
+II. Files changed — commit diffs, oldest first: [`4b2d259`](https://github.com/CommanderTurtle/diogenes/commit/4b2d259), [`d02fa59`](https://github.com/CommanderTurtle/diogenes/commit/d02fa59), [`89d4ac4`](https://github.com/CommanderTurtle/diogenes/commit/89d4ac4), [`913d637`](https://github.com/CommanderTurtle/diogenes/commit/913d637), [`09ead0a`](https://github.com/CommanderTurtle/diogenes/commit/09ead0a), [`0bbece3`](https://github.com/CommanderTurtle/diogenes/commit/0bbece3).
+
+- [`src/diogenes_librarian_workspace.py`](src/diogenes_librarian_workspace.py), [`src/diogenes_persephone_workspace.py`](src/diogenes_persephone_workspace.py), and [`src/diogenes_roboomp_workspace.py`](src/diogenes_roboomp_workspace.py) — validate each owner protocol and confine browser requests to allowlisted reads and confirmation-gated operations.
+- [`src/diogenes_skill_auditor.py`](src/diogenes_skill_auditor.py) — backs the Skills Auditor with Retrieval's catalog, details, projections, and owner actions.
+- [`routes/ulysses_routes.py`](routes/ulysses_routes.py) — provides the authenticated HTTP and job-planning routes for all four workspaces.
+- [`static/js/librarianWorkspace.js`](static/js/librarianWorkspace.js), [`static/js/persephoneWorkspace.js`](static/js/persephoneWorkspace.js), [`static/js/roboompWorkspace.js`](static/js/roboompWorkspace.js), and [`static/js/ulyssesServices.js`](static/js/ulyssesServices.js) — implement the browser workspaces, repository assistant, file/diff navigation, and Retrieval catalog.
+- [`static/index.html`](static/index.html), [`static/style.css`](static/style.css), and the matching workspace, route, and UI tests — register, style, and verify the added surfaces.
+
+---
+
+</details>
+
+<details><summary>20. Zensical documentation source</summary>
+
+I. Added the source for the Diogenes documentation site under `website-zensical`, including its F#-wrapped Markdown pages, generated navigation, Three.js landing page, responsive theme, logos, media, and developer reference sections.
+
+II. Files changed — commit diff: [`f0f6cb7`](https://github.com/CommanderTurtle/diogenes/commit/f0f6cb7).
+
+- [`website-zensical/zensical.fs`](website-zensical/zensical.fs) and [`website-zensical/sharppy-sync_nav.fs`](website-zensical/sharppy-sync_nav.fs) — define the Zensical project and rebuild its navigation from the page tree.
+- [`website-zensical/docs/`](website-zensical/docs/) — contains the getting-started, configuration, architecture, research, operations, extension, guide, reference, and project pages.
+- [`website-zensical/overrides/sharphtml-main.fs`](website-zensical/overrides/sharphtml-main.fs) — supplies the site template override.
+- [`website-zensical/docs/assets/`](website-zensical/docs/assets/) — keeps the Three.js behavior, styling, logos, and locally served feature media with the documentation source.
+
+---
+
+</details>
+
+<details><summary>21. Durable NInfer artifact and service management</summary>
+
+I. Added NInfer as an isolated Docker-backed model service. Existing `.ninfer` artifacts receive editable one-line launch configurations, start/stop/restart controls, live tmux consoles, and browser-ready CORS defaults; Cookbook can download an artifact through the dedicated Hugging Face transfer environment, copy it into the next `modelsN` directory, and register its configuration.
+
+II. Files changed — commit diff: [`54778d9`](https://github.com/CommanderTurtle/diogenes/commit/54778d9).
+
+- [`src/diogenes_host_services.py`](src/diogenes_host_services.py) — discovers NInfer artifacts, stores configurations outside the checkout, validates Docker commands, manages them on the private operator tmux socket, and reports CUDA and llama.cpp host readiness.
+- [`routes/ulysses_routes.py`](routes/ulysses_routes.py) — exposes admin-gated configuration, lifecycle, and terminal-WebSocket routes.
+- [`routes/cookbook_routes.py`](routes/cookbook_routes.py) — creates the temporary `hf_transfer` downloader, copies the resulting artifact, records its launch configuration, and retains the download console.
+- [`static/js/ulyssesServices.js`](static/js/ulyssesServices.js), [`static/js/cookbook.js`](static/js/cookbook.js), [`static/js/cookbook-deps-recipes.js`](static/js/cookbook-deps-recipes.js), and [`static/style.css`](static/style.css) — add artifact download, configuration, status, lifecycle, and console controls without changing the existing venv/shell mode.
+- [`tests/test_diogenes_host_services.py`](tests/test_diogenes_host_services.py) and [`tests/test_hf_xet_download_contract.py`](tests/test_hf_xet_download_contract.py) — verify isolation, one-line commands, durable configurations, CORS, transfer-environment use, and artifact placement.
+
+---
+
+</details>
+
+<details><summary>22. Camofox managed-launch compatibility</summary>
+
+I. Corrected the Camofox start-plan validation so its configured `BROWSER_IDLE_TIMEOUT_MS=0` environment assignment can precede the required project-local `start.sh`. Direct wrapper launches continue to work, while environment options and commands that bypass the wrapper remain rejected.
+
+II. Files changed — commit diff: [`c31c0da`](https://github.com/CommanderTurtle/diogenes/commit/c31c0da).
+
+- [`src/ulysses_runtime_management.py`](src/ulysses_runtime_management.py) — validates either `bash start.sh` or strictly formed `env NAME=value ... bash start.sh` launch arrays.
+- [`tests/test_ulysses_runtime_management.py`](tests/test_ulysses_runtime_management.py) — covers direct and environment-prefixed wrapper launches plus rejection of unsupported `env` options.
+
+---
+
+</details>
+
 ## Demo
 
 Diogenes integrates a Three-JS implementation of Zensical (Mkdocs) documentation. Expanding from a developer-oriented point of view at the [Diogenes landing page](https://dio.shel.sh/). Its source lives in the wrapping framework under [`orc/tree/main/dio`](https://github.com/CommanderTurtle/orc/tree/main/dio)
