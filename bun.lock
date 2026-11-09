@@ -5,10 +5,20 @@
     "": {
       "devDependencies": {
         "@antithesishq/bombadil": "^0.7.0",
+        "@playwright/test": "^1.62.1",
+        "acorn": "8.19.0",
       },
     },
   },
   "packages": {
     "@antithesishq/bombadil": ["@antithesishq/bombadil@0.7.0", "", { "bin": { "bombadil": "bin/bombadil.js" } }, "sha512-alJmnphJ/iUoL5mCsnV3DwtajGy/sEQ3NJJCiMhgjqXshSq2BUtAs0vqdXEiiSkB8HbsOX5CLrAcaogYdwfAJg=="],
+
+    "@playwright/test": ["@playwright/test@1.65.0", "", { "dependencies": { "playwright": "1.65.0" }, "bin": { "playwright": "cli.js" } }, "sha512-iGURLGuKDLakSEl7Pgfv8h7f+XLT+V861Wfhz0zlEl5nyFuKUopdkFBPKqTllTUp06aOwPuH8iuUEb3yp3MpbQ=="],
+
+    "acorn": ["acorn@8.19.0", "", { "bin": { "acorn": "bin/acorn" } }, "sha512-oJlA3XiRm7Cyk6qFD2Jn8ak9B7jSy0qy00ADO3+8dpT0LSjFihQYv4C02LFCSYJV3Q37xYwwRy5m+IpIiUzqWw=="],
+
+    "playwright": ["playwright@1.65.0", "", { "dependencies": { "playwright-core": "1.65.0" }, "bin": { "playwright": "cli.js" } }, "sha512-F3AMWcR44qMBt4kq+6Kb6mX7bjGXshktKFOPULd7reED6ZJWevjbNRqysP7q+AATE9kdPEZBibex1BYsvpVoeA=="],
+
+    "playwright-core": ["playwright-core@1.65.0", "", { "bin": { "playwright-core": "cli.js" } }, "sha512-vNSKgH6YqtN7cdT/L334zo0a+YwkrpicyrHJlWWPIm/Q+Nn2SWInil01oT0mbu96U4GgoRtCYQD9CzJQgju+lA=="],
   }
 }

@@ -10,6 +10,7 @@ let _idCounter = 0;
 // Dismissed-from-panel IDs persist across reloads so Clear actually sticks.
 // (Items still live on disk and in the Library; this just hides them here.)
 const _DISMISSED_KEY = 'odysseus-research-dismissed';
+const _ERRORS_KEY = 'odysseus-research-errors';
 function _loadDismissed() {
   try {
     const raw = localStorage.getItem(_DISMISSED_KEY);
@@ -26,6 +27,36 @@ function _markDismissed(ids) {
   _saveDismissed(set);
 }
 
+function _loadSavedErrors() {
+  try {
+    const raw = localStorage.getItem(_ERRORS_KEY);
+    const items = raw ? JSON.parse(raw) : [];
+    return Array.isArray(items) ? items : [];
+  } catch { return []; }
+}
+function _saveErrors(items) {
+  try { localStorage.setItem(_ERRORS_KEY, JSON.stringify(items.slice(-20))); } catch {}
+}
+function _rememberError(job) {
+  const items = _loadSavedErrors().filter(item => item.id !== job.id);
+  items.push({
+    id: job.id,
+    query: job.query,
+    status: 'error',
+    errorMsg: job.errorMsg || 'Research failed.',
+    startedAt: job.startedAt || Date.now(),
+    elapsed: job.elapsed || 0,
+    category: job.category || '',
+    mode: job.mode || 'research',
+    modelName: job.modelName || null,
+    settings: job.settings || {},
+  });
+  _saveErrors(items);
+}
+function _forgetError(id) {
+  _saveErrors(_loadSavedErrors().filter(item => item.id !== id));
+}
+
 let _activePollInterval = null;
 let _activePollInFlight = false;
 let _librarySyncInFlight = false;
@@ -34,13 +65,25 @@ const _LIBRARY_SYNC_MIN_MS = 120000;
 
 export function init(apiBase) {
   _apiBase = apiBase;
+  // Restore failed launches as history so a refresh does not erase the only
+  // explanation the user received for a failed research request.
+  _jobs = _loadSavedErrors().map(item => ({
+    ...item,
+    progress: {}, result: null, sources: null, findings: null,
+    errorMsg: item.errorMsg || 'Research failed.',
+    avgDuration: null, endpointName: null,
+    _es: null, _timerInterval: null,
+  }));
   _reconnectActive({ includeLibrary: true, forceLibrary: true });
   // Poll for active sessions periodically so research started elsewhere
   // (e.g. by the agent via trigger_research) gets adopted into the
   // sidebar — _reconnectActive only ran once at load before, so
   // agent-started jobs never appeared until a page reload.
   if (_activePollInterval) clearInterval(_activePollInterval);
-  _activePollInterval = setInterval(() => { _reconnectActive(); }, 20000);
+  _activePollInterval = setInterval(() => {
+    if (document.hidden) return;
+    _reconnectActive();
+  }, 60000);
 }
 
 // Allow an immediate adopt when the chat stream signals a new research
@@ -70,7 +113,13 @@ async function _reconnectActive(options = {}) {
           startedAt: task.started_at ? task.started_at * 1000 : Date.now(),
           elapsed: task.started_at ? Date.now() - task.started_at * 1000 : 0,
           result: null, sources: null, findings: null,
+          source_state: task.source_state || '',
+          source_coverage: task.source_coverage || {},
+          navigation_trace: Array.isArray(task.navigation_trace) ? task.navigation_trace : [],
+          action_trace: Array.isArray(task.action_trace) ? task.action_trace : [],
           errorMsg: null, avgDuration: null, modelName: null,
+          category: task.category || '',
+          mode: task.mode || 'research',
           documentMode: task.document_mode || 'research',
           storyKind: task.story_kind || 'fiction',
           settings: {
@@ -117,6 +166,7 @@ async function _syncLibrary(options = {}) {
             analyzedCount: item.analyzed_count ?? existing.analyzedCount ?? 0,
             thumbnail: item.thumbnail || existing.thumbnail || '',
             category: item.category || existing.category || '',
+            mode: item.mode || existing.mode || 'research',
             documentMode: item.document_mode || existing.documentMode || 'research',
             storyKind: item.story_kind || existing.storyKind || 'fiction',
             _fromLibrary: true,
@@ -138,6 +188,7 @@ async function _syncLibrary(options = {}) {
           analyzedCount: item.analyzed_count ?? 0,
           thumbnail: item.thumbnail || '',
           category: item.category || '',
+          mode: item.mode || 'research',
           documentMode: item.document_mode || 'research',
           storyKind: item.story_kind || 'fiction',
           errorMsg: null, avgDuration: null, modelName: null,
@@ -204,6 +255,7 @@ export async function startAllQueuedSequential() {
 export async function retryJob(jobId) {
   const job = _jobs.find(j => j.id === jobId);
   if (!job) return;
+  _forgetError(jobId);
   job.status = 'queued';
   job.progress = {};
   job.errorMsg = null;
@@ -232,6 +284,7 @@ export function removeJob(id) {
     const job = _jobs[idx];
     // Persist dismissal so it doesn't reappear from the library on reload.
     if (job.status === 'done') _markDismissed([id]);
+    if (job.status === 'error') _forgetError(id);
     _jobs.splice(idx, 1);
   }
   _notify();
@@ -241,6 +294,7 @@ export function clearAll() {
   // Mark all completed jobs as dismissed so they don't reappear on reload.
   const doneIds = _jobs.filter(j => j.status === 'done').map(j => j.id);
   if (doneIds.length) _markDismissed(doneIds);
+  _saveErrors([]);
   for (const job of _jobs) {
     if (job._es) { job._es.close(); job._es = null; }
     if (job._timerInterval) { clearInterval(job._timerInterval); job._timerInterval = null; }
@@ -278,6 +332,7 @@ function _makeJob(query, settings) {
     result: null, sources: null, findings: null,
     analyzedCount: 0,
     category: settings?.category || '',
+    mode: 'research',
     documentMode: settings?.document_mode || 'research',
     storyKind: settings?.story_kind || 'fiction',
     errorMsg: null, avgDuration: null,
@@ -302,6 +357,7 @@ async function _launchJob(job) {
       const txt = await res.text();
       try { job.errorMsg = JSON.parse(txt).detail || txt; } catch { job.errorMsg = txt; }
       job.status = 'error';
+      _rememberError(job);
       _notify();
       return;
     }
@@ -309,10 +365,13 @@ async function _launchJob(job) {
   } catch (e) {
     job.errorMsg = e.message;
     job.status = 'error';
+    _rememberError(job);
     _notify();
     return;
   }
   job.id = data.session_id;
+  if (data.category) job.category = data.category;
+  if (data.mode) job.mode = data.mode;
   job.status = 'running';
   job.startedAt = Date.now();
   _connectStream(job);
@@ -333,6 +392,12 @@ function _connectStream(job) {
       const d = JSON.parse(evt.data);
       if (d.status === 'not_found') { _finishJob(job, 'error'); return; }
       job.progress = d;
+      if (d.source_state) job.source_state = d.source_state;
+      if (d.source_coverage) job.source_coverage = d.source_coverage;
+      if (Array.isArray(d.navigation_trace)) job.navigation_trace = d.navigation_trace;
+      if (Array.isArray(d.action_trace)) job.action_trace = d.action_trace;
+      if (d.category) job.category = d.category;
+      if (d.mode) job.mode = d.mode;
       if (d.model && !job.modelName) job.modelName = d.model;
       if (d.final) {
         if (d.error) job.errorMsg = d.error;
@@ -357,6 +422,12 @@ async function _pollFallback(job) {
     if (!res.ok) { _finishJob(job, 'error'); return; }
     const d = await res.json();
     job.progress = d.progress || {};
+    if (d.source_state) job.source_state = d.source_state;
+    if (d.source_coverage) job.source_coverage = d.source_coverage;
+    if (Array.isArray(d.navigation_trace)) job.navigation_trace = d.navigation_trace;
+    if (Array.isArray(d.action_trace)) job.action_trace = d.action_trace;
+    if (d.category) job.category = d.category;
+    if (d.mode) job.mode = d.mode;
     if (d.avg_duration) job.avgDuration = d.avg_duration;
     if (d.status !== 'running') {
       _finishJob(job, d.status === 'done' ? 'done' : 'error');
@@ -369,6 +440,7 @@ async function _pollFallback(job) {
 
 function _finishJob(job, status) {
   job.status = status;
+  if (status === 'error') _rememberError(job);
   if (job._es) { job._es.close(); job._es = null; }
   if (job._timerInterval) { clearInterval(job._timerInterval); job._timerInterval = null; }
   job.elapsed = Date.now() - (job.startedAt || Date.now());
@@ -394,7 +466,13 @@ async function _fetchResult(job) {
     job.result = d.result;
     job.sources = d.sources;
     job.findings = d.raw_findings;
-    if (d.category && !job.category) job.category = d.category;
+    job.analyzed_urls = d.analyzed_urls;
+    job.source_state = d.source_state;
+    job.source_coverage = d.source_coverage || {};
+    job.navigation_trace = Array.isArray(d.navigation_trace) ? d.navigation_trace : [];
+    job.action_trace = Array.isArray(d.action_trace) ? d.action_trace : [];
+    if (d.category) job.category = d.category;
+    if (d.mode) job.mode = d.mode;
     if (d.document_mode) job.documentMode = d.document_mode;
     if (d.story_kind) job.storyKind = d.story_kind;
     _notify();

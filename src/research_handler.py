@@ -22,6 +22,18 @@ logger = logging.getLogger(__name__)
 
 RESEARCH_DATA_DIR = Path(DEEP_RESEARCH_DIR)
 _RESEARCH_SESSION_ID_RE = re.compile(r"^[A-Za-z0-9-]{1,128}$")
+_SEARCH_CONTINUATIONS = {
+    "search",
+    "search this",
+    "can you search",
+    "can you search this",
+    "please search",
+    "look it up",
+    "look this up",
+    "web search",
+    "use web",
+    "search online",
+}
 
 
 def _bounded_int(value, *, default: int, minimum: int, maximum: int) -> int:
@@ -122,14 +134,18 @@ class ResearchHandler:
         def _normalize(text: str) -> str:
             return (text or "").strip().lower().strip("!.? ")
 
+        def _is_continuation(text: str) -> bool:
+            normalized = re.sub(r"\s+", " ", _normalize(text))
+            return normalized in _AFFIRMATIONS or normalized in _SEARCH_CONTINUATIONS
+
         def _fallback() -> str:
             normalized = _normalize(latest_message)
-            if normalized and normalized not in _AFFIRMATIONS:
+            if normalized and not _is_continuation(latest_message):
                 return latest_message  # short or long, it's a real topic
             # Affirmation, or empty/punctuation-only: use the original ask.
             for m in history:
                 c = (m.content or "").strip()
-                if m.role == "user" and c and _normalize(c) not in _AFFIRMATIONS:
+                if m.role == "user" and c and not _is_continuation(c):
                     return c
             return latest_message
 
@@ -306,6 +322,7 @@ class ResearchHandler:
             "result": None,
             "started_at": time.time(),
             "category": category,
+            "mode": "research",
             "document_mode": document_mode,
             "story_kind": story_kind,
             "attachments": list(attachment_ids or []),
@@ -344,6 +361,7 @@ class ResearchHandler:
                         max_rounds=max_rounds,
                         search_provider=search_provider,
                         category=category,
+                        session_id=session_id,
                         extraction_timeout=extraction_timeout,
                         extraction_concurrency=extraction_concurrency,
                         document_mode=document_mode,
@@ -425,6 +443,12 @@ class ResearchHandler:
                 "progress": entry["progress"],
                 "query": entry["query"],
                 "started_at": entry["started_at"],
+                "category": (
+                    getattr(entry.get("researcher"), "category", None)
+                    or entry.get("category")
+                    or ""
+                ),
+                "mode": entry.get("mode") or "research",
             }
             # avg_duration is a historical figure over completed reports on
             # disk; get_avg_duration() globs and JSON-parses the whole research
@@ -451,10 +475,32 @@ class ResearchHandler:
                     "progress": {},
                     "query": data.get("query", ""),
                     "started_at": data.get("started_at", 0),
+                    "category": data.get("category") or "",
+                    "mode": data.get("mode") or "research",
                 }
             except Exception:
                 pass
         return None
+
+    def get_category(self, session_id: str) -> str:
+        """Return the requested or auto-resolved report format."""
+        if session_id in self._active_tasks:
+            entry = self._active_tasks[session_id]
+            researcher = entry.get("researcher")
+            return str(
+                getattr(researcher, "category", None)
+                or entry.get("category")
+                or ""
+            )
+        data = self._get_session_json(session_id)
+        return str(data.get("category") or "") if isinstance(data, dict) else ""
+
+    def get_mode(self, session_id: str) -> str:
+        """Return whether the task performs research or a model-only explanation."""
+        if session_id in self._active_tasks:
+            return str(self._active_tasks[session_id].get("mode") or "research")
+        data = self._get_session_json(session_id)
+        return str(data.get("mode") or "research") if isinstance(data, dict) else "research"
 
     def cancel_research(self, session_id: str) -> bool:
         """Cancel running research for a session."""
@@ -533,6 +579,87 @@ class ResearchHandler:
                 logger.warning(f"Failed to read raw findings for {session_id}: {e}")
         return None
 
+    def get_analyzed_urls(self, session_id: str) -> Optional[list]:
+        """Get all analyzed URLs, including pages that did not yield findings."""
+        if session_id in self._active_tasks:
+            researcher = self._active_tasks[session_id].get("researcher")
+            if researcher:
+                return list(getattr(researcher, "analyzed_urls", []) or [])
+        data = self._get_session_json(session_id)
+        if isinstance(data, dict):
+            return data.get("analyzed_urls")
+        return None
+
+    def get_source_state(self, session_id: str) -> str:
+        """Get compact source-quality/gap state for UI/debug display."""
+        if session_id in self._active_tasks:
+            researcher = self._active_tasks[session_id].get("researcher")
+            if researcher:
+                try:
+                    return researcher._source_state_summary()
+                except Exception:
+                    return ""
+        data = self._get_session_json(session_id)
+        if isinstance(data, dict):
+            return str(data.get("source_state") or "")
+        return ""
+
+    def get_source_coverage(self, session_id: str) -> dict:
+        """Get machine-readable source coverage stats for UI/debug display."""
+        if session_id in self._active_tasks:
+            researcher = self._active_tasks[session_id].get("researcher")
+            if researcher:
+                try:
+                    coverage = researcher._source_coverage()
+                    return coverage if isinstance(coverage, dict) else {}
+                except Exception:
+                    return {}
+        data = self._get_session_json(session_id)
+        if isinstance(data, dict):
+            coverage = data.get("source_coverage")
+            return coverage if isinstance(coverage, dict) else {}
+        return {}
+
+    def get_navigation_trace(self, session_id: str) -> list:
+        """Get bounded research navigation/tool observations for debugging."""
+        if session_id in self._active_tasks:
+            researcher = self._active_tasks[session_id].get("researcher")
+            if researcher:
+                trace = getattr(researcher, "navigation_trace", []) or []
+                return list(trace) if isinstance(trace, list) else []
+        data = self._get_session_json(session_id)
+        if isinstance(data, dict):
+            trace = data.get("navigation_trace")
+            return trace if isinstance(trace, list) else []
+        return []
+
+    def get_action_trace(self, session_id: str) -> list:
+        """Get bounded research planner actions for debugging."""
+        if session_id in self._active_tasks:
+            researcher = self._active_tasks[session_id].get("researcher")
+            if researcher:
+                trace = getattr(researcher, "action_trace", []) or []
+                return list(trace) if isinstance(trace, list) else []
+        data = self._get_session_json(session_id)
+        if isinstance(data, dict):
+            trace = data.get("action_trace")
+            return trace if isinstance(trace, list) else []
+        return []
+
+    @staticmethod
+    def _source_metadata(f: dict) -> dict:
+        meta = {}
+        for key in ("retrieval", "source_kind", "source_reason"):
+            value = f.get(key)
+            if value:
+                meta[key] = value
+        try:
+            score = int(f.get("source_score"))
+            meta["source_score"] = score
+        except (TypeError, ValueError):
+            pass
+        return meta
+
     @staticmethod
     def _extract_sources(findings: list) -> list:
         """Extract deduplicated [{url, title}] from findings, filtering low-quality ones."""
@@ -551,6 +678,7 @@ class ResearchHandler:
                 og_img = f.get("og_image", "")
                 if og_img:
                     entry["image"] = og_img
+                entry.update(ResearchHandler._source_metadata(f))
                 sources.append(entry)
         return sources
 
@@ -569,7 +697,9 @@ class ResearchHandler:
                 content = summary if summary else (evidence[:2000] if evidence else "")
                 rendered_fallback = f.get("extraction_mode") == "rendered_page_fallback"
                 if url and content and (rendered_fallback or not is_low_quality(content)):
-                    items.append({"url": url, "title": title, "summary": content})
+                    item = {"url": url, "title": title, "summary": content}
+                    item.update(ResearchHandler._source_metadata(f))
+                    items.append(item)
             return items
         except Exception as e:
             logger.warning(f"Failed to extract raw findings: {e}")
@@ -627,6 +757,24 @@ class ResearchHandler:
                 sources = self._extract_sources(researcher.findings)
                 raw_findings = self._extract_raw_findings(researcher.findings)
             entry["sources"] = sources
+            source_state = ""
+            source_coverage = {}
+            analyzed_urls = []
+            navigation_trace = []
+            action_trace = []
+            if researcher:
+                analyzed_urls = list(getattr(researcher, "analyzed_urls", []) or [])
+                trace = getattr(researcher, "navigation_trace", []) or []
+                navigation_trace = list(trace) if isinstance(trace, list) else []
+                planned = getattr(researcher, "action_trace", []) or []
+                action_trace = list(planned) if isinstance(planned, list) else []
+                try:
+                    source_state = researcher._source_state_summary()
+                    coverage = researcher._source_coverage()
+                    source_coverage = coverage if isinstance(coverage, dict) else {}
+                except Exception:
+                    source_state = ""
+                    source_coverage = {}
 
             data = {
                 "query": entry["query"],
@@ -635,8 +783,14 @@ class ResearchHandler:
                 "raw_report": entry.get("raw_report", ""),
                 "sources": sources,
                 "raw_findings": raw_findings,
+                "analyzed_urls": analyzed_urls,
+                "source_state": source_state,
+                "source_coverage": source_coverage,
+                "navigation_trace": navigation_trace,
+                "action_trace": action_trace,
                 "stats": entry.get("stats"),
                 "category": entry.get("category"),
+                "mode": entry.get("mode") or "research",
                 "document_mode": entry.get("document_mode", "research"),
                 "story_kind": entry.get("story_kind", "fiction"),
                 "attachments": entry.get("attachments", []),
@@ -667,6 +821,70 @@ class ResearchHandler:
                 pass
         return None
 
+    @staticmethod
+    def _format_trace_value(value) -> str:
+        text = re.sub(r"\s+", " ", str(value or "")).strip()
+        return text.replace("`", "'")
+
+    @staticmethod
+    def _research_diagnostics_markdown(data: dict) -> str:
+        """Collapsed debug section for visual research reports."""
+        if not isinstance(data, dict):
+            return ""
+        action_trace = data.get("action_trace") if isinstance(data.get("action_trace"), list) else []
+        navigation_trace = data.get("navigation_trace") if isinstance(data.get("navigation_trace"), list) else []
+        source_state = str(data.get("source_state") or "").strip()
+        if not action_trace and not navigation_trace and not source_state:
+            return ""
+
+        lines = [
+            "",
+            "---",
+            "",
+            '<details markdown="1">',
+            "<summary>Research trace</summary>",
+            "",
+        ]
+        if action_trace:
+            lines.extend(["### Planned Actions", ""])
+            for item in action_trace[-20:]:
+                if not isinstance(item, dict):
+                    continue
+                round_label = f"Round {item.get('round')}" if item.get("round") else "Round"
+                source = ResearchHandler._format_trace_value(item.get("source") or "planner")
+                tool = ResearchHandler._format_trace_value(item.get("tool") or "tool")
+                requested_by = ResearchHandler._format_trace_value(item.get("requested_by") or "")
+                target = ResearchHandler._format_trace_value(item.get("query") or item.get("url") or "")
+                if item.get("status") == "skipped":
+                    reason = ResearchHandler._format_trace_value(item.get("reason") or "skipped")
+                    lines.append(f"- **{round_label}** `{source}` skipped `{tool}` {target} — {reason}")
+                else:
+                    alias = f" via `{requested_by}`" if requested_by and requested_by != tool else ""
+                    lines.append(f"- **{round_label}** `{source}` -> `{tool}`{alias} {target}")
+            lines.append("")
+        if navigation_trace:
+            lines.extend(["### Navigation", ""])
+            for item in navigation_trace[-20:]:
+                if not isinstance(item, dict):
+                    continue
+                tool = ResearchHandler._format_trace_value(item.get("tool") or "tool")
+                status = ResearchHandler._format_trace_value(item.get("status") or "unknown")
+                target = ResearchHandler._format_trace_value(item.get("query") or item.get("title") or item.get("url") or "")
+                meta = []
+                if item.get("results") is not None:
+                    meta.append(f"{item.get('results')} results")
+                if item.get("source_kind"):
+                    meta.append(ResearchHandler._format_trace_value(item.get("source_kind")))
+                if item.get("source_score") is not None:
+                    meta.append(f"{item.get('source_score')}/100")
+                suffix = f" ({'; '.join(meta)})" if meta else ""
+                lines.append(f"- `{tool}` {target} -> **{status}**{suffix}")
+            lines.append("")
+        if source_state:
+            lines.extend(["### Source State", "", "```text", source_state[:2000], "```", ""])
+        lines.append("</details>")
+        return "\n".join(lines)
+
     def get_report_html(self, session_id: str) -> Optional[str]:
         """Generate the visual HTML report for a session (always fresh from JSON)."""
         json_path = _research_json_path(session_id)
@@ -681,6 +899,9 @@ class ResearchHandler:
 
             data = json.loads(json_path.read_text(encoding="utf-8"))
             report_md = data.get("raw_report") or data.get("result", "")
+            diagnostics = self._research_diagnostics_markdown(data)
+            if diagnostics:
+                report_md = f"{report_md.rstrip()}\n{diagnostics}"
             html_content = generate_visual_report(
                 question=data.get("query", ""),
                 report_markdown=report_md,
@@ -907,6 +1128,7 @@ class ResearchHandler:
         category: str = None,
         extraction_timeout: int = None,
         extraction_concurrency: int = None,
+        session_id: str = "",
         document_mode: str = "research",
         story_kind: str = "fiction",
         attachment_ids: list = None,
@@ -929,6 +1151,12 @@ class ResearchHandler:
         Returns:
             Formatted research report with expandable section and summary
         """
+        if max_rounds < 0:
+            raise ValueError("max_rounds must be 0 or greater")
+        allowed_categories = {None, "product", "comparison", "howto", "factcheck"}
+        if category not in allowed_categories:
+            raise ValueError(f"Unsupported research category: {category}")
+
         is_continuation = bool(prior_report)
         logger.info(f"{'Continuing' if is_continuation else 'Starting'} IterResearch Deep Research")
         logger.info(f"Query: {query}")
@@ -937,6 +1165,10 @@ class ResearchHandler:
         if is_continuation:
             logger.info(f"Prior: {len(prior_findings or [])} findings, {len(prior_urls or set())} URLs")
 
+        # Probe the endpoint before committing to a long research run.
+        if progress_callback:
+            progress_callback({"phase": "probing", "model": llm_model})
+        await self._probe_endpoint(llm_endpoint, llm_model, llm_headers)
         try:
             from src.deep_research import DeepResearcher
 
@@ -1013,6 +1245,7 @@ class ResearchHandler:
                 progress_callback=progress_callback,
                 search_provider=search_provider,
                 category=category,
+                session_id=session_id,
                 document_mode=document_mode,
                 story_kind=story_kind,
                 source_material=source_material,
@@ -1039,6 +1272,9 @@ class ResearchHandler:
             if _task_entry is not None:
                 _task_entry["raw_report"] = strip_thinking(report)
                 _task_entry["stats"] = stats
+                # Auto classification happens inside DeepResearcher. Keep the
+                # resolved format on the task so it survives every UI path.
+                _task_entry["category"] = researcher.category or category
 
             return self._format_research_report(query, report, stats, elapsed)
 

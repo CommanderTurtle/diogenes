@@ -8,6 +8,12 @@ const files = requested.length
       ...await Array.fromAsync(
         new Bun.Glob("static/js/**/*.js").scan({ cwd: ".", onlyFiles: true }),
       ),
+      // Maintained frontend source and the gates that police its architecture.
+      ...await Array.fromAsync(
+        new Bun.Glob("frontend/src/**/*.js").scan({ cwd: ".", onlyFiles: true }),
+      ),
+      "scripts/check_frontend.mjs",
+      "tests/frontendArchitecture.test.mjs",
     ];
 
 const parser = new Bun.Transpiler({ loader: "js" });

@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from tests.helpers.stylesheets import app_css
+
 
 REPO = Path(__file__).resolve().parents[1]
 
@@ -94,7 +96,7 @@ def test_librarian_workspace_uses_the_owner_api_and_server_side_credentials() ->
     index = _read("static/index.html")
     app = _read("static/app.js")
     workspace = _read("static/js/librarianWorkspace.js")
-    styles = _read("static/style.css")
+    styles = app_css()
     service_worker = _read("static/sw.js")
 
     assert 'id="tool-librarian-workspace-btn"' in index
@@ -149,7 +151,7 @@ def test_services_window_uses_planned_confirmed_runtime_jobs() -> None:
 
 def test_venvs_view_uses_operator_only_services_and_a_real_terminal() -> None:
     services = _read("static/js/ulyssesServices.js")
-    styles = _read("static/style.css")
+    styles = app_css()
     host_services = _read("src/diogenes_host_services.py")
     service_worker = _read("static/sw.js")
 
@@ -248,7 +250,7 @@ def test_persephone_workspace_uses_the_owner_control_contract() -> None:
     app = _read("static/app.js")
     index = _read("static/index.html")
     workspace = _read("static/js/persephoneWorkspace.js")
-    styles = _read("static/style.css")
+    styles = app_css()
     service_worker = _read("static/sw.js")
 
     assert "import persephoneWorkspaceModule from './js/persephoneWorkspace.js';" in app
@@ -280,7 +282,7 @@ def test_roboomp_workspace_uses_the_persephone_owner_contract() -> None:
     app = _read("static/app.js")
     index = _read("static/index.html")
     workspace = _read("static/js/roboompWorkspace.js")
-    styles = _read("static/style.css")
+    styles = app_css()
     service_worker = _read("static/sw.js")
 
     assert "import roboompWorkspaceModule from './js/roboompWorkspace.js';" in app
