@@ -712,6 +712,183 @@
       "ports": [8090]
     },
     {
+      "id": "basalt.jev",
+      "label": "Basalt Jev",
+      "category": "native",
+      "dependency_section": "Model serving",
+      "optional": true,
+      "role": "Source-built local model server",
+      "root": "${DIOGENES_NATIVE_ENGINE_ROOT}/basalt-jev",
+      "git_update": true,
+      "source_url": "https://github.com/CommanderTurtle/decisive-basalt.git",
+      "source_branch": "feat/parallel-decision",
+      "upstream_url": "https://github.com/jesdga95/basalt.git",
+      "setup": {
+        "kind": "shell_script",
+        "value": "diogenes-build.sh"
+      },
+      "setup_on_update": true,
+      "config_files": [
+        {
+          "path": "basalt_config.json",
+          "format": "json"
+        }
+      ],
+      "bootstrap_files": [
+        {
+          "path": "diogenes-build.sh",
+          "mode": "0755",
+          "content": "#!/usr/bin/env bash\nset -euo pipefail\ncd -- \"$(dirname -- \"${BASH_SOURCE[0]}\")\"\nif ! command -v nvcc >/dev/null; then export PATH=\"${CUDA_HOME:-/usr/local/cuda}/bin:$PATH\"; fi\ncmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CUDA_ARCHITECTURES=120 -DBUILD_TESTING=OFF\ncmake --build build --parallel \"${DIOGENES_BUILD_JOBS:-4}\" --target basalt basalt-probe basalt-vision\nif [[ ! -x .venv/bin/python ]]; then python3 -m venv .venv; fi\n.venv/bin/python -m pip install -r requirements.txt\n"
+        },
+        {
+          "path": "start.sh",
+          "mode": "0755",
+          "content": "#!/usr/bin/env bash\nset -euo pipefail\ncd -- \"$(dirname -- \"${BASH_SOURCE[0]}\")\"\nexec ./bin/basalt serve --config basalt_config.json --host 127.0.0.1 --port 8087\n"
+        },
+        {
+          "path": "basalt_config.json",
+          "mode": "0600",
+          "content": "{\n  \"version\": 2,\n  \"server\": {\"jev\": 1},\n  \"models\": [{\"model\": \"models/model.basalt\"}]\n}\n"
+        }
+      ],
+      "launch": [
+        "bash",
+        "start.sh"
+      ],
+      "tmux_session": "diogenes-basalt-jev",
+      "readiness_checks": [
+        {
+          "label": "Basalt Jev executable",
+          "path": "${DIOGENES_NATIVE_ENGINE_ROOT}/basalt-jev/bin/basalt",
+          "executable": true
+        },
+        {
+          "label": "Isolated Python",
+          "path": "${DIOGENES_NATIVE_ENGINE_ROOT}/basalt-jev/.venv/bin/python",
+          "executable": true
+        }
+      ],
+      "ports": [
+        8087
+      ]
+    },
+    {
+      "id": "ninfer.jev",
+      "label": "NInfer Jev",
+      "category": "native",
+      "dependency_section": "Model serving",
+      "optional": true,
+      "role": "Source-built local model server",
+      "root": "${DIOGENES_NATIVE_ENGINE_ROOT}/ninfer-jev",
+      "git_update": true,
+      "source_url": "https://github.com/CommanderTurtle/decisive-ninfer.git",
+      "source_branch": "feature/parallel-decision",
+      "upstream_url": "https://github.com/Neroued/ninfer.git",
+      "setup": {
+        "kind": "shell_script",
+        "value": "diogenes-build.sh"
+      },
+      "setup_on_update": true,
+      "config_files": [
+        {
+          "path": "ninfer.local.toml",
+          "format": "text"
+        }
+      ],
+      "bootstrap_files": [
+        {
+          "path": "diogenes-build.sh",
+          "mode": "0755",
+          "content": "#!/usr/bin/env bash\nset -euo pipefail\ncd -- \"$(dirname -- \"${BASH_SOURCE[0]}\")\"\nif ! command -v nvcc >/dev/null; then export PATH=\"${CUDA_HOME:-/usr/local/cuda}/bin:$PATH\"; fi\ncmake --preset rtx5090-release\ncmake --build --preset rtx5090-release --parallel \"${DIOGENES_BUILD_JOBS:-4}\" --target ninfer-serve\n"
+        },
+        {
+          "path": "start.sh",
+          "mode": "0755",
+          "content": "#!/usr/bin/env bash\nset -euo pipefail\ncd -- \"$(dirname -- \"${BASH_SOURCE[0]}\")\"\nexec ./build/rtx5090-release/apps/ninfer-serve --config ninfer.local.toml --host 127.0.0.1 --port 8088 --jev\n"
+        },
+        {
+          "path": "ninfer.local.toml",
+          "mode": "0600",
+          "content": "[model]\npath = \"models/model.ninfer\"\n"
+        }
+      ],
+      "launch": [
+        "bash",
+        "start.sh"
+      ],
+      "tmux_session": "diogenes-ninfer-jev",
+      "readiness_checks": [
+        {
+          "label": "NInfer Jev executable",
+          "path": "${DIOGENES_NATIVE_ENGINE_ROOT}/ninfer-jev/build/rtx5090-release/apps/ninfer-serve",
+          "executable": true
+        }
+      ],
+      "ports": [
+        8088
+      ]
+    },
+    {
+      "id": "strata.server",
+      "label": "Strata",
+      "category": "native",
+      "dependency_section": "Model serving",
+      "optional": true,
+      "role": "Source-built local model server",
+      "root": "${DIOGENES_NATIVE_ENGINE_ROOT}/strata",
+      "git_update": true,
+      "source_url": "https://github.com/Niko1221/Strata.git",
+      "source_branch": "main",
+      "setup": {
+        "kind": "shell_script",
+        "value": "diogenes-build.sh"
+      },
+      "setup_on_update": true,
+      "config_files": [
+        {
+          "path": "strata_config.json",
+          "format": "json"
+        }
+      ],
+      "bootstrap_files": [
+        {
+          "path": "diogenes-build.sh",
+          "mode": "0755",
+          "content": "#!/usr/bin/env bash\nset -euo pipefail\ncd -- \"$(dirname -- \"${BASH_SOURCE[0]}\")\"\nif ! command -v nvcc >/dev/null; then export PATH=\"${CUDA_HOME:-/usr/local/cuda}/bin:$PATH\"; fi\ncmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DSTRATA_ENABLE_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES=\"${STRATA_CUDA_ARCHITECTURES:-native}\" -DSTRATA_BUILD_TESTS=OFF\ncmake --build build --parallel \"${DIOGENES_BUILD_JOBS:-4}\" --target strata\nif [[ ! -x .venv/bin/python ]]; then python3 -m venv .venv; fi\n.venv/bin/python -m pip install -r requirements.txt\n"
+        },
+        {
+          "path": "start.sh",
+          "mode": "0755",
+          "content": "#!/usr/bin/env bash\nset -euo pipefail\ncd -- \"$(dirname -- \"${BASH_SOURCE[0]}\")\"\nexec ./.venv/bin/python -m serve.server --engine strata --config strata_config.json --host 127.0.0.1 --port 8095\n"
+        },
+        {
+          "path": "strata_config.json",
+          "mode": "0600",
+          "content": "{\n  \"exe\": \"build/strata\",\n  \"cwd\": \".\",\n  \"args\": [\"--pack\", \"models/pack\"],\n  \"tokenizer\": \"models/pack/tokenizer\",\n  \"model_name\": \"strata\"\n}\n"
+        }
+      ],
+      "launch": [
+        "bash",
+        "start.sh"
+      ],
+      "tmux_session": "diogenes-strata",
+      "readiness_checks": [
+        {
+          "label": "Strata executable",
+          "path": "${DIOGENES_NATIVE_ENGINE_ROOT}/strata/build/strata",
+          "executable": true
+        },
+        {
+          "label": "Isolated Python",
+          "path": "${DIOGENES_NATIVE_ENGINE_ROOT}/strata/.venv/bin/python",
+          "executable": true
+        }
+      ],
+      "ports": [
+        8095
+      ]
+    },
+    {
       "id": "n8n.automation",
       "label": "n8n",
       "category": "docker",

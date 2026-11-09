@@ -13,6 +13,54 @@ def _script(path: Path) -> dict[str, object]:
     return {"path": path, "args": ()}
 
 
+def test_native_decision_install_clones_then_registers_upstream_and_builds(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("DIOGENES_NATIVE_ENGINE_ROOT", str(tmp_path))
+    items = {item["id"]: item for item in load_runtime_management()}
+    monkeypatch.setattr(dependency_action, "_read_state", lambda _id: {})
+    monkeypatch.setattr(dependency_action, "_record_install_state", lambda _item: None)
+    monkeypatch.setattr(dependency_action, "bootstrap_runtime", lambda _id: [])
+
+    for runtime_id, branch, build_command in (
+        ("basalt.jev", "feat/parallel-decision", "--target basalt basalt-probe basalt-vision"),
+        ("ninfer.jev", "feature/parallel-decision", "--target ninfer-serve"),
+        ("strata.server", "main", "--target strata"),
+    ):
+        item = items[runtime_id]
+        calls = []
+
+        def run(argv, **kwargs):
+            calls.append(argv)
+            if argv[:2] == ["git", "clone"]:
+                (item["root"] / ".git").mkdir(parents=True)
+
+        monkeypatch.setattr(dependency_action, "_run", run)
+        monkeypatch.setattr(dependency_action, "ensure_upstream", lambda *args: calls.append(args))
+        dependency_action._install(item)
+
+        assert calls[0][:7] == ["git", "clone", "--origin", "origin", "--branch", branch, "--single-branch"]
+        assert calls[0][7] == item["source_url"]
+        if runtime_id.endswith(".jev"):
+            assert calls[1] == (item["root"], item["source_url"], branch, "origin", item["upstream_url"])
+        assert calls[-1] == ["bash", str(item["root"] / "diogenes-build.sh")]
+        build = next(file["content"] for file in item["bootstrap_files"] if file["path"].name == "diogenes-build.sh")
+        start = next(file["content"] for file in item["bootstrap_files"] if file["path"].name == "start.sh")
+        assert "cmake --build" in build and build_command in build
+        assert "docker" not in build + start
+        assert f"--host 127.0.0.1 --port {item['ports'][0]}" in start
+
+
+def test_dependency_git_pull_uses_the_declared_fork_remote(monkeypatch, tmp_path: Path) -> None:
+    (tmp_path / ".git").mkdir()
+    calls = []
+    monkeypatch.setattr(dependency_action, "git_sync", lambda *args: calls.append(args))
+    source = "https://github.com/CommanderTurtle/archive--camofox-browser.git"
+    dependency_action._git_pull({
+        "root": tmp_path, "git_update": True, "source_url": source,
+        "source_remote": "fork", "source_branch": "master",
+    })
+    assert calls == [(tmp_path, source, "master", "fork")]
+
+
 def test_catalog_delegates_integrations_and_contains_no_external_iwe() -> None:
     items = {item["id"]: item for item in load_runtime_management()}
 

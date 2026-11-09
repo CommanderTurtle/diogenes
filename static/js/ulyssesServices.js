@@ -18,6 +18,9 @@ const INTERACTIVE_IDS = new Set([
   'signal.cli',
   'hermes.workspace',
   'librarian.mcp',
+  'basalt.jev',
+  'ninfer.jev',
+  'strata.server',
 ]);
 const DEPENDENCY_ACTIONS = [
   ['install', 'Install'],

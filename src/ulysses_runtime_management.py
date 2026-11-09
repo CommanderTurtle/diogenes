@@ -38,6 +38,7 @@ SECRET_RE = re.compile(
 )
 PATH_TOKEN_RE = re.compile(r"\$\{([A-Z][A-Z0-9_]*)\}")
 ALLOWED_PATH_TOKENS = {
+    "DIOGENES_NATIVE_ENGINE_ROOT",
     "HOME",
     "ULYSSES_MICROSERVICES_ROOT",
     "ULYSSES_REPOSITORY_ROOT",
@@ -190,6 +191,10 @@ def _expand(
         raw.replace("${HOME}", str(home))
         .replace("${ULYSSES_MICROSERVICES_ROOT}", str(services_root))
         .replace("${ULYSSES_REPOSITORY_ROOT}", str(repository_root))
+        .replace(
+            "${DIOGENES_NATIVE_ENGINE_ROOT}",
+            os.environ.get("DIOGENES_NATIVE_ENGINE_ROOT") or str(home / "Odysseus"),
+        )
     )
     path = Path(value).expanduser()
     if not path.is_absolute():
@@ -301,6 +306,15 @@ def load_runtime_management(
                 raise RuntimeJobError(
                     f"{runtime_id} Git update source is not pinned safely"
                 )
+        if "upstream_url" in raw and (
+            not raw.get("git_update")
+            or source_remote == "upstream"
+            or not re.fullmatch(
+                r"https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(?:\.git)?",
+                str(raw["upstream_url"]),
+            )
+        ):
+            raise RuntimeJobError(f"{runtime_id} Git upstream is not pinned safely")
         root = _expand(
             str(raw["root"]),
             home=resolved_home,

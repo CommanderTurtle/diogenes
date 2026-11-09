@@ -39,7 +39,7 @@ def _value(root: Path, *args: str) -> str:
     return result.stdout.strip()
 
 
-def sync(root: Path, source: str, branch: str, remote_name: str = "origin") -> str:
+def _checkout(root: Path, source: str, branch: str, remote_name: str) -> Path:
     root = root.expanduser()
     if not root.is_absolute():
         raise RuntimeError("Git checkout path must be absolute")
@@ -65,6 +65,25 @@ def sync(root: Path, source: str, branch: str, remote_name: str = "origin") -> s
         raise RuntimeError(
             f"Checkout remote {remote_name} does not match the declared source"
         )
+    return root
+
+
+def ensure_upstream(
+    root: Path, source: str, branch: str, remote_name: str, upstream: str
+) -> None:
+    if not SOURCE_RE.fullmatch(upstream) or remote_name == "upstream":
+        raise RuntimeError("Declared Git upstream is invalid")
+    root = _checkout(root, source, branch, remote_name)
+    if "upstream" in _value(root, "remote").splitlines():
+        existing = _value(root, "remote", "get-url", "upstream")
+        if canonical_git_remote(existing) != canonical_git_remote(upstream):
+            raise RuntimeError("Existing upstream remote does not match the declared upstream")
+        return
+    _value(root, "remote", "add", "upstream", upstream)
+
+
+def sync(root: Path, source: str, branch: str, remote_name: str = "origin") -> str:
+    root = _checkout(root, source, branch, remote_name)
     dirty = _value(root, "status", "--porcelain", "--untracked-files=no")
     if dirty:
         raise RuntimeError(

@@ -75,6 +75,26 @@ trees. Their pinned model downloads use `.venv-model-download`, never the
 serving environment. The Cookbook exposes separate source sync, exact download,
 CUDA build, profile, editable command, launch, and stop operations.
 
+**Services → Dependencies → Model serving** offers three opt-in Linux/NVIDIA
+source installs. Install clones and builds into `DIOGENES_NATIVE_ENGINE_ROOT`
+(default `~/Odysseus`). It uses the host CUDA toolkit, CMake, Ninja and the
+engine's compiler dependencies; it starts no server and downloads no weights.
+Basalt and Strata install the server requirements into their own `.venv`.
+
+| Runtime | Checkout branch | Model settings | Local endpoint |
+| --- | --- | --- | --- |
+| Basalt Jev | `decisive-basalt:feat/parallel-decision` | `basalt_config.json`, v2 `.basalt` pack; Jev defaults to one lane for Qwen | `http://127.0.0.1:8087/v1` |
+| NInfer Jev | `decisive-ninfer:feature/parallel-decision` | `ninfer.local.toml`, v3 `.ninfer` artifact; the RTX 5090 launch uses `--jev` | `http://127.0.0.1:8088/v1` |
+| Strata | `Niko1221/Strata:main` | `strata_config.json`, prepared pack, its tokenizer and any required native weight flags | `http://127.0.0.1:8095/v1` |
+
+Point the generated config at your existing model and start the service from
+**Services → Interactive**. Add its local URL in **Settings → Models** to chat.
+Basalt needs Blackwell and CUDA 13; NInfer uses the upstream `rtx5090-release`
+preset. Strata builds for the host GPU by default. Stop the engine before updating it. Use **Git pull** to
+fast-forward the declared branch and **Update** to rebuild; neither action
+switches the source to `upstream`. Existing Docker NInfer profiles in Venvs
+remain available.
+
 ## Updating
 
 Stop the web application before updating:

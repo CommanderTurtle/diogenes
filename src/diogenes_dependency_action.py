@@ -27,7 +27,7 @@ import tempfile
 from typing import Any
 
 from core.atomic_io import atomic_write_text
-from src.diogenes_git_sync import sync as git_sync
+from src.diogenes_git_sync import ensure_upstream, sync as git_sync
 from src.ulysses_jobs import native_host_environment
 from src.ulysses_runtime_bootstrap import bootstrap_runtime
 from src.ulysses_runtime_management import load_runtime_management
@@ -371,6 +371,10 @@ def _finalize_bootstrap(item: dict[str, Any]) -> None:
 
 def _install(item: dict[str, Any]) -> None:
     root: Path = item["root"]
+    source_remote = str(item.get("source_remote") or "origin")
+    upstream = item.get("upstream_url")
+    if upstream and (root / ".git").is_dir():
+        ensure_upstream(root, item["source_url"], item["source_branch"], source_remote, upstream)
     state = _read_state(item["id"])
     source_present = root.is_dir() and (
         (root / ".git").is_dir()
@@ -408,6 +412,8 @@ def _install(item: dict[str, Any]) -> None:
             [
                 "git",
                 "clone",
+                "--origin",
+                source_remote,
                 "--branch",
                 str(item["source_branch"]),
                 "--single-branch",
@@ -417,6 +423,8 @@ def _install(item: dict[str, Any]) -> None:
             cwd=root.parent,
             timeout=1800,
         )
+        if upstream:
+            ensure_upstream(root, item["source_url"], item["source_branch"], source_remote, upstream)
     else:
         root.mkdir(parents=True, exist_ok=True)
 
@@ -663,6 +671,7 @@ def _git_pull(item: dict[str, Any]) -> None:
             root,
             str(item["source_url"]),
             str(item["source_branch"]),
+            str(item.get("source_remote") or "origin"),
         )
     )
 

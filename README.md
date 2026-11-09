@@ -490,6 +490,16 @@ II. Files changed — commit diff: [`c31c0da`](https://github.com/CommanderTurtl
 
 </details>
 
+<details><summary>23. Native Basalt Jev, NInfer Jev, and Strata serving</summary>
+
+I. Added optional CMake source installs in **Services → Dependencies → Model serving**. Basalt and NInfer follow the decision forks and retain their official `upstream` remotes. Strata follows its own upstream. Launch profiles use local model files and bind to loopback; existing Docker-backed NInfer profiles remain unchanged.
+
+II. Files changed — [runtime catalog](config/ulysses/runtime-management.json), [source maintenance](src/diogenes_dependency_action.py), and [native setup and serving](docs/DIOGENES_DEPLOYMENT.md#native-engines).
+
+---
+
+</details>
+
 ## Demo
 
 Diogenes integrates a Three-JS implementation of Zensical (Mkdocs) documentation. Expanding from a developer-oriented point of view at the [Diogenes landing page](https://dio.shel.sh/). Its source lives in the wrapping framework under [`orc/tree/main/dio`](https://github.com/CommanderTurtle/orc/tree/main/dio)
